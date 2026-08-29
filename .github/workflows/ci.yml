@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
+      TEST_DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
+      SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e
+      CARRIER_ALPHA_WEBHOOK_SECRET: 18374b93133e4996980ef121a823921618481057613d4d119732569639ec7fc8
+      CARRIER_BETA_WEBHOOK_SECRET: 1e30d7e5116e4ae39f61d6bd52896149bcabe2b6e21c4cd2a5105366ce4c2795
+    services:
+      postgres:
+        image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+        env:
+          POSTGRES_DB: fulfillflow_test
+          POSTGRES_USER: fulfillflow
+          POSTGRES_PASSWORD: fulfillflow-ci-db-2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=fulfillflow --dbname=fulfillflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.7"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Import contracts
+        run: uv run lint-imports
+
+      - name: Unit and API tests
+        run: uv run pytest tests/unit tests/api -q
+
+      - name: Upgrade an empty PostgreSQL database
+        run: uv run alembic upgrade head
+
+      - name: Verify Alembic head
+        run: uv run alembic current --check-heads
+
+      - name: Verify metadata has no migration drift
+        run: uv run alembic check
+
+      - name: PostgreSQL integration tests
+        run: uv run pytest tests/integration -q
+
+      - name: Coverage gate
+        run: uv run pytest --cov=fulfillflow --cov-report=term-missing
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Build runtime image
+        run: docker compose build app
+
+      - name: Smoke test Compose stack
+        env:
+          DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-compose-ci-2026@db:5432/fulfillflow
+          POSTGRES_PASSWORD: fulfillflow-compose-ci-2026
+        run: |
+          docker compose up --detach --no-build --wait --wait-timeout 120
+          curl --fail --silent http://127.0.0.1:8000/health/live
+          curl --fail --silent http://127.0.0.1:8000/health/ready
+          docker compose exec -T app sh -c '[ "$(id -u)" -ne 0 ]'
+
+      - name: Show Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Remove Compose smoke resources
+        if: always()
+        run: docker compose down --volumes

@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.uv-cache
+.uv-python
+.env
+.coverage
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.pyc
+tests
+.vscode
+AGENTS.md
+DESIGN.md

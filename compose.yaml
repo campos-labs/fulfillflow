@@ -1,0 +1,77 @@
+name: fulfillflow
+
+x-app-environment: &app-environment
+  APP_ENV: "${APP_ENV:-local}"
+  APP_NAME: "${APP_NAME:-FulfillFlow}"
+  APP_HOST: "${APP_HOST:-0.0.0.0}"
+  APP_PORT: "${APP_PORT:-8000}"
+  APP_TIMEZONE: "${APP_TIMEZONE:-America/Sao_Paulo}"
+  DATABASE_URL: "${DATABASE_URL:-postgresql+psycopg://fulfillflow:fulfillflow-local-db-2026@db:5432/fulfillflow}"
+  DB_POOL_SIZE: "${DB_POOL_SIZE:-10}"
+  DB_MAX_OVERFLOW: "${DB_MAX_OVERFLOW:-0}"
+  DB_POOL_TIMEOUT_SECONDS: "${DB_POOL_TIMEOUT_SECONDS:-5}"
+  DB_STATEMENT_TIMEOUT_MS: "${DB_STATEMENT_TIMEOUT_MS:-5000}"
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  LOG_FORMAT: "${LOG_FORMAT:-json}"
+  SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
+  CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:-f4f67f688c3f40a59079fd6bcc19a7f214c21df9b8a94039a4c0e7cd6cc84385}"
+  CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:-3df2b1b16bd84e22987409e9acfc09f6428a8c3573154a478b2084852bc64af2}"
+  WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: "${WEBHOOK_SIGNATURE_TOLERANCE_SECONDS:-300}"
+  MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES:-65536}"
+  METRICS_ENABLED: "${METRICS_ENABLED:-true}"
+  OTEL_ENABLED: "${OTEL_ENABLED:-false}"
+  OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-fulfillflow}"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+  OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1.0}"
+  SEED_RANDOM_SEED: "${SEED_RANDOM_SEED:-20260828}"
+
+x-application: &application
+  image: fulfillflow:local
+  build:
+    context: .
+    target: runtime
+  environment: *app-environment
+
+services:
+  db:
+    image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-fulfillflow}"
+      POSTGRES_USER: "${POSTGRES_USER:-fulfillflow}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-local-db-2026}"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready --host=127.0.0.1 --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+  migrate:
+    <<: *application
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  app:
+    <<: *application
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:${APP_PORT:-8000}"
+
+volumes:
+  postgres_data:

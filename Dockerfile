@@ -1,0 +1,46 @@
+FROM python:3.13-slim-trixie@sha256:7ce4b6dfe35e55397b7cda544f8a13f191b7ae28dc5aad71fe664dbc9bc2623f AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir "uv==0.12.7"
+
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY src ./src
+RUN uv sync --frozen --no-dev --no-editable
+
+
+FROM python:3.13-slim-trixie@sha256:7ce4b6dfe35e55397b7cda544f8a13f191b7ae28dc5aad71fe664dbc9bc2623f AS runtime
+
+ENV APP_HOST=0.0.0.0 \
+    APP_PORT=8000 \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN groupadd --gid 10001 fulfillflow \
+    && useradd --uid 10001 --gid 10001 --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin fulfillflow
+
+WORKDIR /app
+
+COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
+COPY --chown=10001:10001 alembic.ini ./alembic.ini
+COPY --chown=10001:10001 alembic ./alembic
+
+USER 10001:10001
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('APP_PORT', '8000')}/health/live\", timeout=2).close()"]
+
+CMD ["python", "-m", "fulfillflow"]
