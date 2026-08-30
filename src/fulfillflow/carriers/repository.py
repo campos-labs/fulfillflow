@@ -35,3 +35,15 @@ class CarrierRepository:
             )
         ).all()
         return {row[0]: row[1] for row in rows}
+
+    async def find_by_ids(self, carrier_ids: Collection[UUID]) -> list[CarrierModel]:
+        """Load complete registry records for a public cross-module projection."""
+        if not carrier_ids:
+            return []
+        return list(
+            (
+                await self._session.scalars(
+                    select(CarrierModel).where(CarrierModel.id.in_(carrier_ids))
+                )
+            ).all()
+        )

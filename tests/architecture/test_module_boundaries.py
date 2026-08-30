@@ -7,7 +7,7 @@ from fulfillflow.orders.schemas import OrderFilters
 from fulfillflow.shipments.schemas import ShipmentListFilters
 
 PACKAGE_ROOT = Path("src/fulfillflow")
-BUSINESS_MODULES = ("orders", "shipments", "carriers")
+BUSINESS_MODULES = ("orders", "shipments", "carriers", "tracking")
 
 
 def _imports(path: Path) -> set[str]:
@@ -23,7 +23,7 @@ def _imports(path: Path) -> set[str]:
 
 def test_domain_modules_have_no_framework_or_infrastructure_imports() -> None:
     forbidden = ("fastapi", "sqlalchemy", "fulfillflow.db", "fulfillflow.api")
-    for module in ("orders", "shipments"):
+    for module in ("orders", "shipments", "tracking"):
         imports = _imports(PACKAGE_ROOT / module / "domain.py")
         assert not {imported for imported in imports if imported.startswith(forbidden)}
 
@@ -66,6 +66,21 @@ def test_shipments_uses_only_business_public_interfaces() -> None:
         for imported in _imports(path):
             if imported.startswith(
                 ("fulfillflow.orders.", "fulfillflow.carriers.")
+            ) and not imported.endswith(".public"):
+                violations.append(f"{path.name}: {imported}")
+    assert violations == []
+
+
+def test_tracking_uses_only_business_public_interfaces() -> None:
+    violations: list[str] = []
+    for path in (PACKAGE_ROOT / "tracking").rglob("*.py"):
+        for imported in _imports(path):
+            if imported.startswith(
+                (
+                    "fulfillflow.carriers.",
+                    "fulfillflow.shipments.",
+                    "fulfillflow.notifications.",
+                )
             ) and not imported.endswith(".public"):
                 violations.append(f"{path.name}: {imported}")
     assert violations == []

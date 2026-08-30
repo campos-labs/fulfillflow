@@ -51,6 +51,23 @@ class ShipmentRepository:
         model = await self._session.scalar(statement)
         return _to_entity(model) if model is not None else None
 
+    async def get_by_carrier_tracking_code(
+        self,
+        carrier_id: UUID,
+        tracking_code: str,
+        *,
+        for_update: bool = False,
+    ) -> Shipment | None:
+        """Load a Shipment by its Carrier-owned natural key."""
+        statement = select(ShipmentModel).where(
+            ShipmentModel.carrier_id == carrier_id,
+            ShipmentModel.tracking_code == tracking_code,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        model = await self._session.scalar(statement)
+        return _to_entity(model) if model is not None else None
+
     async def save(self, shipment: Shipment) -> None:
         """Persist all state-machine fields and flush without committing."""
         model = await self._session.get(ShipmentModel, shipment.id)

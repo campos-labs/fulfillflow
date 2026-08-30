@@ -1,15 +1,15 @@
 # FulfillFlow
 
 Incremento executável do FulfillFlow v1.0.0 com FastAPI, PostgreSQL 18
-assíncrono, Alembic e os módulos de negócio Orders e Shipments. Estão incluídas
-as máquinas de estados completas, persistência modular, APIs JSON, paginação,
-filtros, request ID e erros `application/problem+json`.
+assíncrono, Alembic e os módulos de negócio Orders, Shipments, Carriers e
+Tracking. Estão incluídas as máquinas de estados, persistência modular, APIs
+JSON, paginação, filtros, request ID e erros `application/problem+json`.
 
-Este incremento não implementa webhook, Tracking, adapters de transportadoras,
-notificações, UI, seeds ou benchmark. A tabela mínima de Carriers existe apenas
-para preservar a FK e a resolução pública exigidas por Shipment; a criação de
-uma remessa requer que um Carrier ativo já tenha sido cadastrado por um
-incremento/seed posterior.
+Este incremento inclui os Carriers simulados Alpha e Beta, allowlist estática de
+adapters, autenticação HMAC sobre os bytes originais, inbox auditável e timeline
+canônica com processamento síncrono. Ainda não inclui Notifications, UI, seed de
+demonstração, benchmark, processamento assíncrono ou os cenários completos de
+concorrência de Tracking.
 
 ## Subida local com Docker Compose
 
@@ -39,8 +39,22 @@ Além dos health checks, os contratos atuais sob `/api/v1` são:
 - Orders: criação, listagem, detalhe com resumo de remessas, confirmação e
   cancelamento;
 - Shipments: criação, listagem, detalhe e cancelamento manual;
+- Tracking: ingestão autenticada em
+  `POST /api/v1/carriers/{carrier_code}/events`, timeline paginada em
+  `GET /api/v1/shipments/{shipment_id}/tracking` e consulta sanitizada do inbox
+  em `GET /api/v1/carrier-events` e
+  `GET /api/v1/carrier-events/{inbox_event_id}`;
 - erros públicos, inclusive validação, 404 e 405, usam problem details e todas
   as respostas propagam um `X-Request-ID` válido.
+
+Os webhooks usam `Content-Type: application/json` e os headers
+`X-FulfillFlow-Event-Id`, `X-FulfillFlow-Timestamp` e
+`X-FulfillFlow-Signature`. A assinatura é `sha256=<hex>` para HMAC-SHA256 de
+`timestamp + "." + event_id + "." + raw_body`; Alpha e Beta usam secrets
+distintos. O corpo autenticado é preservado byte a byte e só depois é parseado e
+normalizado. Cada header autenticado deve ocorrer exatamente uma vez, e o event
+ID assinado aceita somente ASCII visível, sem whitespace lateral, com até 128
+caracteres.
 
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
 isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua todos
@@ -85,8 +99,9 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A revisão `0001_bootstrap` estabelece o baseline e a revisão
-`0002_orders_shipments` cria `orders`, `shipments` e o registro mínimo
-`carriers`, com UUID/timestamptz nativos, checks textuais nomeados, FKs
-restritivas e índices do contrato. Tracking e Notifications permanecem fora do
-schema deste incremento.
+A revisão `0001_bootstrap` estabelece o baseline, `0002_orders_shipments` cria
+Orders, Shipments e o registro de Carriers, e `0003_carriers_tracking` instala os
+registros determinísticos Alpha/Beta e cria `carrier_event_inbox` e
+`tracking_events`. O schema usa UUID/timestamptz nativos, JSONB/bytea para a
+projeção e os bytes externos, checks textuais nomeados, FKs restritivas e os
+índices do contrato. Notifications permanece fora do schema deste incremento.

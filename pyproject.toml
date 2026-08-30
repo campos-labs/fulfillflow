@@ -94,6 +94,7 @@ type = "forbidden"
 source_modules = [
     "fulfillflow.orders.domain",
     "fulfillflow.shipments.domain",
+    "fulfillflow.tracking.domain",
 ]
 forbidden_modules = [
     "fastapi",
@@ -128,7 +129,20 @@ allowed_importers = ["fulfillflow.shipments"]
 name = "Carriers internals are imported only by Carriers"
 type = "protected"
 protected_modules = [
+    "fulfillflow.carriers.adapters",
     "fulfillflow.carriers.models",
     "fulfillflow.carriers.repository",
 ]
 allowed_importers = ["fulfillflow.carriers"]
+
+[[tool.importlinter.contracts]]
+name = "Tracking internals are imported only by Tracking"
+type = "protected"
+protected_modules = [
+    "fulfillflow.tracking.authentication",
+    "fulfillflow.tracking.domain",
+    "fulfillflow.tracking.models",
+    "fulfillflow.tracking.repository",
+    "fulfillflow.tracking.service",
+]
+allowed_importers = ["fulfillflow.tracking"]

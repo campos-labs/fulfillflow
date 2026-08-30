@@ -57,23 +57,13 @@ async def _create_shipment(
     return response.json()["id"]
 
 
-async def _insert_beta_carrier(database: Database, fixed_clock: FixedClock) -> None:
-    async with database.session() as session, session.begin():
-        await session.execute(
-            text(
-                "INSERT INTO carriers "
-                "(id, code, name, adapter_key, active, created_at, updated_at) "
-                "VALUES (:id, :code, :name, :adapter_key, true, :created_at, :updated_at)"
-            ),
-            {
-                "id": UUID("00000000-0000-4000-8000-000000000101"),
-                "code": "carrier-beta",
-                "name": "Carrier Beta",
-                "adapter_key": "beta",
-                "created_at": fixed_clock.current,
-                "updated_at": fixed_clock.current,
-            },
+async def _require_beta_carrier(database: Database) -> None:
+    async with database.session() as session:
+        code = await session.scalar(
+            text("SELECT code FROM carriers WHERE id = :id"),
+            {"id": UUID("00000000-0000-4000-8000-000000000101")},
         )
+    assert code == "carrier-beta"
 
 
 async def test_order_and_shipment_api_journey_filters_idempotency_and_conflicts(
@@ -239,7 +229,7 @@ async def test_each_order_and_shipment_filter_excludes_non_matching_records(
     fixed_clock: FixedClock,
 ) -> None:
     del carrier_id
-    await _insert_beta_carrier(postgres_database, fixed_clock)
+    await _require_beta_carrier(postgres_database)
     initial_time = fixed_clock.current
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
 

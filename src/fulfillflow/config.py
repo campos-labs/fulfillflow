@@ -76,7 +76,7 @@ class Settings(DatabaseSettings):
     carrier_alpha_webhook_secret: SecretStr
     carrier_beta_webhook_secret: SecretStr
     webhook_signature_tolerance_seconds: int = Field(default=300, gt=0)
-    max_webhook_body_bytes: int = Field(default=65536, gt=0)
+    max_webhook_body_bytes: int = Field(default=65536, gt=0, le=65536)
 
     metrics_enabled: bool = True
     otel_enabled: bool = False

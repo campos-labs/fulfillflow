@@ -249,11 +249,66 @@ class ShipmentService:
 
 
 class ShipmentsPublic:
-    """Transaction-participating Shipment queries used by composition layers."""
+    """Transaction-participating Shipment operations used by other modules."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._repository = ShipmentRepository(session)
         self._carriers = CarriersPublic(session)
+        self._orders = OrdersPublic(session)
+
+    async def find(self, shipment_id: UUID) -> Shipment | None:
+        """Return a Shipment for a caller-owned read transaction."""
+        return await self._repository.get(shipment_id)
+
+    async def lock_for_tracking(
+        self,
+        carrier_id: UUID,
+        tracking_code: str,
+    ) -> Shipment | None:
+        """Acquire the Shipment lock after the Tracking inbox lock."""
+        return await self._repository.get_by_carrier_tracking_code(
+            carrier_id,
+            tracking_code.strip().upper(),
+            for_update=True,
+        )
+
+    async def apply_tracking_status_locked(
+        self,
+        shipment: Shipment,
+        target: ShipmentStatus,
+        *,
+        occurred_at: datetime,
+        received_at: datetime,
+        external_event_id: str,
+    ) -> AppliedShipmentTransition:
+        """Apply an event while participating in the caller's transaction.
+
+        The caller must already hold the Shipment lock. Any Order lock is acquired
+        only after it, preserving the global inbox -> Shipment -> Order order.
+        """
+        transition = shipment.apply_external_status(
+            target,
+            occurred_at=occurred_at,
+            received_at=received_at,
+            external_event_id=external_event_id,
+        )
+        if transition.result in {
+            ShipmentApplicationResult.APPLIED,
+            ShipmentApplicationResult.NO_STATE_CHANGE,
+        }:
+            await self._repository.save(shipment)
+
+        order_completed = False
+        if transition.result is ShipmentApplicationResult.APPLIED and shipment.status in {
+            ShipmentStatus.DELIVERED,
+            ShipmentStatus.CANCELLED,
+        }:
+            order = await self._orders.lock_for_completion(shipment.order_id)
+            total, undelivered = await self._repository.completion_counts(shipment.order_id)
+            if total != 0 and undelivered == 0:
+                order_completed = await self._orders.complete_locked(order, received_at)
+
+        return AppliedShipmentTransition(transition, shipment, order_completed)
 
     async def summaries_for_order(self, order_id: UUID) -> builtins.list[ShipmentSummary]:
         """Return Shipment-owned summaries inside the caller's transaction."""

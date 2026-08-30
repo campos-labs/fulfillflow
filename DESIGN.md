@@ -474,7 +474,7 @@ erDiagram
 - `updated_at` é mantido pela aplicação na mesma transação da alteração; não há triggers de auditoria;
 - `tracking_code` é armazenado e pesquisado após `strip` e conversão para maiúsculas;
 - `carrier.code` é slug ASCII minúsculo e imutável;
-- `external_event_id` é case-sensitive e não é reescrito depois da validação do header;
+- `external_event_id` é case-sensitive, usa somente ASCII visível sem whitespace lateral e não é reescrito depois da validação do header;
 - campos externos extras são tolerados pelo adapter, mas não entram no contrato canônico;
 - valores vazios após normalização são inválidos;
 - todos os comprimentos declarados são validados na borda e protegidos novamente no schema;
@@ -658,6 +658,7 @@ Regras:
 - comparação por `hmac.compare_digest`;
 - timestamp representado por inteiro decimal de segundos Unix, sem espaços;
 - `event_id` não vazio, com no máximo 128 caracteres;
+- cada header autenticado ocorre exatamente uma vez; ausência ou duplicidade é inválida;
 - assinatura em 64 dígitos hexadecimais após o prefixo `sha256=`;
 - tolerância de timestamp padrão de 300 segundos;
 - corpo máximo padrão de 65.536 bytes;
@@ -911,7 +912,7 @@ Toda listagem JSON retorna:
 |---|---|---|
 | POST | `/api/v1/carriers/{carrier_code}/events` | 200, resultado do processamento |
 | GET | `/api/v1/carrier-events` | 200, consulta operacional do inbox |
-| GET | `/api/v1/carrier-events/{event_id}` | 200, detalhe sanitizado |
+| GET | `/api/v1/carrier-events/{inbox_event_id}` | 200, detalhe sanitizado pelo UUID interno do inbox |
 
 Resposta aplicada:
 
@@ -1065,7 +1066,7 @@ Proteção de exposição pública deve ocorrer externamente. O benchmark opera 
 - `Base.metadata.create_all()` não é usado em runtime nem teste de integração;
 - toda migration gerada é revisada antes de execução;
 - nomes de constraints e índices são determinísticos;
-- downgrade é implementado quando a reversão for segura; migrations destrutivas devem documentar irreversibilidade;
+- downgrade é implementado quando a reversão for segura; dados de referência cuja procedência não possa ser provada são retidos para evitar perda, e migrations destrutivas devem documentar irreversibilidade;
 - CI executa `alembic upgrade head` sobre banco vazio;
 - CI verifica ausência de diferenças não migradas entre metadata e head;
 - sessão por requisição e transações explícitas;

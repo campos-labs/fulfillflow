@@ -26,6 +26,7 @@ from fulfillflow.shipments.public import (
     ShipmentNotFoundError,
     ShipmentTrackingCodeConflictError,
 )
+from fulfillflow.tracking.public import CarrierEventNotFoundError, TrackingProblemError
 
 _PROBLEM_BASE = "https://fulfillflow.local/problems"
 
@@ -58,7 +59,12 @@ def install_problem_handling(application: FastAPI) -> None:
         response.headers["X-Request-ID"] = str(request_id)
         return response
 
-    for not_found_type in (OrderNotFoundError, ShipmentNotFoundError, CarrierNotFoundError):
+    for not_found_type in (
+        OrderNotFoundError,
+        ShipmentNotFoundError,
+        CarrierNotFoundError,
+        CarrierEventNotFoundError,
+    ):
         application.add_exception_handler(not_found_type, _not_found_handler)
     for conflict_type in (
         OrderExternalReferenceConflictError,
@@ -77,6 +83,7 @@ def install_problem_handling(application: FastAPI) -> None:
         InvalidShipmentTransitionError,
         _invalid_shipment_transition_handler,
     )
+    application.add_exception_handler(TrackingProblemError, _tracking_problem_handler)
     application.add_exception_handler(RequestValidationError, _validation_handler)
     application.add_exception_handler(StarletteHTTPException, _http_handler)
     application.add_exception_handler(SQLAlchemyError, _database_handler)
@@ -126,6 +133,21 @@ async def _invalid_shipment_transition_handler(
         code="INVALID_SHIPMENT_TRANSITION",
         title="Invalid shipment transition",
         detail=str(exception),
+    )
+
+
+async def _tracking_problem_handler(
+    request: Request,
+    exception: Exception,
+) -> JSONResponse:
+    if not isinstance(exception, TrackingProblemError):
+        return await _internal_handler(request, exception)
+    return _problem(
+        request,
+        status_code=exception.status_code,
+        code=exception.code,
+        title=exception.title,
+        detail=exception.detail,
     )
 
 

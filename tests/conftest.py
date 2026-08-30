@@ -81,30 +81,27 @@ async def postgres_database(postgres_settings: Settings) -> AsyncIterator[Databa
 
 @pytest.fixture
 async def carrier_id(postgres_database: Database) -> UUID:
-    """Insert the minimal deterministic active Carrier registry fixture."""
+    """Return the deterministic Alpha reference Carrier installed by Alembic."""
     identifier = UUID("00000000-0000-4000-8000-000000000100")
-    occurred_at = datetime(2026, 8, 29, 11, 0, tzinfo=UTC)
-    async with postgres_database.session() as session, session.begin():
-        await session.execute(
-            text(
-                "INSERT INTO carriers "
-                "(id, code, name, adapter_key, active, created_at, updated_at) "
-                "VALUES (:id, :code, :name, :adapter_key, true, :created_at, :updated_at)"
-            ),
-            {
-                "id": identifier,
-                "code": "carrier-alpha",
-                "name": "Carrier Alpha",
-                "adapter_key": "alpha",
-                "created_at": occurred_at,
-                "updated_at": occurred_at,
-            },
+    async with postgres_database.session() as session:
+        code = await session.scalar(
+            text("SELECT code FROM carriers WHERE id = :id"),
+            {"id": identifier},
         )
+    assert code == "carrier-alpha"
     return identifier
 
 
 async def _clear_business_rows(database: Database) -> None:
     async with database.engine.begin() as connection:
+        await connection.execute(text("DELETE FROM tracking_events"))
+        await connection.execute(text("DELETE FROM carrier_event_inbox"))
         await connection.execute(text("DELETE FROM shipments"))
         await connection.execute(text("DELETE FROM orders"))
-        await connection.execute(text("DELETE FROM carriers"))
+        await connection.execute(
+            text(
+                "DELETE FROM carriers WHERE id NOT IN "
+                "(CAST('00000000-0000-4000-8000-000000000100' AS uuid), "
+                "CAST('00000000-0000-4000-8000-000000000101' AS uuid))"
+            )
+        )

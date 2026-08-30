@@ -19,8 +19,16 @@ from fulfillflow.config import Settings
 from fulfillflow.db import Database
 from fulfillflow.main import create_app
 
-BUSINESS_TABLES = {"orders", "carriers", "shipments"}
+BUSINESS_TABLES = {
+    "orders",
+    "carriers",
+    "shipments",
+    "carrier_event_inbox",
+    "tracking_events",
+}
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+ALPHA_ID = UUID("00000000-0000-4000-8000-000000000100")
+BETA_ID = UUID("00000000-0000-4000-8000-000000000101")
 ORDER_ID = UUID("00000000-0000-4000-8000-000000000201")
 CARRIER_ID = UUID("00000000-0000-4000-8000-000000000202")
 SHIPMENT_ID = UUID("00000000-0000-4000-8000-000000000203")
@@ -79,13 +87,20 @@ def _order_parameters(identifier: UUID, reference: str) -> dict[str, Any]:
     }
 
 
-def _carrier_parameters(identifier: UUID, code: str, adapter_key: str) -> dict[str, Any]:
+def _carrier_parameters(
+    identifier: UUID,
+    code: str,
+    adapter_key: str,
+    *,
+    name: str = "Migration Carrier",
+    active: bool = True,
+) -> dict[str, Any]:
     return {
         "id": identifier,
         "code": code,
-        "name": "Migration Carrier",
+        "name": name,
         "adapter_key": adapter_key,
-        "active": True,
+        "active": active,
         "created_at": NOW,
         "updated_at": NOW,
     }
@@ -128,12 +143,91 @@ async def _revision_and_business_tables(database: Database) -> tuple[str | None,
                     text(
                         "SELECT table_name FROM information_schema.tables "
                         "WHERE table_schema = 'public' AND table_name IN "
-                        "('orders', 'carriers', 'shipments')"
+                        "('orders', 'carriers', 'shipments', "
+                        "'carrier_event_inbox', 'tracking_events')"
                     )
                 )
             ).scalars()
         )
     return revision, tables
+
+
+async def _reference_carriers(
+    database: Database,
+) -> dict[str, tuple[UUID, str, str, bool]]:
+    async with database.engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT code, id, name, adapter_key, active FROM carriers "
+                    "WHERE code IN ('carrier-alpha', 'carrier-beta') ORDER BY code"
+                )
+            )
+        ).all()
+    return {row.code: (row.id, row.name, row.adapter_key, row.active) for row in rows}
+
+
+async def _verify_tracking_downgrade_retains_business_data(database: Database) -> None:
+    revision, tables = await _revision_and_business_tables(database)
+    assert revision == "0002_orders_shipments"
+    assert tables == {"orders", "carriers", "shipments"}
+    async with database.engine.connect() as connection:
+        carriers = await connection.scalar(text("SELECT count(*) FROM carriers"))
+        shipments = await connection.scalar(text("SELECT count(*) FROM shipments"))
+    assert carriers == 3
+    assert shipments == 1
+
+
+async def _insert_preexisting_reference_scenario(database: Database) -> UUID:
+    beta_alternate_id = UUID("00000000-0000-4000-8000-000000000700")
+    async with database.engine.begin() as connection:
+        await connection.execute(
+            text(CARRIER_INSERT),
+            [
+                _carrier_parameters(
+                    ALPHA_ID,
+                    "carrier-alpha",
+                    "alpha",
+                    name="Custom Alpha Name",
+                    active=False,
+                ),
+                _carrier_parameters(
+                    beta_alternate_id,
+                    "carrier-beta",
+                    "beta",
+                    name="Custom Beta Name",
+                ),
+            ],
+        )
+        await connection.execute(
+            text(ORDER_INSERT),
+            _order_parameters(ORDER_ID, "ORDER-PREEXISTING-CARRIER"),
+        )
+        await connection.execute(
+            text(SHIPMENT_INSERT),
+            _shipment_parameters(
+                SHIPMENT_ID,
+                carrier_id=beta_alternate_id,
+                tracking_code="PREEXISTING-CARRIER",
+            ),
+        )
+    return beta_alternate_id
+
+
+async def _assert_preexisting_reference_scenario(
+    database: Database,
+    beta_alternate_id: UUID,
+) -> None:
+    assert await _reference_carriers(database) == {
+        "carrier-alpha": (ALPHA_ID, "Custom Alpha Name", "alpha", False),
+        "carrier-beta": (beta_alternate_id, "Custom Beta Name", "beta", True),
+    }
+    async with database.engine.connect() as connection:
+        shipment_carrier_id = await connection.scalar(
+            text("SELECT carrier_id FROM shipments WHERE id = :id"),
+            {"id": SHIPMENT_ID},
+        )
+    assert shipment_carrier_id == beta_alternate_id
 
 
 async def _assert_rejected(
@@ -164,7 +258,8 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                         text(
                             "SELECT indexname FROM pg_indexes "
                             "WHERE schemaname = 'public' "
-                            "AND tablename IN ('orders', 'shipments')"
+                            "AND tablename IN ('orders', 'shipments', "
+                            "'carrier_event_inbox', 'tracking_events')"
                         )
                     )
                 ).scalars()
@@ -176,7 +271,8 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "SELECT conname FROM pg_constraint "
                             "WHERE conrelid IN "
                             "('orders'::regclass, 'carriers'::regclass, "
-                            "'shipments'::regclass)"
+                            "'shipments'::regclass, 'carrier_event_inbox'::regclass, "
+                            "'tracking_events'::regclass)"
                         )
                     )
                 ).scalars()
@@ -188,7 +284,11 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "SELECT conname, confdeltype FROM pg_constraint "
                             "WHERE conname IN "
                             "('fk_shipments_order_id_orders', "
-                            "'fk_shipments_carrier_id_carriers')"
+                            "'fk_shipments_carrier_id_carriers', "
+                            "'fk_carrier_event_inbox_carrier_id_carriers', "
+                            "'fk_tracking_events_carrier_id_carriers', "
+                            "'fk_tracking_events_inbox_event_id_carrier_event_inbox', "
+                            "'fk_tracking_events_shipment_id_shipments')"
                         )
                     )
                 )
@@ -205,7 +305,10 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "(table_name, column_name) IN "
                             "(( 'orders', 'id'), ('orders', 'status'), "
                             "('orders', 'created_at'), ('shipments', 'id'), "
-                            "('shipments', 'status_occurred_at'))"
+                            "('shipments', 'status_occurred_at'), "
+                            "('carrier_event_inbox', 'raw_body'), "
+                            "('carrier_event_inbox', 'parsed_payload'), "
+                            "('tracking_events', 'occurred_at'))"
                         )
                     )
                 )
@@ -220,6 +323,10 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "uq_shipments_carrier_tracking_code",
             "ix_shipments_order_id",
             "ix_shipments_status_updated_at",
+            "uq_carrier_event_inbox_carrier_external_event_id",
+            "ix_carrier_event_inbox_status_received_at",
+            "uq_tracking_events_inbox_event_id",
+            "ix_tracking_events_shipment_occurred_at_created_at",
         }.issubset(indexes)
         assert {
             "ck_orders_order_status",
@@ -227,10 +334,19 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "ck_shipments_tracking_code_normalized",
             "uq_orders_external_reference",
             "uq_shipments_carrier_tracking_code",
+            "ck_carrier_event_inbox_inbox_status",
+            "ck_carrier_event_inbox_raw_body_max_64_kib",
+            "ck_tracking_events_application_result",
+            "uq_carrier_event_inbox_carrier_external_event_id",
+            "uq_tracking_events_inbox_event_id",
         }.issubset(constraints)
         assert delete_actions == {
             "fk_shipments_carrier_id_carriers": "r",
             "fk_shipments_order_id_orders": "r",
+            "fk_carrier_event_inbox_carrier_id_carriers": "r",
+            "fk_tracking_events_carrier_id_carriers": "r",
+            "fk_tracking_events_inbox_event_id_carrier_event_inbox": "r",
+            "fk_tracking_events_shipment_id_shipments": "r",
         }
         assert column_types == {
             "orders.created_at": "timestamp with time zone",
@@ -238,6 +354,15 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "orders.status": "character varying",
             "shipments.id": "uuid",
             "shipments.status_occurred_at": "timestamp with time zone",
+            "carrier_event_inbox.raw_body": "bytea",
+            "carrier_event_inbox.parsed_payload": "jsonb",
+            "tracking_events.occurred_at": "timestamp with time zone",
+        }
+
+        reference_carriers = await _reference_carriers(database)
+        assert reference_carriers == {
+            "carrier-alpha": (ALPHA_ID, "Carrier Alpha", "alpha", True),
+            "carrier-beta": (BETA_ID, "Carrier Beta", "beta", True),
         }
 
         async with database.engine.begin() as connection:
@@ -421,8 +546,29 @@ def test_migrations_are_isolated_reversible_and_enforced(
         assert tables == set()
 
         command.upgrade(config, "0002_orders_shipments")
+        command.upgrade(config, "0003_carriers_tracking")
         run_async(_verify_head_schema_and_constraints(settings))
         run_async(_verify_application_readiness(settings))
+
+        command.downgrade(config, "0002_orders_shipments")
+        retained_database = Database.from_settings(settings)
+        try:
+            run_async(_verify_tracking_downgrade_retains_business_data(retained_database))
+        finally:
+            run_async(retained_database.dispose())
+        command.upgrade(config, "0003_carriers_tracking")
+        roundtrip_database = Database.from_settings(settings)
+        try:
+            revision, tables = run_async(_revision_and_business_tables(roundtrip_database))
+            reference_carriers = run_async(_reference_carriers(roundtrip_database))
+        finally:
+            run_async(roundtrip_database.dispose())
+        assert revision == "0003_carriers_tracking"
+        assert tables == BUSINESS_TABLES
+        assert reference_carriers == {
+            "carrier-alpha": (ALPHA_ID, "Carrier Alpha", "alpha", True),
+            "carrier-beta": (BETA_ID, "Carrier Beta", "beta", True),
+        }
 
         command.downgrade(config, "0001_bootstrap")
         downgraded_database = Database.from_settings(settings)
@@ -450,5 +596,150 @@ def test_migrations_are_isolated_reversible_and_enforced(
         revision, tables = run_async(_revision_and_business_tables(restored_database))
     finally:
         run_async(restored_database.dispose())
-    assert revision == "0002_orders_shipments"
+    assert revision == "0003_carriers_tracking"
     assert tables == BUSINESS_TABLES
+
+
+@pytest.mark.integration
+def test_0003_preserves_preexisting_carriers_shipments_and_roundtrips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = os.environ.get("TEST_DATABASE_URL")
+    if database_url is None:
+        pytest.skip("TEST_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    config = Config("alembic.ini")
+    settings = _settings(database_url)
+    try:
+        command.downgrade(config, "base")
+        command.upgrade(config, "0002_orders_shipments")
+        setup_database = Database.from_settings(settings)
+        try:
+            beta_alternate_id = run_async(_insert_preexisting_reference_scenario(setup_database))
+        finally:
+            run_async(setup_database.dispose())
+
+        command.upgrade(config, "0003_carriers_tracking")
+        upgraded_database = Database.from_settings(settings)
+        try:
+            run_async(
+                _assert_preexisting_reference_scenario(
+                    upgraded_database,
+                    beta_alternate_id,
+                )
+            )
+        finally:
+            run_async(upgraded_database.dispose())
+
+        command.downgrade(config, "0002_orders_shipments")
+        downgraded_database = Database.from_settings(settings)
+        try:
+            revision, tables = run_async(_revision_and_business_tables(downgraded_database))
+            run_async(
+                _assert_preexisting_reference_scenario(
+                    downgraded_database,
+                    beta_alternate_id,
+                )
+            )
+        finally:
+            run_async(downgraded_database.dispose())
+        assert revision == "0002_orders_shipments"
+        assert tables == {"orders", "carriers", "shipments"}
+
+        command.upgrade(config, "0003_carriers_tracking")
+        roundtrip_database = Database.from_settings(settings)
+        try:
+            revision, tables = run_async(_revision_and_business_tables(roundtrip_database))
+            run_async(
+                _assert_preexisting_reference_scenario(
+                    roundtrip_database,
+                    beta_alternate_id,
+                )
+            )
+        finally:
+            run_async(roundtrip_database.dispose())
+        assert revision == "0003_carriers_tracking"
+        assert tables == BUSINESS_TABLES
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("carrier", "error_pattern"),
+    [
+        (
+            _carrier_parameters(
+                ALPHA_ID,
+                "carrier-alpha",
+                "incompatible-alpha-adapter",
+            ),
+            "carrier-alpha.*adapter_key must be 'alpha'",
+        ),
+        (
+            _carrier_parameters(
+                ALPHA_ID,
+                "different-code-on-alpha-id",
+                "different-adapter",
+            ),
+            "deterministic UUID.*already assigned",
+        ),
+    ],
+    ids=["incompatible-adapter", "deterministic-uuid-occupied"],
+)
+def test_0003_rejects_incompatible_reference_data_transactionally(
+    monkeypatch: pytest.MonkeyPatch,
+    carrier: dict[str, Any],
+    error_pattern: str,
+) -> None:
+    database_url = os.environ.get("TEST_DATABASE_URL")
+    if database_url is None:
+        pytest.skip("TEST_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    config = Config("alembic.ini")
+    settings = _settings(database_url)
+    try:
+        command.downgrade(config, "base")
+        command.upgrade(config, "0002_orders_shipments")
+        setup_database = Database.from_settings(settings)
+        try:
+
+            async def insert_incompatible_carrier() -> None:
+                async with setup_database.engine.begin() as connection:
+                    await connection.execute(text(CARRIER_INSERT), carrier)
+
+            run_async(insert_incompatible_carrier())
+        finally:
+            run_async(setup_database.dispose())
+
+        with pytest.raises(RuntimeError, match=error_pattern):
+            command.upgrade(config, "0003_carriers_tracking")
+
+        rejected_database = Database.from_settings(settings)
+        try:
+            revision, tables = run_async(_revision_and_business_tables(rejected_database))
+
+            async def carrier_rows() -> list[tuple[UUID, str, str]]:
+                async with rejected_database.engine.connect() as connection:
+                    return list(
+                        (
+                            await connection.execute(
+                                text("SELECT id, code, adapter_key FROM carriers")
+                            )
+                        )
+                        .tuples()
+                        .all()
+                    )
+
+            persisted_carriers = run_async(carrier_rows())
+        finally:
+            run_async(rejected_database.dispose())
+        assert revision == "0002_orders_shipments"
+        assert tables == {"orders", "carriers", "shipments"}
+        assert persisted_carriers == [(carrier["id"], carrier["code"], carrier["adapter_key"])]
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")

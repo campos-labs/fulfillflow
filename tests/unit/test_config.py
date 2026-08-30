@@ -92,6 +92,20 @@ def test_carrier_secrets_must_always_be_distinct() -> None:
         )
 
 
+@pytest.mark.parametrize("maximum", [0, 65_537])
+def test_webhook_body_limit_must_fit_the_forensic_column(maximum: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            database_url="postgresql+psycopg://user:password@localhost/fulfillflow",
+            session_secret="test-session",
+            carrier_alpha_webhook_secret="test-alpha",
+            carrier_beta_webhook_secret="test-beta",
+            max_webhook_body_bytes=maximum,
+        )
+
+
 def test_otel_endpoint_is_required_when_enabled(settings: Settings) -> None:
     values = settings.model_dump()
     values["otel_enabled"] = True
