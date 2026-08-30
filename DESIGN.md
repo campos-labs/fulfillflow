@@ -497,6 +497,9 @@ Regras:
 - pedido só pode ser cancelado enquanto estiver `CREATED` e, portanto, antes da criação de remessas;
 - pedido torna-se `FULFILLED` quando existe ao menos uma remessa não cancelada e todas as remessas não canceladas estiverem `DELIVERED`;
 - pedido sem remessa não pode ser `FULFILLED`.
+- o predicado de conclusão é reavaliado quando uma Shipment resulta em `DELIVERED` ou
+  `CANCELLED`, tanto por evento externo quanto por cancelamento manual, sempre sob locks na ordem
+  Shipment → Order.
 
 `confirm` em pedido já `CONFIRMED` e `cancel` em pedido já `CANCELLED` são sucessos idempotentes. Ação sobre qualquer outro estado não permitido retorna 409.
 
@@ -732,8 +735,8 @@ O commit independente garante preservação do evento autenticado mesmo se o pro
 10. se `APPLIED`, atualizar estado e campos de ordenação da Shipment;
 11. se `NO_STATE_CHANGE`, atualizar apenas os campos de ordenação da Shipment;
 12. se `APPLIED`, registrar Notification pelo serviço proprietário;
-13. se o estado resultante for `DELIVERED`, bloquear o Order pela interface pública de Orders;
-14. somente nesse caso, Shipments avalia todas as remessas não canceladas do Order e, quando aplicável, solicita sua conclusão;
+13. se o estado resultante for `DELIVERED` ou `CANCELLED`, bloquear o Order pela interface pública de Orders;
+14. somente nesses casos, Shipments avalia todas as remessas não canceladas do Order e, quando aplicável, solicita sua conclusão;
 15. marcar inbox `PROCESSED`;
 16. commit atômico.
 

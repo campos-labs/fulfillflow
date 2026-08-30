@@ -9,10 +9,13 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from fulfillflow import __version__
+from fulfillflow.api.problems import install_problem_handling
+from fulfillflow.api.router import router as api_router
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
 from fulfillflow.db.migrations import SchemaNotCurrentError, schema_is_current
 from fulfillflow.health import router as health_router
+from fulfillflow.shared import Clock, SystemClock
 
 DEFAULT_ALEMBIC_CONFIG_PATH = Path("alembic.ini")
 
@@ -21,6 +24,7 @@ def create_app(
     settings: Settings | None = None,
     database: Database | None = None,
     alembic_config_path: Path = DEFAULT_ALEMBIC_CONFIG_PATH,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """Build the application while deferring environment validation to startup."""
 
@@ -53,7 +57,10 @@ def create_app(
     )
     application.state.database = None
     application.state.schema_ready = False
+    application.state.clock = clock or SystemClock()
+    install_problem_handling(application)
     application.include_router(health_router)
+    application.include_router(api_router)
     return application
 
 

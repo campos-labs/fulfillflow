@@ -80,9 +80,55 @@ skip_covered = true
 
 [tool.importlinter]
 root_package = "fulfillflow"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "FulfillFlow package dependencies are acyclic"
 type = "acyclic_siblings"
 ancestors = ["fulfillflow"]
 depth = 2
+
+[[tool.importlinter.contracts]]
+name = "Business domain modules are framework independent"
+type = "forbidden"
+source_modules = [
+    "fulfillflow.orders.domain",
+    "fulfillflow.shipments.domain",
+]
+forbidden_modules = [
+    "fastapi",
+    "sqlalchemy",
+    "fulfillflow.api",
+    "fulfillflow.db",
+]
+
+[[tool.importlinter.contracts]]
+name = "Orders internals are imported only by Orders"
+type = "protected"
+protected_modules = [
+    "fulfillflow.orders.domain",
+    "fulfillflow.orders.models",
+    "fulfillflow.orders.repository",
+    "fulfillflow.orders.service",
+]
+allowed_importers = ["fulfillflow.orders"]
+
+[[tool.importlinter.contracts]]
+name = "Shipments internals are imported only by Shipments"
+type = "protected"
+protected_modules = [
+    "fulfillflow.shipments.domain",
+    "fulfillflow.shipments.models",
+    "fulfillflow.shipments.repository",
+    "fulfillflow.shipments.service",
+]
+allowed_importers = ["fulfillflow.shipments"]
+
+[[tool.importlinter.contracts]]
+name = "Carriers internals are imported only by Carriers"
+type = "protected"
+protected_modules = [
+    "fulfillflow.carriers.models",
+    "fulfillflow.carriers.repository",
+]
+allowed_importers = ["fulfillflow.carriers"]

@@ -1,0 +1,1 @@
+"""Shipments business module."""

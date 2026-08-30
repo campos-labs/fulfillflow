@@ -1,9 +1,15 @@
 # FulfillFlow
 
-Bootstrap executável do FulfillFlow v1.0.0: FastAPI, configuração validada,
-PostgreSQL 18 assíncrono, Alembic e infraestrutura local em Docker Compose.
-Este incremento não contém módulos de negócio, UI, seeds, benchmark ou a
-implementação completa de observabilidade.
+Incremento executável do FulfillFlow v1.0.0 com FastAPI, PostgreSQL 18
+assíncrono, Alembic e os módulos de negócio Orders e Shipments. Estão incluídas
+as máquinas de estados completas, persistência modular, APIs JSON, paginação,
+filtros, request ID e erros `application/problem+json`.
+
+Este incremento não implementa webhook, Tracking, adapters de transportadoras,
+notificações, UI, seeds ou benchmark. A tabela mínima de Carriers existe apenas
+para preservar a FK e a resolução pública exigidas por Shipment; a criação de
+uma remessa requer que um Carrier ativo já tenha sido cadastrado por um
+incremento/seed posterior.
 
 ## Subida local com Docker Compose
 
@@ -22,7 +28,7 @@ Invoke-WebRequest http://127.0.0.1:8000/health/live
 Invoke-WebRequest http://127.0.0.1:8000/health/ready
 ```
 
-Os contratos atuais são:
+Além dos health checks, os contratos atuais sob `/api/v1` são:
 
 - `GET /health/live` retorna `200 {"status":"ok"}` sem acessar o banco;
 - `GET /health/ready` retorna `200 {"status":"ok"}` quando o schema está no
@@ -30,6 +36,11 @@ Os contratos atuais são:
 - readiness retorna `503 {"status":"unavailable"}` se o banco ficar
   indisponível depois do startup;
 - startup falha se o banco estiver inacessível ou o schema não estiver no head.
+- Orders: criação, listagem, detalhe com resumo de remessas, confirmação e
+  cancelamento;
+- Shipments: criação, listagem, detalhe e cancelamento manual;
+- erros públicos, inclusive validação, 404 e 405, usam problem details e todas
+  as respostas propagam um `X-Request-ID` válido.
 
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
 isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua todos
@@ -58,9 +69,10 @@ uv run fastapi dev src/fulfillflow/main.py
 
 ## Testes e qualidade
 
-Os testes unitários e de API não dependem de PostgreSQL. O teste de integração
-usa somente um banco PostgreSQL 18 dedicado informado por `TEST_DATABASE_URL`;
-sem essa variável, ele é explicitamente ignorado.
+Os testes unitários, arquiteturais, de health e de problem details não dependem
+de banco. Testes de repository/service e APIs persistentes usam somente um
+PostgreSQL 18 dedicado informado por `TEST_DATABASE_URL`; sem essa variável,
+eles são explicitamente ignorados.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
@@ -73,7 +85,8 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A revisão `0001_bootstrap` não cria tabelas de domínio. Ela estabelece o head
-inicial e a tabela técnica `alembic_version`, usados pelo gate de compatibilidade
-do startup. Tabelas de Orders, Shipments, Carriers, Tracking e Notifications
-serão introduzidas somente nos incrementos correspondentes.
+A revisão `0001_bootstrap` estabelece o baseline e a revisão
+`0002_orders_shipments` cria `orders`, `shipments` e o registro mínimo
+`carriers`, com UUID/timestamptz nativos, checks textuais nomeados, FKs
+restritivas e índices do contrato. Tracking e Notifications permanecem fora do
+schema deste incremento.
