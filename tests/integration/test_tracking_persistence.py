@@ -180,3 +180,55 @@ async def test_database_enforces_inbox_idempotency_and_raw_body_limit(
     oversized_diagnostic = getattr(oversized.value.orig, "diag", None)
     assert oversized_diagnostic is not None
     assert oversized_diagnostic.constraint_name == "ck_carrier_event_inbox_raw_body_max_64_kib"
+
+
+async def test_database_enforces_one_tracking_event_per_inbox(
+    postgres_database: Database,
+) -> None:
+    await _insert_owners(postgres_database)
+    async with postgres_database.session() as session, session.begin():
+        repository = TrackingRepository(session)
+        await repository.add_inbox(_inbox(raw_body=b"{}"))
+        await repository.add_tracking_event(
+            TrackingEvent(
+                id=TRACKING_EVENT_ID,
+                inbox_event_id=INBOX_ID,
+                shipment_id=SHIPMENT_ID,
+                carrier_id=CARRIER_ID,
+                external_status="in_transit",
+                canonical_status=ShipmentStatus.IN_TRANSIT,
+                description=None,
+                location=None,
+                occurred_at=NOW,
+                received_at=NOW,
+                application_result=ShipmentApplicationResult.APPLIED,
+                previous_shipment_status=ShipmentStatus.POSTED,
+                resulting_shipment_status=ShipmentStatus.IN_TRANSIT,
+                created_at=NOW,
+            )
+        )
+
+    with pytest.raises(IntegrityError) as duplicate:
+        async with postgres_database.session() as session, session.begin():
+            await TrackingRepository(session).add_tracking_event(
+                TrackingEvent(
+                    id=UUID("00000000-0000-4000-8000-000000000918"),
+                    inbox_event_id=INBOX_ID,
+                    shipment_id=SHIPMENT_ID,
+                    carrier_id=CARRIER_ID,
+                    external_status="delivered",
+                    canonical_status=ShipmentStatus.DELIVERED,
+                    description=None,
+                    location=None,
+                    occurred_at=NOW + timedelta(minutes=1),
+                    received_at=NOW + timedelta(minutes=1),
+                    application_result=ShipmentApplicationResult.APPLIED,
+                    previous_shipment_status=ShipmentStatus.IN_TRANSIT,
+                    resulting_shipment_status=ShipmentStatus.DELIVERED,
+                    created_at=NOW + timedelta(minutes=1),
+                )
+            )
+
+    duplicate_diagnostic = getattr(duplicate.value.orig, "diag", None)
+    assert duplicate_diagnostic is not None
+    assert duplicate_diagnostic.constraint_name == "uq_tracking_events_inbox_event_id"
