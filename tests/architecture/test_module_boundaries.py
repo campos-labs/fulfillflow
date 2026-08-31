@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from fulfillflow.notifications.schemas import NotificationFilters
 from fulfillflow.orders.schemas import OrderFilters
 from fulfillflow.shipments.schemas import ShipmentListFilters
 
 PACKAGE_ROOT = Path("src/fulfillflow")
-BUSINESS_MODULES = ("orders", "shipments", "carriers", "tracking")
+BUSINESS_MODULES = ("orders", "shipments", "carriers", "tracking", "notifications")
 FORBIDDEN_TRANSACTION_SYMBOLS = frozenset({"commit", "rollback"})
 PUBLIC_FACADE_PATHS = tuple(PACKAGE_ROOT / module / "public.py" for module in BUSINESS_MODULES)
 PUBLIC_PARTICIPANTS = (
@@ -27,6 +28,11 @@ PUBLIC_PARTICIPANTS = (
         PACKAGE_ROOT / "carriers" / "public.py",
         "CarriersPublic",
         PACKAGE_ROOT / "carriers" / "public.py",
+    ),
+    (
+        PACKAGE_ROOT / "notifications" / "public.py",
+        "NotificationsPublic",
+        PACKAGE_ROOT / "notifications" / "service.py",
     ),
 )
 
@@ -186,7 +192,7 @@ def _facade_exposes_declared_participant(
 
 def test_domain_modules_have_no_framework_or_infrastructure_imports() -> None:
     forbidden = ("fastapi", "sqlalchemy", "fulfillflow.db", "fulfillflow.api")
-    for module in ("orders", "shipments", "tracking"):
+    for module in ("orders", "shipments", "tracking", "notifications"):
         imports = _imports(PACKAGE_ROOT / module / "domain.py")
         assert not {imported for imported in imports if imported.startswith(forbidden)}
 
@@ -209,6 +215,7 @@ def test_business_internals_are_imported_only_by_their_owner() -> None:
 
 def test_public_filter_dtos_are_owned_by_public_schema_modules() -> None:
     expected_modules = {
+        NotificationFilters: "fulfillflow.notifications.schemas",
         OrderFilters: "fulfillflow.orders.schemas",
         ShipmentListFilters: "fulfillflow.shipments.schemas",
     }
@@ -249,8 +256,8 @@ def test_tracking_uses_only_business_public_interfaces() -> None:
     assert violations == []
 
 
-def test_orders_and_carriers_do_not_depend_on_business_siblings() -> None:
-    for module in ("orders", "carriers"):
+def test_orders_carriers_and_notifications_do_not_depend_on_business_siblings() -> None:
+    for module in ("orders", "carriers", "notifications"):
         forbidden = {sibling for sibling in BUSINESS_MODULES if sibling != module}
         for path in (PACKAGE_ROOT / module).rglob("*.py"):
             imports = _imports(path)

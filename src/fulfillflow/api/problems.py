@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
 from fulfillflow.carriers.public import CarrierNotFoundError
+from fulfillflow.notifications.public import NotificationNotFoundError
 from fulfillflow.orders.public import (
     InvalidOrderTransitionError,
     OrderExternalReferenceConflictError,
@@ -64,6 +65,7 @@ def install_problem_handling(application: FastAPI) -> None:
         ShipmentNotFoundError,
         CarrierNotFoundError,
         CarrierEventNotFoundError,
+        NotificationNotFoundError,
     ):
         application.add_exception_handler(not_found_type, _not_found_handler)
     for conflict_type in (

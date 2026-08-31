@@ -22,6 +22,7 @@ from fulfillflow.carriers.public import (
     normalize_carrier_event,
     project_known_carrier_payload,
 )
+from fulfillflow.notifications.public import NotificationsPublic
 from fulfillflow.shared import Clock, Page, new_uuid
 from fulfillflow.shipments.public import (
     ShipmentApplicationResult as PublicShipmentApplicationResult,
@@ -127,6 +128,7 @@ class TrackingService:
         self._repository = TrackingRepository(session)
         self._carriers = CarriersPublic(session)
         self._shipments = ShipmentsPublic(session)
+        self._notifications = NotificationsPublic(session, clock)
 
     async def authenticate_and_process(
         self,
@@ -346,7 +348,7 @@ class TrackingService:
                         "No Shipment matches the Carrier and tracking code.",
                     )
 
-                applied = await self._shipments.apply_tracking_status_locked(
+                transition = self._shipments.evaluate_tracking_status_locked(
                     shipment,
                     PublicShipmentStatus(canonical.canonical_status.value),
                     occurred_at=canonical.occurred_at,
@@ -364,16 +366,32 @@ class TrackingService:
                     location=canonical.location,
                     occurred_at=canonical.occurred_at,
                     received_at=locked.received_at,
-                    application_result=ShipmentApplicationResult(applied.transition.result.value),
-                    previous_shipment_status=ShipmentStatus(
-                        applied.transition.previous_status.value
-                    ),
-                    resulting_shipment_status=ShipmentStatus(
-                        applied.transition.resulting_status.value
-                    ),
+                    application_result=ShipmentApplicationResult(transition.result.value),
+                    previous_shipment_status=ShipmentStatus(transition.previous_status.value),
+                    resulting_shipment_status=ShipmentStatus(transition.resulting_status.value),
                     created_at=self._clock.now(),
                 )
                 await self._repository.add_tracking_event(event)
+                recipient = await self._shipments.persist_tracking_status_locked(
+                    shipment,
+                    transition,
+                )
+                if transition.result is PublicShipmentApplicationResult.APPLIED:
+                    if recipient is None:
+                        raise RuntimeError(
+                            "Applied Shipment transition has no notification recipient"
+                        )
+                    await self._notifications.record_applied_transition(
+                        shipment_id=shipment.id,
+                        tracking_event_id=event.id,
+                        recipient=recipient,
+                        resulting_status=transition.resulting_status.value,
+                    )
+                await self._shipments.complete_order_if_eligible_locked(
+                    shipment,
+                    transition,
+                    occurred_at=locked.received_at,
+                )
                 locked.mark_processed(self._clock.now())
                 await self._repository.save_inbox(locked)
                 return _outcome_from_event(

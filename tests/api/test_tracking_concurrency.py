@@ -376,7 +376,8 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                             "i.status AS inbox_status, s.status AS shipment_status, "
                             "o.status AS order_status, "
                             "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
+                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
+                            "(SELECT count(*) FROM notifications) AS notification_count "
                             "FROM carrier_event_inbox i "
                             "JOIN shipments s ON s.id = :shipment_id "
                             "JOIN orders o ON o.id = :order_id "
@@ -402,6 +403,7 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
     assert duplicate.json()["tracking_event_id"] == applied.json()["tracking_event_id"]
     assert state.inbox_count == 1
     assert state.tracking_count == 1
+    assert state.notification_count == 1
     assert state.inbox_status == "PROCESSED"
     assert bytes(state.raw_body) == raw_body
     assert state.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
@@ -556,7 +558,8 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
                             "SELECT i.status AS inbox_status, i.raw_body, "
                             "i.payload_sha256, i.parsed_payload, "
                             "s.status AS shipment_status, o.status AS order_status, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
+                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
+                            "(SELECT count(*) FROM notifications) AS notification_count "
                             "FROM carrier_event_inbox i "
                             "JOIN shipments s ON s.id = :shipment_id "
                             "JOIN orders o ON o.id = :order_id "
@@ -607,7 +610,8 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
                             "i.payload_sha256, i.parsed_payload, "
                             "s.status AS shipment_status, o.status AS order_status, "
                             "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
+                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
+                            "(SELECT count(*) FROM notifications) AS notification_count "
                             "FROM carrier_event_inbox i "
                             "JOIN shipments s ON s.id = :shipment_id "
                             "JOIN orders o ON o.id = :order_id "
@@ -627,6 +631,7 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
     assert rolled_back.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
     assert rolled_back.parsed_payload is None
     assert rolled_back.tracking_count == 0
+    assert rolled_back.notification_count == 0
     assert rolled_back.shipment_status == "PENDING"
     assert rolled_back.order_status == "CONFIRMED"
     assert first.status_code == second.status_code == 200
@@ -637,6 +642,7 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
     assert second.json()["tracking_event_id"] == first.json()["tracking_event_id"]
     assert final.inbox_count == 1
     assert final.tracking_count == 1
+    assert final.notification_count == 1
     assert final.inbox_status == "PROCESSED"
     assert bytes(final.raw_body) == raw_body
     assert final.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
@@ -848,6 +854,10 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                         {"first": first_event_id, "second": second_event_id},
                     )
                 ).all()
+                notification_count = await session.scalar(
+                    text("SELECT count(*) FROM notifications WHERE shipment_id = :shipment_id"),
+                    {"shipment_id": shipment_id},
+                )
 
     assert first.status_code == second.status_code == 200
     assert first.json()["result"] == expected_first_result
@@ -863,6 +873,9 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
         initial_clock + expected_winner_received_delta
     )
     assert len(events) == 2
+    assert notification_count == sum(
+        result == "APPLIED" for result in (expected_first_result, expected_second_result)
+    )
     by_event_id = {row.external_event_id: row for row in events}
     assert by_event_id[first_event_id].inbox_status == "PROCESSED"
     assert by_event_id[first_event_id].application_result == expected_first_result

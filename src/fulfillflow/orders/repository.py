@@ -49,6 +49,13 @@ class OrderRepository:
         )
         return result.scalar_one_or_none()
 
+    async def recipient_email(self, order_id: UUID) -> str | None:
+        """Read the immutable recipient scalar without populating the identity map."""
+        result = await self._session.execute(
+            select(OrderModel.recipient_email).where(OrderModel.id == order_id)
+        )
+        return result.scalar_one_or_none()
+
     async def save(self, order: Order) -> None:
         """Persist mutable entity fields and flush without committing."""
         model = await self._session.get(OrderModel, order.id)

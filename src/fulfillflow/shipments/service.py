@@ -272,7 +272,7 @@ class ShipmentsPublic:
             for_update=True,
         )
 
-    async def apply_tracking_status_locked(
+    def evaluate_tracking_status_locked(
         self,
         shipment: Shipment,
         target: ShipmentStatus,
@@ -280,35 +280,54 @@ class ShipmentsPublic:
         occurred_at: datetime,
         received_at: datetime,
         external_event_id: str,
-    ) -> AppliedShipmentTransition:
-        """Apply an event while participating in the caller's transaction.
-
-        The caller must already hold the Shipment lock. Any Order lock is acquired
-        only after it, preserving the global inbox -> Shipment -> Order order.
-        """
-        transition = shipment.apply_external_status(
+    ) -> ShipmentTransition:
+        """Determine a transition in memory while the caller holds the Shipment lock."""
+        return shipment.apply_external_status(
             target,
             occurred_at=occurred_at,
             received_at=received_at,
             external_event_id=external_event_id,
         )
+
+    async def persist_tracking_status_locked(
+        self,
+        shipment: Shipment,
+        transition: ShipmentTransition,
+    ) -> str | None:
+        """Flush a prepared Shipment result without acquiring another business lock."""
         if transition.result in {
             ShipmentApplicationResult.APPLIED,
             ShipmentApplicationResult.NO_STATE_CHANGE,
         }:
             await self._repository.save(shipment)
 
-        order_completed = False
-        if transition.result is ShipmentApplicationResult.APPLIED and shipment.status in {
+        if transition.result is ShipmentApplicationResult.APPLIED:
+            return await self._orders.recipient_email(shipment.order_id)
+        return None
+
+    async def complete_order_if_eligible_locked(
+        self,
+        shipment: Shipment,
+        transition: ShipmentTransition,
+        *,
+        occurred_at: datetime,
+    ) -> bool:
+        """Evaluate Order completion after Tracking has staged dependent records.
+
+        The caller still holds the Shipment lock. A terminal applied transition
+        acquires the Order lock last, preserving inbox -> Shipment -> Order.
+        """
+        if transition.result is not ShipmentApplicationResult.APPLIED or shipment.status not in {
             ShipmentStatus.DELIVERED,
             ShipmentStatus.CANCELLED,
         }:
-            order = await self._orders.lock_for_completion(shipment.order_id)
-            total, undelivered = await self._repository.completion_counts(shipment.order_id)
-            if total != 0 and undelivered == 0:
-                order_completed = await self._orders.complete_locked(order, received_at)
+            return False
 
-        return AppliedShipmentTransition(transition, shipment, order_completed)
+        order = await self._orders.lock_for_completion(shipment.order_id)
+        total, undelivered = await self._repository.completion_counts(shipment.order_id)
+        if total != 0 and undelivered == 0:
+            return await self._orders.complete_locked(order, occurred_at)
+        return False
 
     async def summaries_for_order(self, order_id: UUID) -> builtins.list[ShipmentSummary]:
         """Return Shipment-owned summaries inside the caller's transaction."""

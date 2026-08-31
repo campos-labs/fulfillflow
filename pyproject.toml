@@ -95,6 +95,7 @@ source_modules = [
     "fulfillflow.orders.domain",
     "fulfillflow.shipments.domain",
     "fulfillflow.tracking.domain",
+    "fulfillflow.notifications.domain",
 ]
 forbidden_modules = [
     "fastapi",
@@ -146,3 +147,14 @@ protected_modules = [
     "fulfillflow.tracking.service",
 ]
 allowed_importers = ["fulfillflow.tracking"]
+
+[[tool.importlinter.contracts]]
+name = "Notifications internals are imported only by Notifications"
+type = "protected"
+protected_modules = [
+    "fulfillflow.notifications.domain",
+    "fulfillflow.notifications.models",
+    "fulfillflow.notifications.repository",
+    "fulfillflow.notifications.service",
+]
+allowed_importers = ["fulfillflow.notifications"]

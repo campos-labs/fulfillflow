@@ -11,6 +11,7 @@ from fulfillflow.carriers import models as carrier_models  # noqa: F401
 from fulfillflow.config import DatabaseSettings
 from fulfillflow.db.base import Base
 from fulfillflow.db.session import postgres_connect_args
+from fulfillflow.notifications import models as notification_models  # noqa: F401
 from fulfillflow.orders import models as order_models  # noqa: F401
 from fulfillflow.shipments import models as shipment_models  # noqa: F401
 from fulfillflow.tracking import models as tracking_models  # noqa: F401

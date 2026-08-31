@@ -1,15 +1,16 @@
 # FulfillFlow
 
 Incremento executável do FulfillFlow v1.0.0 com FastAPI, PostgreSQL 18
-assíncrono, Alembic e os módulos de negócio Orders, Shipments, Carriers e
-Tracking. Estão incluídas as máquinas de estados, persistência modular, APIs
-JSON, paginação, filtros, request ID e erros `application/problem+json`.
+assíncrono, Alembic e os módulos de negócio Orders, Shipments, Carriers,
+Tracking e Notifications. Estão incluídas as máquinas de estados, persistência
+modular, APIs JSON, paginação, filtros, request ID e erros
+`application/problem+json`.
 
 Este incremento inclui os Carriers simulados Alpha e Beta, allowlist estática de
-adapters, autenticação HMAC sobre os bytes originais, inbox auditável e timeline
-canônica com processamento síncrono. Ainda não inclui Notifications, UI, seed de
-demonstração, benchmark, processamento assíncrono ou os cenários completos de
-concorrência de Tracking.
+adapters, autenticação HMAC sobre os bytes originais, inbox auditável, timeline
+canônica e registro persistente de Notifications simuladas para transições
+aplicadas durante o processamento síncrono. Ainda não inclui UI, seed de
+demonstração, benchmark ou processamento assíncrono.
 
 ## Subida local com Docker Compose
 
@@ -44,6 +45,9 @@ Além dos health checks, os contratos atuais sob `/api/v1` são:
   `GET /api/v1/shipments/{shipment_id}/tracking` e consulta sanitizada do inbox
   em `GET /api/v1/carrier-events` e
   `GET /api/v1/carrier-events/{inbox_event_id}`;
+- Notifications: consulta operacional paginada em `GET /api/v1/notifications`,
+  com filtros por `status`, `shipment_id`, `created_from` e `created_to`, e
+  detalhe em `GET /api/v1/notifications/{notification_id}`;
 - erros públicos, inclusive validação, 404 e 405, usam problem details e todas
   as respostas propagam um `X-Request-ID` válido.
 
@@ -102,6 +106,7 @@ docker compose config --quiet
 A revisão `0001_bootstrap` estabelece o baseline, `0002_orders_shipments` cria
 Orders, Shipments e o registro de Carriers, e `0003_carriers_tracking` instala os
 registros determinísticos Alpha/Beta e cria `carrier_event_inbox` e
-`tracking_events`. O schema usa UUID/timestamptz nativos, JSONB/bytea para a
+`tracking_events`. A revisão `0004_notifications` cria o registro persistente das
+notificações simuladas. O schema usa UUID/timestamptz nativos, JSONB/bytea para a
 projeção e os bytes externos, checks textuais nomeados, FKs restritivas e os
-índices do contrato. Notifications permanece fora do schema deste incremento.
+índices do contrato.

@@ -13,6 +13,12 @@ from fulfillflow.api.queries import OrderDetailQuery
 from fulfillflow.api.schemas import OrderDetailRead
 from fulfillflow.carriers.public import CarrierNotFoundError
 from fulfillflow.config import Settings
+from fulfillflow.notifications.public import NotificationService, NotificationStatus
+from fulfillflow.notifications.schemas import (
+    NotificationFilters,
+    NotificationList,
+    NotificationRead,
+)
 from fulfillflow.orders.public import (
     CreateOrderCommand,
     OrderService,
@@ -340,6 +346,54 @@ async def get_carrier_event(
     """Return one sanitized inbox detail without exposing authenticated bytes."""
     return CarrierEventRead.from_view(
         await TrackingService(session, clock).get_inbox(inbox_event_id)
+    )
+
+
+@router.get(
+    "/notifications",
+    response_model=NotificationList,
+    tags=["notifications"],
+)
+async def list_notifications(
+    session: SessionDependency,
+    notification_status: Annotated[NotificationStatus | None, Query(alias="status")] = None,
+    shipment_id: UUID | None = None,
+    created_from: AwareDatetime | None = None,
+    created_to: AwareDatetime | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> NotificationList:
+    """List simulated Notification records through their operational projection."""
+    result = await NotificationService(session).list(
+        NotificationFilters(
+            status=notification_status,
+            shipment_id=shipment_id,
+            created_from=_as_datetime(created_from),
+            created_to=_as_datetime(created_to),
+        ),
+        page=page,
+        page_size=page_size,
+    )
+    return NotificationList(
+        items=[NotificationRead.from_notification(item) for item in result.items],
+        page=result.page,
+        page_size=result.page_size,
+        total=result.total,
+    )
+
+
+@router.get(
+    "/notifications/{notification_id}",
+    response_model=NotificationRead,
+    tags=["notifications"],
+)
+async def get_notification(
+    notification_id: UUID,
+    session: SessionDependency,
+) -> NotificationRead:
+    """Return one simulated Notification without exposing causal payload internals."""
+    return NotificationRead.from_notification(
+        await NotificationService(session).get(notification_id)
     )
 
 

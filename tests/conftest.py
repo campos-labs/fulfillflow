@@ -94,6 +94,7 @@ async def carrier_id(postgres_database: Database) -> UUID:
 
 async def _clear_business_rows(database: Database) -> None:
     async with database.engine.begin() as connection:
+        await connection.execute(text("DELETE FROM notifications"))
         await connection.execute(text("DELETE FROM tracking_events"))
         await connection.execute(text("DELETE FROM carrier_event_inbox"))
         await connection.execute(text("DELETE FROM shipments"))

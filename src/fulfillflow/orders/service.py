@@ -168,6 +168,13 @@ class OrdersPublic:
         """Resolve an Order list filter without cross-module table access."""
         return await self._repository.find_id_by_external_reference(external_reference)
 
+    async def recipient_email(self, order_id: UUID) -> str:
+        """Disclose the immutable synthetic recipient inside a caller transaction."""
+        recipient = await self._repository.recipient_email(order_id)
+        if recipient is None:
+            raise OrderNotFoundError(order_id)
+        return recipient
+
     async def lock_for_completion(self, order_id: UUID) -> Order:
         """Acquire the Order lock after the caller has locked its Shipment."""
         order = await self._repository.get(order_id, for_update=True)

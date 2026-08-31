@@ -17,6 +17,10 @@ from tests.support import FixedClock
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
 from fulfillflow.main import create_app
+from fulfillflow.notifications import domain as notification_domain
+from fulfillflow.notifications.public import NotificationsPublic
+from fulfillflow.notifications.repository import NotificationRepository
+from fulfillflow.shipments.public import ShipmentsPublic
 from fulfillflow.tracking.public import calculate_signature
 from fulfillflow.tracking.repository import TrackingRepository
 
@@ -204,7 +208,8 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
                         text(
                             "SELECT "
                             "(SELECT count(*) FROM carrier_event_inbox), "
-                            "(SELECT count(*) FROM tracking_events)"
+                            "(SELECT count(*) FROM tracking_events), "
+                            "(SELECT count(*) FROM notifications)"
                         )
                     )
                 ).one()
@@ -222,7 +227,7 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
     assert duplicate.json()["tracking_event_id"] == applied.json()["tracking_event_id"]
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "EVENT_ID_PAYLOAD_CONFLICT"
-    assert counts == (1, 1)
+    assert counts == (1, 1, 1)
     assert bytes(stored.raw_body) == raw_body
     assert stored.parsed_payload["city"] == "São Bernardo do Campo"
     assert stored.parsed_payload["supplierExtension"] == {
@@ -421,6 +426,9 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
                     )
                 ).all()
                 tracking_count = await session.scalar(text("SELECT count(*) FROM tracking_events"))
+                notification_count = await session.scalar(
+                    text("SELECT count(*) FROM notifications")
+                )
 
     assert [response.status_code for response in responses] == [422] * len(cases)
     assert [response.json()["code"] for response in responses] == [case[2] for case in cases]
@@ -438,6 +446,7 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
         else:
             assert row.parsed_payload["eventId"] == parsed_id
     assert tracking_count == 0
+    assert notification_count == 0
 
 
 async def test_pre_authentication_failures_never_create_an_inbox(
@@ -497,6 +506,9 @@ async def test_pre_authentication_failures_never_create_an_inbox(
             )
             async with postgres_database.session() as session:
                 inbox_count = await session.scalar(text("SELECT count(*) FROM carrier_event_inbox"))
+                notification_count = await session.scalar(
+                    text("SELECT count(*) FROM notifications")
+                )
 
     assert invalid_signature.status_code == 401
     assert invalid_signature.json()["code"] == "INVALID_WEBHOOK_SIGNATURE"
@@ -508,6 +520,7 @@ async def test_pre_authentication_failures_never_create_an_inbox(
     assert oversized.json()["code"] == "PAYLOAD_TOO_LARGE"
     assert unknown_carrier.status_code == 404
     assert inbox_count == 0
+    assert notification_count == 0
 
 
 async def test_signed_headers_require_one_visible_ascii_value_before_persistence(
@@ -586,11 +599,139 @@ async def test_signed_headers_require_one_visible_ascii_value_before_persistence
     assert inbox_count == 0
 
 
+async def test_transaction_b_follows_the_design_persistence_order(
+    postgres_settings: Settings,
+    postgres_database: Database,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
+    steps: list[str] = []
+    original_add_event = TrackingRepository.add_tracking_event
+    original_persist_shipment = ShipmentsPublic.persist_tracking_status_locked
+    original_record_notification = NotificationsPublic.record_applied_transition
+    original_complete_order = ShipmentsPublic.complete_order_if_eligible_locked
+    original_save_inbox = TrackingRepository.save_inbox
+
+    async def add_event(repository: TrackingRepository, event: Any) -> None:
+        await original_add_event(repository, event)
+        steps.append("tracking-event-flushed")
+
+    async def persist_shipment(
+        service: ShipmentsPublic,
+        shipment: Any,
+        transition: Any,
+    ) -> str | None:
+        recipient = await original_persist_shipment(service, shipment, transition)
+        steps.append("shipment-flushed")
+        return recipient
+
+    async def record_notification(
+        service: NotificationsPublic,
+        *,
+        shipment_id: UUID,
+        tracking_event_id: UUID,
+        recipient: str,
+        resulting_status: str,
+    ) -> Any:
+        notification = await original_record_notification(
+            service,
+            shipment_id=shipment_id,
+            tracking_event_id=tracking_event_id,
+            recipient=recipient,
+            resulting_status=resulting_status,
+        )
+        steps.append("notification-flushed")
+        return notification
+
+    async def complete_order(
+        service: ShipmentsPublic,
+        shipment: Any,
+        transition: Any,
+        *,
+        occurred_at: Any,
+    ) -> bool:
+        completed = await original_complete_order(
+            service,
+            shipment,
+            transition,
+            occurred_at=occurred_at,
+        )
+        steps.append("order-evaluated-after-lock")
+        return completed
+
+    async def save_inbox(repository: TrackingRepository, inbox: Any) -> None:
+        await original_save_inbox(repository, inbox)
+        steps.append("inbox-flushed")
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _create_shipment(
+                client,
+                reference="ORDER-TRANSACTION-B-SEQUENCE",
+                carrier_code="carrier-alpha",
+                tracking_code="TRANSACTION-B-SEQUENCE",
+            )
+            monkeypatch.setattr(TrackingRepository, "add_tracking_event", add_event)
+            monkeypatch.setattr(
+                ShipmentsPublic,
+                "persist_tracking_status_locked",
+                persist_shipment,
+            )
+            monkeypatch.setattr(
+                NotificationsPublic,
+                "record_applied_transition",
+                record_notification,
+            )
+            monkeypatch.setattr(
+                ShipmentsPublic,
+                "complete_order_if_eligible_locked",
+                complete_order,
+            )
+            monkeypatch.setattr(TrackingRepository, "save_inbox", save_inbox)
+            response = await _post_event(
+                client,
+                postgres_settings,
+                fixed_clock,
+                carrier_code="carrier-alpha",
+                event_id="transaction-b-sequence",
+                raw_body=_alpha_body(
+                    "transaction-b-sequence",
+                    "TRANSACTION-B-SEQUENCE",
+                    status="DELIVERED",
+                ),
+            )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == "APPLIED"
+    assert steps == [
+        "tracking-event-flushed",
+        "shipment-flushed",
+        "notification-flushed",
+        "order-evaluated-after-lock",
+        "inbox-flushed",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("injected_error", "expected_status", "expected_code"),
+    [
+        (SQLAlchemyError("injected persistence failure"), 503, "DATABASE_UNAVAILABLE"),
+        (RuntimeError("injected unexpected failure"), 500, "INTERNAL_ERROR"),
+    ],
+    ids=["infrastructure", "unexpected-application"],
+)
 async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
     postgres_settings: Settings,
     postgres_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
+    injected_error: Exception,
+    expected_status: int,
+    expected_code: str,
 ) -> None:
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
     raw_body = _alpha_body(
@@ -598,18 +739,57 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
         "RESUME-AFTER-ROLLBACK",
         status="DELIVERED",
     )
-    original_add = TrackingRepository.add_tracking_event
+    original_add = NotificationRepository.add
+    original_save_inbox = TrackingRepository.save_inbox
+    notification_flushed = False
+    transaction_b_fully_flushed = False
 
-    async def fail_after_tracking_flush(
-        repository: TrackingRepository,
-        event: Any,
+    async def observe_notification_flush(
+        repository: NotificationRepository,
+        notification: Any,
     ) -> None:
-        await original_add(repository, event)
-        raise SQLAlchemyError("injected failure after TrackingEvent flush")
+        nonlocal notification_flushed
+        await original_add(repository, notification)
+        notification_flushed = True
+
+    async def fail_after_transaction_b_flushes(
+        repository: TrackingRepository,
+        inbox: Any,
+    ) -> None:
+        nonlocal transaction_b_fully_flushed
+        assert notification_flushed
+        await original_save_inbox(repository, inbox)
+        flushed = (
+            await repository._session.execute(
+                text(
+                    "SELECT i.status AS inbox_status, t.application_result, "
+                    "s.status AS shipment_status, o.status AS order_status, "
+                    "(SELECT count(*) FROM tracking_events "
+                    " WHERE inbox_event_id = i.id) AS tracking_count, "
+                    "(SELECT count(*) FROM notifications n "
+                    " JOIN tracking_events nt ON nt.id = n.tracking_event_id "
+                    " WHERE nt.inbox_event_id = i.id) AS notification_count "
+                    "FROM carrier_event_inbox i "
+                    "JOIN tracking_events t ON t.inbox_event_id = i.id "
+                    "JOIN shipments s ON s.id = t.shipment_id "
+                    "JOIN orders o ON o.id = s.order_id "
+                    "WHERE i.id = :inbox_id"
+                ),
+                {"inbox_id": inbox.id},
+            )
+        ).one()
+        assert flushed.inbox_status == "PROCESSED"
+        assert flushed.application_result == "APPLIED"
+        assert flushed.shipment_status == "DELIVERED"
+        assert flushed.order_status == "FULFILLED"
+        assert flushed.tracking_count == 1
+        assert flushed.notification_count == 1
+        transaction_b_fully_flushed = True
+        raise injected_error
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app),
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
             base_url="http://testserver",
         ) as client:
             shipment_id = await _create_shipment(
@@ -619,9 +799,14 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
                 tracking_code="RESUME-AFTER-ROLLBACK",
             )
             monkeypatch.setattr(
+                NotificationRepository,
+                "add",
+                observe_notification_flush,
+            )
+            monkeypatch.setattr(
                 TrackingRepository,
-                "add_tracking_event",
-                fail_after_tracking_flush,
+                "save_inbox",
+                fail_after_transaction_b_flushes,
             )
             failed = await _post_event(
                 client,
@@ -639,7 +824,8 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
                             "SELECT i.status AS inbox_status, i.raw_body, "
                             "s.status AS shipment_status, o.status AS order_status, "
                             "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
+                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
+                            "(SELECT count(*) FROM notifications) AS notification_count "
                             "FROM carrier_event_inbox i "
                             "JOIN shipments s ON s.id = :shipment_id "
                             "JOIN orders o ON o.id = s.order_id "
@@ -653,9 +839,14 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
                 ).one()
 
             monkeypatch.setattr(
-                TrackingRepository,
-                "add_tracking_event",
+                NotificationRepository,
+                "add",
                 original_add,
+            )
+            monkeypatch.setattr(
+                TrackingRepository,
+                "save_inbox",
+                original_save_inbox,
             )
             resumed = await _post_event(
                 client,
@@ -672,7 +863,8 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
                             "SELECT i.status AS inbox_status, s.status AS shipment_status, "
                             "o.status AS order_status, "
                             "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
+                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
+                            "(SELECT count(*) FROM notifications) AS notification_count "
                             "FROM carrier_event_inbox i "
                             "JOIN shipments s ON s.id = :shipment_id "
                             "JOIN orders o ON o.id = s.order_id "
@@ -685,10 +877,13 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
                     )
                 ).one()
 
-    assert failed.status_code == 503
-    assert failed.json()["code"] == "DATABASE_UNAVAILABLE"
+    assert failed.status_code == expected_status
+    assert failed.json()["code"] == expected_code
+    assert notification_flushed is True
+    assert transaction_b_fully_flushed is True
     assert rolled_back.inbox_count == 1
     assert rolled_back.tracking_count == 0
+    assert rolled_back.notification_count == 0
     assert rolled_back.inbox_status == "RECEIVED"
     assert bytes(rolled_back.raw_body) == raw_body
     assert rolled_back.shipment_status == "PENDING"
@@ -698,9 +893,76 @@ async def test_transaction_a_survives_failed_b_and_identical_delivery_resumes(
     assert resumed.json()["current_status"] == "DELIVERED"
     assert final.inbox_count == 1
     assert final.tracking_count == 1
+    assert final.notification_count == 1
     assert final.inbox_status == "PROCESSED"
     assert final.shipment_status == "DELIVERED"
     assert final.order_status == "FULFILLED"
+
+
+async def test_expected_notification_failure_is_recorded_without_rolling_back_transition(
+    postgres_settings: Settings,
+    postgres_database: Database,
+    fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
+    event_id = "expected-notification-failure"
+    tracking_code = "EXPECTED-NOTIFICATION-FAILURE"
+    monkeypatch.delitem(notification_domain._STATUS_CONTENT, "DELIVERED")
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            shipment_id = await _create_shipment(
+                client,
+                reference="ORDER-NOTIFICATION-FAILED",
+                carrier_code="carrier-alpha",
+                tracking_code=tracking_code,
+            )
+            response = await _post_event(
+                client,
+                postgres_settings,
+                fixed_clock,
+                carrier_code="carrier-alpha",
+                event_id=event_id,
+                raw_body=_alpha_body(
+                    event_id,
+                    tracking_code,
+                    status="DELIVERED",
+                ),
+            )
+            async with postgres_database.session() as session:
+                state = (
+                    await session.execute(
+                        text(
+                            "SELECT i.status AS inbox_status, "
+                            "t.application_result, n.status AS notification_status, "
+                            "n.error_detail, n.message, n.simulated_at, "
+                            "s.status AS shipment_status, o.status AS order_status "
+                            "FROM carrier_event_inbox i "
+                            "JOIN tracking_events t ON t.inbox_event_id = i.id "
+                            "JOIN notifications n ON n.tracking_event_id = t.id "
+                            "JOIN shipments s ON s.id = t.shipment_id "
+                            "JOIN orders o ON o.id = s.order_id "
+                            "WHERE i.external_event_id = :event_id"
+                        ),
+                        {"event_id": event_id},
+                    )
+                ).one()
+
+    assert response.status_code == 200
+    assert response.json()["result"] == "APPLIED"
+    assert response.json()["shipment_id"] == shipment_id
+    assert state.inbox_status == "PROCESSED"
+    assert state.application_result == "APPLIED"
+    assert state.notification_status == "FAILED"
+    assert state.error_detail == "Notification rendering or simulation failed."
+    assert state.message == "The shipment notification could not be simulated."
+    assert state.simulated_at is None
+    assert state.shipment_status == "DELIVERED"
+    assert state.order_status == "FULFILLED"
 
 
 async def test_same_tracking_code_is_isolated_by_carrier(
@@ -820,6 +1082,18 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
                 f"/api/v1/shipments/{shipment_id}/tracking",
                 params={"page": 2, "page_size": 3},
             )
+            async with postgres_database.session() as session:
+                notification_event_ids = set(
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT tracking_event_id FROM notifications "
+                                "WHERE shipment_id = :shipment_id"
+                            ),
+                            {"shipment_id": UUID(shipment_id)},
+                        )
+                    ).scalars()
+                )
 
     assert [response.status_code for response in responses] == [200] * len(events)
     assert [response.json()["result"] for response in responses] == [
@@ -851,3 +1125,8 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
         assert event["application_result"] == result
         assert event["previous_shipment_status"] == previous
         assert event["resulting_shipment_status"] == resulting
+    assert notification_event_ids == {
+        UUID(response.json()["tracking_event_id"])
+        for response, event_spec in zip(responses, events, strict=True)
+        if event_spec[3] == "APPLIED"
+    }

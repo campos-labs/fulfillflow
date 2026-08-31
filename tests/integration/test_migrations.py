@@ -25,13 +25,18 @@ BUSINESS_TABLES = {
     "shipments",
     "carrier_event_inbox",
     "tracking_events",
+    "notifications",
 }
+PRE_NOTIFICATION_TABLES = BUSINESS_TABLES - {"notifications"}
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
 ALPHA_ID = UUID("00000000-0000-4000-8000-000000000100")
 BETA_ID = UUID("00000000-0000-4000-8000-000000000101")
 ORDER_ID = UUID("00000000-0000-4000-8000-000000000201")
 CARRIER_ID = UUID("00000000-0000-4000-8000-000000000202")
 SHIPMENT_ID = UUID("00000000-0000-4000-8000-000000000203")
+INBOX_ID = UUID("00000000-0000-4000-8000-000000000204")
+TRACKING_EVENT_ID = UUID("00000000-0000-4000-8000-000000000205")
+NOTIFICATION_ID = UUID("00000000-0000-4000-8000-000000000206")
 
 ORDER_INSERT = """
 INSERT INTO orders (
@@ -57,6 +62,39 @@ INSERT INTO shipments (
     :id, :order_id, :carrier_id, :tracking_code, :status,
     :status_occurred_at, :status_event_received_at, :status_external_event_id,
     :estimated_delivery_date, :shipped_at, :delivered_at, :created_at, :updated_at
+)
+"""
+INBOX_INSERT = """
+INSERT INTO carrier_event_inbox (
+    id, carrier_id, external_event_id, payload_sha256, raw_body,
+    parsed_payload, received_at, status, error_code, error_detail,
+    processed_at, request_id
+) VALUES (
+    :id, :carrier_id, :external_event_id, :payload_sha256, :raw_body,
+    :parsed_payload, :received_at, :status, :error_code, :error_detail,
+    :processed_at, :request_id
+)
+"""
+TRACKING_EVENT_INSERT = """
+INSERT INTO tracking_events (
+    id, inbox_event_id, shipment_id, carrier_id, external_status,
+    canonical_status, description, location, occurred_at, received_at,
+    application_result, previous_shipment_status, resulting_shipment_status,
+    created_at
+) VALUES (
+    :id, :inbox_event_id, :shipment_id, :carrier_id, :external_status,
+    :canonical_status, :description, :location, :occurred_at, :received_at,
+    :application_result, :previous_shipment_status, :resulting_shipment_status,
+    :created_at
+)
+"""
+NOTIFICATION_INSERT = """
+INSERT INTO notifications (
+    id, shipment_id, tracking_event_id, channel, recipient,
+    template_key, message, status, error_detail, created_at, simulated_at
+) VALUES (
+    :id, :shipment_id, :tracking_event_id, :channel, :recipient,
+    :template_key, :message, :status, :error_detail, :created_at, :simulated_at
 )
 """
 
@@ -130,6 +168,68 @@ def _shipment_parameters(
     }
 
 
+def _inbox_parameters(identifier: UUID = INBOX_ID) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "carrier_id": CARRIER_ID,
+        "external_event_id": f"migration-{identifier}",
+        "payload_sha256": "0" * 64,
+        "raw_body": b"{}",
+        "parsed_payload": None,
+        "received_at": NOW,
+        "status": "PROCESSED",
+        "error_code": None,
+        "error_detail": None,
+        "processed_at": NOW,
+        "request_id": UUID(int=800),
+    }
+
+
+def _tracking_event_parameters(
+    identifier: UUID = TRACKING_EVENT_ID,
+    *,
+    inbox_event_id: UUID = INBOX_ID,
+    shipment_id: UUID = SHIPMENT_ID,
+) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "inbox_event_id": inbox_event_id,
+        "shipment_id": shipment_id,
+        "carrier_id": CARRIER_ID,
+        "external_status": "CREATED",
+        "canonical_status": "POSTED",
+        "description": None,
+        "location": None,
+        "occurred_at": NOW,
+        "received_at": NOW,
+        "application_result": "APPLIED",
+        "previous_shipment_status": "PENDING",
+        "resulting_shipment_status": "POSTED",
+        "created_at": NOW,
+    }
+
+
+def _notification_parameters(
+    identifier: UUID = NOTIFICATION_ID,
+    *,
+    shipment_id: UUID = SHIPMENT_ID,
+    tracking_event_id: UUID = TRACKING_EVENT_ID,
+) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "shipment_id": shipment_id,
+        "tracking_event_id": tracking_event_id,
+        "channel": "EMAIL",
+        "recipient": "migration@example.test",
+        "template_key": "shipment_posted",
+        "message": "Shipment status changed to POSTED.",
+        "status": "SIMULATED",
+        "error_detail": None,
+        "created_at": NOW,
+        "simulated_at": NOW,
+    }
+
+
 async def _revision_and_business_tables(database: Database) -> tuple[str | None, set[str]]:
     async with database.engine.connect() as connection:
         revision = await connection.run_sync(
@@ -144,7 +244,7 @@ async def _revision_and_business_tables(database: Database) -> tuple[str | None,
                         "SELECT table_name FROM information_schema.tables "
                         "WHERE table_schema = 'public' AND table_name IN "
                         "('orders', 'carriers', 'shipments', "
-                        "'carrier_event_inbox', 'tracking_events')"
+                        "'carrier_event_inbox', 'tracking_events', 'notifications')"
                     )
                 )
             ).scalars()
@@ -176,6 +276,18 @@ async def _verify_tracking_downgrade_retains_business_data(database: Database) -
         shipments = await connection.scalar(text("SELECT count(*) FROM shipments"))
     assert carriers == 3
     assert shipments == 1
+
+
+async def _verify_notification_downgrade_retains_prior_data(database: Database) -> None:
+    revision, tables = await _revision_and_business_tables(database)
+    assert revision == "0003_carriers_tracking"
+    assert tables == PRE_NOTIFICATION_TABLES
+    async with database.engine.connect() as connection:
+        orders = await connection.scalar(text("SELECT count(*) FROM orders"))
+        shipments = await connection.scalar(text("SELECT count(*) FROM shipments"))
+        inbox_events = await connection.scalar(text("SELECT count(*) FROM carrier_event_inbox"))
+        tracking_events = await connection.scalar(text("SELECT count(*) FROM tracking_events"))
+    assert orders == shipments == inbox_events == tracking_events == 1
 
 
 async def _insert_preexisting_reference_scenario(database: Database) -> UUID:
@@ -259,7 +371,7 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "SELECT indexname FROM pg_indexes "
                             "WHERE schemaname = 'public' "
                             "AND tablename IN ('orders', 'shipments', "
-                            "'carrier_event_inbox', 'tracking_events')"
+                            "'carrier_event_inbox', 'tracking_events', 'notifications')"
                         )
                     )
                 ).scalars()
@@ -272,7 +384,7 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "WHERE conrelid IN "
                             "('orders'::regclass, 'carriers'::regclass, "
                             "'shipments'::regclass, 'carrier_event_inbox'::regclass, "
-                            "'tracking_events'::regclass)"
+                            "'tracking_events'::regclass, 'notifications'::regclass)"
                         )
                     )
                 ).scalars()
@@ -288,7 +400,9 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "'fk_carrier_event_inbox_carrier_id_carriers', "
                             "'fk_tracking_events_carrier_id_carriers', "
                             "'fk_tracking_events_inbox_event_id_carrier_event_inbox', "
-                            "'fk_tracking_events_shipment_id_shipments')"
+                            "'fk_tracking_events_shipment_id_shipments', "
+                            "'fk_notifications_shipment_id_shipments', "
+                            "'fk_notifications_tracking_event_id_tracking_events')"
                         )
                     )
                 )
@@ -308,7 +422,10 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
                             "('shipments', 'status_occurred_at'), "
                             "('carrier_event_inbox', 'raw_body'), "
                             "('carrier_event_inbox', 'parsed_payload'), "
-                            "('tracking_events', 'occurred_at'))"
+                            "('tracking_events', 'occurred_at'), "
+                            "('notifications', 'id'), "
+                            "('notifications', 'created_at'), "
+                            "('notifications', 'simulated_at'))"
                         )
                     )
                 )
@@ -327,6 +444,8 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "ix_carrier_event_inbox_status_received_at",
             "uq_tracking_events_inbox_event_id",
             "ix_tracking_events_shipment_occurred_at_created_at",
+            "uq_notifications_tracking_event_id",
+            "ix_notifications_status_created_at",
         }.issubset(indexes)
         assert {
             "ck_orders_order_status",
@@ -339,6 +458,12 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "ck_tracking_events_application_result",
             "uq_carrier_event_inbox_carrier_external_event_id",
             "uq_tracking_events_inbox_event_id",
+            "ck_notifications_notification_channel",
+            "ck_notifications_notification_status",
+            "ck_notifications_recipient_nonempty",
+            "ck_notifications_template_key_nonempty",
+            "ck_notifications_message_nonempty",
+            "uq_notifications_tracking_event_id",
         }.issubset(constraints)
         assert delete_actions == {
             "fk_shipments_carrier_id_carriers": "r",
@@ -347,6 +472,8 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "fk_tracking_events_carrier_id_carriers": "r",
             "fk_tracking_events_inbox_event_id_carrier_event_inbox": "r",
             "fk_tracking_events_shipment_id_shipments": "r",
+            "fk_notifications_shipment_id_shipments": "r",
+            "fk_notifications_tracking_event_id_tracking_events": "r",
         }
         assert column_types == {
             "orders.created_at": "timestamp with time zone",
@@ -357,6 +484,9 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "carrier_event_inbox.raw_body": "bytea",
             "carrier_event_inbox.parsed_payload": "jsonb",
             "tracking_events.occurred_at": "timestamp with time zone",
+            "notifications.id": "uuid",
+            "notifications.created_at": "timestamp with time zone",
+            "notifications.simulated_at": "timestamp with time zone",
         }
 
         reference_carriers = await _reference_carriers(database)
@@ -377,6 +507,15 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             await connection.execute(
                 text(SHIPMENT_INSERT),
                 _shipment_parameters(SHIPMENT_ID, tracking_code="MIGRATION-TRACK"),
+            )
+            await connection.execute(text(INBOX_INSERT), _inbox_parameters())
+            await connection.execute(
+                text(TRACKING_EVENT_INSERT),
+                _tracking_event_parameters(),
+            )
+            await connection.execute(
+                text(NOTIFICATION_INSERT),
+                _notification_parameters(),
             )
 
         order_checks = [
@@ -438,6 +577,48 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
 
         await _assert_rejected(
             database,
+            "UPDATE notifications SET channel = :value WHERE id = :id",
+            {"id": NOTIFICATION_ID, "value": "SMS"},
+            "ck_notifications_notification_channel",
+        )
+        await _assert_rejected(
+            database,
+            "UPDATE notifications SET status = :value WHERE id = :id",
+            {"id": NOTIFICATION_ID, "value": "PENDING"},
+            "ck_notifications_notification_status",
+        )
+        for field, constraint_name in (
+            ("recipient", "ck_notifications_recipient_nonempty"),
+            ("template_key", "ck_notifications_template_key_nonempty"),
+            ("message", "ck_notifications_message_nonempty"),
+        ):
+            await _assert_rejected(
+                database,
+                f"UPDATE notifications SET {field} = :value WHERE id = :id",
+                {"id": NOTIFICATION_ID, "value": "   "},
+                constraint_name,
+            )
+        await _assert_rejected(
+            database,
+            NOTIFICATION_INSERT,
+            _notification_parameters(UUID(int=607)),
+            "uq_notifications_tracking_event_id",
+        )
+        await _assert_rejected(
+            database,
+            "UPDATE notifications SET shipment_id = :value WHERE id = :id",
+            {"id": NOTIFICATION_ID, "value": UUID(int=9993)},
+            "fk_notifications_shipment_id_shipments",
+        )
+        await _assert_rejected(
+            database,
+            "UPDATE notifications SET tracking_event_id = :value WHERE id = :id",
+            {"id": NOTIFICATION_ID, "value": UUID(int=9994)},
+            "fk_notifications_tracking_event_id_tracking_events",
+        )
+
+        await _assert_rejected(
+            database,
             ORDER_INSERT,
             _order_parameters(UUID(int=601), "ORDER-MIGRATION-VALID"),
             "uq_orders_external_reference",
@@ -491,6 +672,12 @@ async def _verify_head_schema_and_constraints(settings: Settings) -> None:
             "DELETE FROM carriers WHERE id = :id",
             {"id": CARRIER_ID},
             "fk_shipments_carrier_id_carriers",
+        )
+        await _assert_rejected(
+            database,
+            "DELETE FROM tracking_events WHERE id = :id",
+            {"id": TRACKING_EVENT_ID},
+            "fk_notifications_tracking_event_id_tracking_events",
         )
     finally:
         await database.dispose()
@@ -547,8 +734,19 @@ def test_migrations_are_isolated_reversible_and_enforced(
 
         command.upgrade(config, "0002_orders_shipments")
         command.upgrade(config, "0003_carriers_tracking")
+        command.upgrade(config, "0004_notifications")
         run_async(_verify_head_schema_and_constraints(settings))
         run_async(_verify_application_readiness(settings))
+
+        command.downgrade(config, "0003_carriers_tracking")
+        notification_downgrade_database = Database.from_settings(settings)
+        try:
+            run_async(
+                _verify_notification_downgrade_retains_prior_data(notification_downgrade_database)
+            )
+        finally:
+            run_async(notification_downgrade_database.dispose())
+        command.upgrade(config, "0004_notifications")
 
         command.downgrade(config, "0002_orders_shipments")
         retained_database = Database.from_settings(settings)
@@ -557,13 +755,14 @@ def test_migrations_are_isolated_reversible_and_enforced(
         finally:
             run_async(retained_database.dispose())
         command.upgrade(config, "0003_carriers_tracking")
+        command.upgrade(config, "0004_notifications")
         roundtrip_database = Database.from_settings(settings)
         try:
             revision, tables = run_async(_revision_and_business_tables(roundtrip_database))
             reference_carriers = run_async(_reference_carriers(roundtrip_database))
         finally:
             run_async(roundtrip_database.dispose())
-        assert revision == "0003_carriers_tracking"
+        assert revision == "0004_notifications"
         assert tables == BUSINESS_TABLES
         assert reference_carriers == {
             "carrier-alpha": (ALPHA_ID, "Carrier Alpha", "alpha", True),
@@ -596,7 +795,7 @@ def test_migrations_are_isolated_reversible_and_enforced(
         revision, tables = run_async(_revision_and_business_tables(restored_database))
     finally:
         run_async(restored_database.dispose())
-    assert revision == "0003_carriers_tracking"
+    assert revision == "0004_notifications"
     assert tables == BUSINESS_TABLES
 
 
@@ -660,7 +859,7 @@ def test_0003_preserves_preexisting_carriers_shipments_and_roundtrips(
         finally:
             run_async(roundtrip_database.dispose())
         assert revision == "0003_carriers_tracking"
-        assert tables == BUSINESS_TABLES
+        assert tables == PRE_NOTIFICATION_TABLES
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")

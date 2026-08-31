@@ -138,6 +138,10 @@ async def test_order_and_shipment_api_journey_filters_idempotency_and_conflicts(
                     },
                 },
             )
+            async with postgres_database.session() as session:
+                notification_count = await session.scalar(
+                    text("SELECT count(*) FROM notifications")
+                )
 
     assert created_order.status_code == 201
     assert created_order.headers["X-Request-ID"] == request_id
@@ -166,6 +170,7 @@ async def test_order_and_shipment_api_journey_filters_idempotency_and_conflicts(
     assert order_page.json()["items"][0]["id"] == order_id
     assert cancelled_shipment.json()["status"] == "CANCELLED"
     assert repeated_cancellation.json()["status"] == "CANCELLED"
+    assert notification_count == 0
     assert invalid_order_cancel.status_code == 409
     assert invalid_order_cancel.json()["code"] == "INVALID_ORDER_TRANSITION"
     assert duplicate_order.status_code == 409
