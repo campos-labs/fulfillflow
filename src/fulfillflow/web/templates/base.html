@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · FulfillFlow</title>
+  <link rel="stylesheet"
+        href="{{ path_for(request, 'web-static', path='vendor/bootstrap-5.3.8.min.css') }}"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB">
+  <link rel="stylesheet"
+        href="{{ path_for(request, 'web-static', path='fulfillflow-v1.css') }}">
+  <meta name="htmx-config"
+        content='{"includeIndicatorStyles": false, "allowEval": false}'>
+  <script defer
+          src="{{ path_for(request, 'web-static', path='vendor/htmx-2.0.10.min.js') }}"
+          integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"></script>
+  <script defer
+          src="{{ path_for(request, 'web-static', path='vendor/bootstrap-5.3.8.bundle.min.js') }}"
+          integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"></script>
+</head>
+<body class="bg-body-tertiary">
+  <nav class="navbar navbar-expand-lg bg-dark navbar-dark shadow-sm" aria-label="Operational navigation">
+    <div class="container-fluid">
+      <a class="navbar-brand fw-semibold" href="{{ path_for(request, 'web-dashboard') }}">FulfillFlow</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+              data-bs-target="#operational-navigation" aria-controls="operational-navigation"
+              aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div id="operational-navigation" class="collapse navbar-collapse">
+        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+          <li class="nav-item"><a class="nav-link{% if section == 'dashboard' %} active{% endif %}"
+              href="{{ path_for(request, 'web-dashboard') }}">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link{% if section == 'orders' %} active{% endif %}"
+              href="{{ path_for(request, 'web-orders-list') }}">Orders</a></li>
+          <li class="nav-item"><a class="nav-link{% if section == 'shipments' %} active{% endif %}"
+              href="{{ path_for(request, 'web-shipments-list') }}">Shipments</a></li>
+          <li class="nav-item"><a class="nav-link{% if section == 'inbox' %} active{% endif %}"
+              href="{{ path_for(request, 'web-inbox-list') }}">Inbox</a></li>
+          <li class="nav-item"><a class="nav-link{% if section == 'notifications' %} active{% endif %}"
+              href="{{ path_for(request, 'web-notifications-list') }}">Notifications</a></li>
+          <li class="nav-item"><a class="nav-link{% if section == 'simulator' %} active{% endif %}"
+              href="{{ path_for(request, 'web-simulator') }}">Simulator</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+  {% block main %}{% endblock %}
+</body>
+</html>

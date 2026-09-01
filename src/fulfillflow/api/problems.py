@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
@@ -92,7 +92,7 @@ def install_problem_handling(application: FastAPI) -> None:
     application.add_exception_handler(Exception, _internal_handler)
 
 
-async def _not_found_handler(request: Request, exception: Exception) -> JSONResponse:
+async def _not_found_handler(request: Request, exception: Exception) -> Response:
     return _problem(
         request,
         status_code=404,
@@ -102,7 +102,7 @@ async def _not_found_handler(request: Request, exception: Exception) -> JSONResp
     )
 
 
-async def _conflict_handler(request: Request, exception: Exception) -> JSONResponse:
+async def _conflict_handler(request: Request, exception: Exception) -> Response:
     return _problem(
         request,
         status_code=409,
@@ -115,7 +115,7 @@ async def _conflict_handler(request: Request, exception: Exception) -> JSONRespo
 async def _invalid_order_transition_handler(
     request: Request,
     exception: Exception,
-) -> JSONResponse:
+) -> Response:
     return _problem(
         request,
         status_code=409,
@@ -128,7 +128,7 @@ async def _invalid_order_transition_handler(
 async def _invalid_shipment_transition_handler(
     request: Request,
     exception: Exception,
-) -> JSONResponse:
+) -> Response:
     return _problem(
         request,
         status_code=409,
@@ -141,7 +141,7 @@ async def _invalid_shipment_transition_handler(
 async def _tracking_problem_handler(
     request: Request,
     exception: Exception,
-) -> JSONResponse:
+) -> Response:
     if not isinstance(exception, TrackingProblemError):
         return await _internal_handler(request, exception)
     return _problem(
@@ -156,7 +156,7 @@ async def _tracking_problem_handler(
 async def _validation_handler(
     request: Request,
     exception: Exception,
-) -> JSONResponse:
+) -> Response:
     validation_error = exception
     if not isinstance(validation_error, RequestValidationError):
         return await _internal_handler(request, exception)
@@ -178,7 +178,7 @@ async def _validation_handler(
     )
 
 
-async def _http_handler(request: Request, exception: Exception) -> JSONResponse:
+async def _http_handler(request: Request, exception: Exception) -> Response:
     if not isinstance(exception, StarletteHTTPException):
         return await _internal_handler(request, exception)
     if exception.status_code == 404:
@@ -200,7 +200,7 @@ async def _http_handler(request: Request, exception: Exception) -> JSONResponse:
     )
 
 
-async def _database_handler(request: Request, exception: Exception) -> JSONResponse:
+async def _database_handler(request: Request, exception: Exception) -> Response:
     del exception
     return _problem(
         request,
@@ -211,7 +211,7 @@ async def _database_handler(request: Request, exception: Exception) -> JSONRespo
     )
 
 
-async def _internal_handler(request: Request, exception: Exception) -> JSONResponse:
+async def _internal_handler(request: Request, exception: Exception) -> Response:
     del exception
     return _problem(
         request,
@@ -230,7 +230,7 @@ def _problem(
     title: str,
     detail: str,
     errors: list[dict[str, Any]] | None = None,
-) -> JSONResponse:
+) -> Response:
     slug = code.lower().replace("_", "-")
     problem = ProblemDetail(
         type=f"{_PROBLEM_BASE}/{slug}",
@@ -241,6 +241,19 @@ def _problem(
         request_id=request.state.request_id,
         errors=errors or [],
     )
+    renderer = getattr(request.app.state, "web_problem_renderer", None)
+    if callable(renderer) and _is_html_route(request.url.path):
+        return cast(
+            Response,
+            renderer(
+                request,
+                status_code=status_code,
+                code=code,
+                title=title,
+                detail=detail,
+                errors=errors or [],
+            ),
+        )
     return JSONResponse(
         status_code=status_code,
         content=problem.model_dump(mode="json"),
@@ -255,3 +268,14 @@ def _valid_or_new_request_id(header: str | None) -> UUID:
         except ValueError:
             pass
     return uuid4()
+
+
+def _is_html_route(path: str) -> bool:
+    """Keep API, health and generated documentation errors in JSON."""
+    return not (
+        path.startswith("/api/v1")
+        or path.startswith("/health")
+        or path.startswith("/docs")
+        or path.startswith("/redoc")
+        or path == "/openapi.json"
+    )

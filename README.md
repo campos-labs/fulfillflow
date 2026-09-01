@@ -9,8 +9,9 @@ modular, APIs JSON, paginação, filtros, request ID e erros
 Este incremento inclui os Carriers simulados Alpha e Beta, allowlist estática de
 adapters, autenticação HMAC sobre os bytes originais, inbox auditável, timeline
 canônica e registro persistente de Notifications simuladas para transições
-aplicadas durante o processamento síncrono. Ainda não inclui UI, seed de
-demonstração, benchmark ou processamento assíncrono.
+aplicadas durante o processamento síncrono. A interface operacional é renderizada
+no servidor e permite demonstrar esse fluxo completo. Seed de demonstração,
+benchmark e processamento assíncrono permanecem fora deste incremento.
 
 ## Subida local com Docker Compose
 
@@ -27,6 +28,7 @@ serviço one-shot `migrate` e só então inicia `app`. A API é publicada apenas
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8000/health/live
 Invoke-WebRequest http://127.0.0.1:8000/health/ready
+Invoke-WebRequest http://127.0.0.1:8000/
 ```
 
 Além dos health checks, os contratos atuais sob `/api/v1` são:
@@ -65,6 +67,89 @@ isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua tod
 os placeholders. Mantenha `POSTGRES_PASSWORD` e a senha codificada em
 `DATABASE_URL` coerentes.
 
+## Interface operacional
+
+A UI usa Jinja2 com HTML server-rendered, Bootstrap e HTMX locais, sem SPA,
+toolchain Node ou dependência de CDN em runtime. A navegação segue Dashboard →
+Orders → Shipments → Inbox → Notifications → Simulator. Requisições
+HTMX usam as mesmas rotas e casos de uso das páginas completas.
+
+As rotas HTML são:
+
+- `GET /`: dashboard com contagens operacionais e eventos recentes do inbox;
+- `GET /orders`, `GET /orders/new`, `POST /orders` e
+  `GET /orders/{order_id}`: lista, criação e detalhe composto com Shipments;
+- `POST /orders/{order_id}/confirm` e `POST /orders/{order_id}/cancel`:
+  confirmação e cancelamento de Order;
+- `GET /shipments`, `GET /shipments/new`, `POST /shipments` e
+  `GET /shipments/{shipment_id}`: lista com filtros, criação e detalhe;
+- `POST /shipments/{shipment_id}/cancel` e
+  `GET /shipments/{shipment_id}/tracking`: cancelamento e timeline sanitizada;
+- `GET /carrier-events` e `GET /carrier-events/{inbox_event_id}`: lista, filtros
+  e detalhe sanitizado do inbox;
+- `GET /notifications` e `GET /notifications/{notification_id}`: lista, filtros
+  e detalhe somente leitura das simulações de Notification;
+- `GET /simulator`: painel estritamente instrucional para o cliente externo;
+- `GET /static/...`: assets versionados empacotados com a aplicação.
+
+`/shipments/new?order_id=<uuid>` permite pré-preencher o Order. Formulários
+mutáveis usam sessão assinada, CSRF e Post/Redirect/Get; APIs JSON e webhooks
+continuam stateless, sem CSRF e sem criação de cookie de sessão.
+
+Os assets oficiais incluídos no pacote são:
+
+- Bootstrap 5.3.8 (`bootstrap-5.3.8.min.css` e
+  `bootstrap-5.3.8.bundle.min.js`), do pacote oficial `bootstrap@5.3.8`
+  [distribuído pelo jsDelivr](https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/),
+  sob licença MIT registrada em `BOOTSTRAP-LICENSE.txt`;
+- HTMX 2.0.10 (`htmx-2.0.10.min.js`), do pacote oficial `htmx.org@2.0.10`
+  [distribuído pelo jsDelivr](https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/),
+  sob licença 0BSD registrada em `HTMX-LICENSE.txt`.
+
+Os arquivos ficam em `src/fulfillflow/web/static/vendor`, são referenciados por
+versão e integridade e são servidos somente pela própria aplicação.
+
+## Simulador externo de Carriers
+
+O painel `/simulator` apenas documenta o uso. A execução real ocorre em processo
+externo por `scripts/simulate_carrier_events.py`, que usa somente a biblioteca
+padrão para chamar o webhook HTTP público. Antes da execução, crie normalmente
+um Order confirmado e uma Shipment e use o `tracking_code` dessa Shipment.
+
+O secret nunca é aceito como argumento. O Carrier selecionado lê exclusivamente
+`CARRIER_ALPHA_WEBHOOK_SECRET` ou `CARRIER_BETA_WEBHOOK_SECRET`; o valor deve ser
+o mesmo configurado na aplicação que receberá o evento. Exemplo seguro para o
+Compose local:
+
+```powershell
+$env:CARRIER_ALPHA_WEBHOOK_SECRET = "<mesmo-secret-local-da-aplicacao>"
+uv run python scripts/simulate_carrier_events.py `
+  --base-url http://127.0.0.1:8000 `
+  --carrier carrier-alpha `
+  --tracking-code ALPHA000001 `
+  --scenario valid
+```
+
+Os cinco cenários existem para `carrier-alpha` e `carrier-beta`:
+
+- `valid`: envia POSTED → IN_TRANSIT → OUT_FOR_DELIVERY → DELIVERED e
+  exige `APPLIED` em cada resposta;
+- `duplicate`: repete integralmente o primeiro artefato assinado e exige
+  `DUPLICATE` na segunda resposta;
+- `out-of-order`: envia um evento mais recente seguido de um anterior e exige
+  `IGNORED_STALE` no segundo;
+- `unknown-status`: exige HTTP 422 e o problem code de status externo
+  desconhecido;
+- `invalid-signature`: exige HTTP 401 e o problem code de assinatura inválida.
+
+O exit code é `0` somente quando todas as respostas coincidem exatamente com o
+contrato do cenário, inclusive os erros 422 e 401 intencionais. Divergência de
+status/result/problem code, resposta inválida, timeout ou erro de rede retorna
+exit code diferente de zero. `--seed`, `--event-id-prefix` e `--start-at` tornam
+determinísticos os IDs e a sequência de payloads; o timestamp HMAC continua usando
+o relógio atual para respeitar a janela anti-replay. `--timeout-seconds` limita a
+espera; sem prefixo explícito e sem seed, IDs únicos são gerados para o uso manual.
+
 Para encerrar e remover o volume local deste projeto:
 
 ```powershell
@@ -87,13 +172,17 @@ uv run fastapi dev src/fulfillflow/main.py
 
 ## Testes e qualidade
 
-Os testes unitários, arquiteturais, de health e de problem details não dependem
-de banco. Testes de repository/service e APIs persistentes usam somente um
-PostgreSQL 18 dedicado informado por `TEST_DATABASE_URL`; sem essa variável,
-eles são explicitamente ignorados.
+Os testes unitários do simulador, arquiteturais, de health e de problem details
+não dependem de banco. Testes de repository/service, APIs persistentes, UI e E2E
+usam somente um PostgreSQL 18 dedicado informado por `TEST_DATABASE_URL`; sem
+essa variável, eles são explicitamente ignorados. O E2E sobe a aplicação em uma
+porta TCP local e executa o script externo contra o webhook público.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
+uv run pytest tests/unit/test_carrier_simulator.py -q
+uv run pytest tests/ui -q
+uv run pytest tests/e2e/test_external_simulator_journey.py -q
 uv run pytest
 uv run pytest --cov=fulfillflow --cov-report=term-missing
 uv run ruff check .

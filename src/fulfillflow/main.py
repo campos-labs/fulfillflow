@@ -16,6 +16,7 @@ from fulfillflow.db import Database
 from fulfillflow.db.migrations import SchemaNotCurrentError, schema_is_current
 from fulfillflow.health import router as health_router
 from fulfillflow.shared import Clock, SystemClock
+from fulfillflow.web import install_web
 
 DEFAULT_ALEMBIC_CONFIG_PATH = Path("alembic.ini")
 
@@ -61,6 +62,7 @@ def create_app(
     install_problem_handling(application)
     application.include_router(health_router)
     application.include_router(api_router)
+    install_web(application)
     return application
 
 

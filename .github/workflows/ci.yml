@@ -58,7 +58,7 @@ jobs:
       - name: Import contracts
         run: uv run lint-imports
 
-      - name: Unit and API tests
+      - name: Unit, API, and simulator tests
         run: uv run pytest tests/unit tests/api -q
 
       - name: Upgrade an empty PostgreSQL database
@@ -72,6 +72,12 @@ jobs:
 
       - name: PostgreSQL integration tests
         run: uv run pytest tests/integration -q
+
+      - name: Operational UI tests
+        run: uv run pytest tests/ui -q
+
+      - name: External simulator E2E
+        run: uv run pytest tests/e2e/test_external_simulator_journey.py -q
 
       - name: Coverage gate
         run: uv run pytest --cov=fulfillflow --cov-report=term-missing
@@ -90,6 +96,12 @@ jobs:
           docker compose up --detach --no-build --wait --wait-timeout 120
           curl --fail --silent http://127.0.0.1:8000/health/live
           curl --fail --silent http://127.0.0.1:8000/health/ready
+          curl --fail --silent --show-error --dump-header /tmp/dashboard.headers --output /tmp/dashboard.html http://127.0.0.1:8000/
+          grep --ignore-case --quiet '^content-type: text/html' /tmp/dashboard.headers
+          grep --fixed-strings --quiet 'Operational dashboard' /tmp/dashboard.html
+          curl --fail --silent --show-error --dump-header /tmp/bootstrap.headers --output /tmp/bootstrap.css http://127.0.0.1:8000/static/vendor/bootstrap-5.3.8.min.css
+          grep --ignore-case --quiet '^content-type: text/css' /tmp/bootstrap.headers
+          grep --fixed-strings --quiet 'v5.3.8' /tmp/bootstrap.css
           docker compose exec -T app sh -c '[ "$(id -u)" -ne 0 ]'
 
       - name: Show Compose logs on failure

@@ -1,0 +1,14 @@
+{% macro field_errors(errors, field) -%}
+  {% for message in errors.get(field, []) %}
+    <div class="invalid-feedback d-block">{{ message }}</div>
+  {% endfor %}
+{%- endmacro %}
+
+{% macro validation_summary(errors, request_id) -%}
+  {% if errors %}
+    <div class="alert alert-danger" role="alert">
+      The submitted form could not be accepted. Request ID: <code>{{ request_id }}</code>
+      {% for message in errors.get('form', []) %}<div>{{ message }}</div>{% endfor %}
+    </div>
+  {% endif %}
+{%- endmacro %}

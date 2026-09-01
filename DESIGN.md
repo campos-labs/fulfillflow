@@ -670,14 +670,33 @@ Regras:
 
 ### 12.3 Simulador
 
-O simulador:
+O simulador externo fica em `scripts/simulate_carrier_events.py` e recebe base URL, carrier,
+tracking code e cenário por argumento ou ambiente. O secret não é aceito por argumento nem por
+variável genérica: `carrier-alpha` usa exclusivamente `CARRIER_ALPHA_WEBHOOK_SECRET` e
+`carrier-beta` usa exclusivamente `CARRIER_BETA_WEBHOOK_SECRET`.
 
-- recebe carrier, secret, base URL e cenário por argumento ou ambiente;
-- serializa o payload uma única vez;
-- assina exatamente os mesmos bytes enviados;
-- permite cenários válidos, duplicados, fora de ordem, status desconhecido e assinatura inválida;
-- nunca importa código de repository ou service da aplicação;
-- pode reutilizar schemas de dados de teste, mas interage apenas por HTTP.
+Os nomes e as semânticas normativas dos cenários são:
+
+| Cenário | Semântica esperada |
+|---|---|
+| `valid` | envia, no schema externo do carrier escolhido, a sequência válida que normaliza para `POSTED -> IN_TRANSIT -> OUT_FOR_DELIVERY -> DELIVERED`; cada resposta retorna 200 e `APPLIED`, terminando em `DELIVERED` |
+| `duplicate` | envia um evento válido e repete exatamente `raw_body`, event ID, timestamp do header e assinatura; a repetição retorna 200 e `DUPLICATE` |
+| `out-of-order` | envia um evento válido e depois outro evento válido com chave de ordenação anterior; o segundo retorna 200 e `IGNORED_STALE` |
+| `unknown-status` | envia payload autenticado no schema do carrier com status externo desconhecido; retorna 422 e `UNKNOWN_EXTERNAL_STATUS` |
+| `invalid-signature` | envia payload sintaticamente válido com assinatura inválida; retorna 401 e `INVALID_WEBHOOK_SIGNATURE`, sem persistência |
+
+Quando seed, IDs e relógio forem fornecidos, a sequência é determinística; na execução manual, os
+defaults geram IDs únicos e timestamp dentro da janela aceita. O payload é serializado uma única vez
+e exatamente os mesmos bytes assinados são enviados.
+
+O processo termina com exit code zero somente quando todas as respostas observadas coincidem com a
+semântica do cenário. Assim, 422 em `unknown-status` e 401 em `invalid-signature` são resultados
+esperados e bem-sucedidos do simulador apenas quando acompanhados pelos respectivos códigos de
+problema; resposta inesperada, timeout ou erro de rede resulta em exit code diferente de zero.
+
+O simulador mostra apenas status HTTP e resultado operacional sanitizado, nunca secret ou
+assinatura. Ele não importa código da aplicação, não acessa PostgreSQL e interage exclusivamente por
+HTTP com `POST /api/v1/carriers/{carrier_code}/events`.
 
 ## 13. Processamento de webhook
 
@@ -963,10 +982,45 @@ Carrier events aceitam filtros por `carrier_code`, `status`, `external_event_id`
 - criação e detalhe de Shipment;
 - timeline de Tracking;
 - lista e detalhe de CarrierEventInbox;
-- lista de Notifications;
-- painel de simulação de eventos para os dois carriers.
+- lista e detalhe somente leitura de Notifications;
+- painel instrucional do simulador externo para os dois carriers.
 
-### 15.3 Restrições
+O dashboard apresenta contagens de Orders, Shipments, CarrierEventInbox e Notifications agrupadas
+por seus respectivos status, além dos registros mais recentes do inbox em projeção sanitizada. O
+limite de apresentação dos registros recentes é detalhe local de implementação.
+
+O painel `/simulator` documenta como executar `scripts/simulate_carrier_events.py`; ele não dispara
+eventos, não recebe nem renderiza secrets e não cria uma chamada HTTP da aplicação para ela mesma.
+
+### 15.3 Rotas HTML
+
+| Método | Rota | Finalidade |
+|---|---|---|
+| GET | `/` | dashboard operacional |
+| GET | `/orders` | lista de Orders |
+| GET | `/orders/new` | formulário de criação de Order |
+| POST | `/orders` | criação de Order |
+| GET | `/orders/{order_id}` | detalhe de Order e composição com suas Shipments |
+| POST | `/orders/{order_id}/confirm` | confirmação de Order |
+| POST | `/orders/{order_id}/cancel` | cancelamento de Order |
+| GET | `/shipments` | lista filtrável de Shipments |
+| GET | `/shipments/new` | formulário de criação de Shipment |
+| POST | `/shipments` | criação de Shipment |
+| GET | `/shipments/{shipment_id}` | detalhe operacional de Shipment |
+| POST | `/shipments/{shipment_id}/cancel` | cancelamento de Shipment |
+| GET | `/shipments/{shipment_id}/tracking` | timeline de Tracking da Shipment |
+| GET | `/carrier-events` | lista operacional do inbox |
+| GET | `/carrier-events/{inbox_event_id}` | detalhe sanitizado do inbox |
+| GET | `/notifications` | lista de Notifications |
+| GET | `/notifications/{notification_id}` | detalhe somente leitura de Notification |
+| GET | `/simulator` | instruções do simulador externo |
+| GET | `/static/{path}` | assets locais versionados |
+
+Requisições HTMX usam essas mesmas rotas e podem receber fragments; não existem endpoints HTML
+paralelos apenas para fragments. `/shipments/new` aceita `order_id` como query parameter para
+pré-preencher o Order associado.
+
+### 15.4 Restrições
 
 - nenhuma regra de domínio em templates;
 - ações mutáveis nunca usam GET;

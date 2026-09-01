@@ -1,0 +1,57 @@
+body {
+  min-height: 100vh;
+}
+
+main:focus {
+  outline: none;
+}
+
+.navbar-brand {
+  letter-spacing: 0.02em;
+}
+
+.empty-state {
+  color: var(--bs-secondary-color);
+  padding: 2.5rem 1rem !important;
+  text-align: center;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 0.5rem 1rem;
+  grid-template-columns: minmax(8rem, 0.35fr) 1fr;
+  margin-bottom: 0;
+}
+
+.detail-grid dt,
+.detail-grid dd {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.form-narrow,
+.error-panel {
+  max-width: 60rem;
+}
+
+pre {
+  background: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid dd {
+    margin-bottom: 0.75rem;
+  }
+}

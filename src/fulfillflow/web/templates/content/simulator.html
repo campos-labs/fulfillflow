@@ -1,0 +1,14 @@
+<div class="mb-3"><h1 class="h2 mb-1">External Carrier simulator</h1><p class="text-body-secondary mb-0">This page is instructional. It does not execute the simulator or receive secrets.</p></div>
+<div class="row g-3 mb-3"><div class="col-lg-6"><section class="card h-100 shadow-sm"><div class="card-header"><h2 class="h5 mb-0">Carrier Alpha</h2></div><div class="card-body"><p><code>carrier-alpha</code> uses its own synthetic environment secret.</p><pre><code>$env:CARRIER_ALPHA_WEBHOOK_SECRET="&lt;set-locally&gt;"
+uv run python scripts/simulate_carrier_events.py `
+  --base-url http://127.0.0.1:8000 `
+  --carrier carrier-alpha `
+  --tracking-code ALPHA000001 `
+  --scenario valid</code></pre></div></section></div><div class="col-lg-6"><section class="card h-100 shadow-sm"><div class="card-header"><h2 class="h5 mb-0">Carrier Beta</h2></div><div class="card-body"><p><code>carrier-beta</code> uses its own synthetic environment secret.</p><pre><code>$env:CARRIER_BETA_WEBHOOK_SECRET="&lt;set-locally&gt;"
+uv run python scripts/simulate_carrier_events.py `
+  --base-url http://127.0.0.1:8000 `
+  --carrier carrier-beta `
+  --tracking-code BETA000001 `
+  --scenario valid</code></pre></div></section></div></div>
+<section class="card shadow-sm mb-3"><div class="card-header"><h2 class="h5 mb-0">Normative scenarios</h2></div><div class="card-body"><dl class="row mb-0"><dt class="col-md-3"><code>valid</code></dt><dd class="col-md-9">Full POSTED → IN_TRANSIT → OUT_FOR_DELIVERY → DELIVERED flow.</dd><dt class="col-md-3"><code>duplicate</code></dt><dd class="col-md-9">Repeats the complete signed request artifact and expects DUPLICATE.</dd><dt class="col-md-3"><code>out-of-order</code></dt><dd class="col-md-9">Sends an older event second and expects IGNORED_STALE.</dd><dt class="col-md-3"><code>unknown-status</code></dt><dd class="col-md-9">Expects HTTP 422 and UNKNOWN_EXTERNAL_STATUS.</dd><dt class="col-md-3"><code>invalid-signature</code></dt><dd class="col-md-9">Expects HTTP 401 and INVALID_WEBHOOK_SIGNATURE.</dd></dl></div></section>
+<div class="d-flex flex-wrap gap-2"><a class="btn btn-outline-primary" href="{{ path_for(request, 'web-shipments-list') }}">Shipments</a><a class="btn btn-outline-primary" href="{{ path_for(request, 'web-inbox-list') }}">Inbox</a><a class="btn btn-outline-primary" href="{{ path_for(request, 'web-notifications-list') }}">Notifications</a></div>

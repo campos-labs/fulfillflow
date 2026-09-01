@@ -1,0 +1,12 @@
+{% from "macros/pagination.html" import pagination %}
+<div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h2 mb-1">Orders</h1><p class="text-body-secondary mb-0">Operational Order records.</p></div><a class="btn btn-primary" href="{{ path_for(request, 'web-orders-new') }}">Create Order</a></div>
+<form class="card card-body shadow-sm mb-3" method="get" action="{{ path_for(request, 'web-orders-list') }}">
+  <div class="row g-2 align-items-end"><div class="col-md-3"><label class="form-label" for="order-status">Status</label><select class="form-select" id="order-status" name="status"><option value="">All</option>{% for status in order_statuses %}<option value="{{ status.value }}"{% if filters.status == status.value %} selected{% endif %}>{{ status.value }}</option>{% endfor %}</select></div>
+  <div class="col-md-5"><label class="form-label" for="external-reference">External reference</label><input class="form-control" id="external-reference" name="external_reference" maxlength="64" value="{{ filters.external_reference }}"></div>
+  <div class="col-md-2"><button class="btn btn-outline-primary w-100" type="submit">Filter</button></div></div>
+  <div class="row g-2 mt-1"><div class="col-md-4"><label class="form-label" for="order-created-from">Created from (ISO 8601)</label><input class="form-control" id="order-created-from" name="created_from" value="{{ filters.created_from }}" placeholder="2026-08-31T00:00:00-03:00"></div><div class="col-md-4"><label class="form-label" for="order-created-to">Created to (ISO 8601)</label><input class="form-control" id="order-created-to" name="created_to" value="{{ filters.created_to }}" placeholder="2026-08-31T23:59:59-03:00"></div></div>
+</form>
+<div class="card shadow-sm mb-3"><div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Reference</th><th>Recipient</th><th>City</th><th>Status</th><th>Created</th></tr></thead><tbody>
+{% for order in orders %}<tr><td><a href="{{ path_for(request, 'web-order-detail', order_id=order.id) }}">{{ order.external_reference }}</a></td><td>{{ order.recipient.name }}</td><td>{{ order.recipient.city }} / {{ order.recipient.state }}</td><td><span class="badge {{ order.status|status_class }}">{{ order.status|display }}</span></td><td>{{ order.created_at|display }}</td></tr>
+{% else %}<tr><td colspan="5" class="empty-state">No Orders match the current filters.</td></tr>{% endfor %}
+</tbody></table></div></div>{{ pagination(pager) }}

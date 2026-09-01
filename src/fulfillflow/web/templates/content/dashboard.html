@@ -1,0 +1,37 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div><h1 class="h2 mb-1">Operational dashboard</h1><p class="text-body-secondary mb-0">Current persisted state.</p></div>
+</div>
+<div class="row g-3 mb-4">
+  {% for heading, counts, target in [
+    ('Orders', dashboard.order_counts, 'web-orders-list'),
+    ('Shipments', dashboard.shipment_counts, 'web-shipments-list'),
+    ('Inbox', dashboard.inbox_counts, 'web-inbox-list'),
+    ('Notifications', dashboard.notification_counts, 'web-notifications-list')
+  ] %}
+  <div class="col-12 col-md-6 col-xl-3">
+    <section class="card h-100 shadow-sm"><div class="card-body">
+      <h2 class="h5"><a href="{{ path_for(request, target) }}">{{ heading }}</a></h2>
+      <dl class="mb-0">
+      {% for status, count in counts.items() %}
+        <div class="d-flex justify-content-between border-top py-1"><dt class="small">{{ status }}</dt><dd class="mb-0 fw-semibold">{{ count }}</dd></div>
+      {% endfor %}
+      </dl>
+    </div></section>
+  </div>
+  {% endfor %}
+</div>
+<section class="card shadow-sm">
+  <div class="card-header"><h2 class="h5 mb-0">Recent carrier inbox events</h2></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Received</th><th>Carrier</th><th>Event ID</th><th>Status</th><th>Request ID</th></tr></thead>
+      <tbody>
+      {% for event in dashboard.recent_events %}
+        <tr><td>{{ event.received_at|display }}</td><td>{{ event.carrier_code }}</td>
+          <td><a href="{{ path_for(request, 'web-inbox-detail', inbox_event_id=event.id) }}">{{ event.external_event_id }}</a></td>
+          <td><span class="badge {{ event.status|status_class }}">{{ event.status|display }}</span></td><td><code>{{ event.request_id }}</code></td></tr>
+      {% else %}<tr><td colspan="5" class="empty-state">No carrier events have been received.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
