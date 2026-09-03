@@ -423,7 +423,12 @@ class ManagedProcess:
     """Bounded cross-platform process group with conclusive teardown."""
 
     def __init__(self, command: list[str]) -> None:
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        if sys.platform == "win32":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP
+            start_new_session = False
+        else:
+            flags = 0
+            start_new_session = True
         try:
             self.process = subprocess.Popen(
                 command,
@@ -431,7 +436,7 @@ class ManagedProcess:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=flags,
-                start_new_session=os.name != "nt",
+                start_new_session=start_new_session,
             )
         except OSError as exc:
             raise CampaignExecutionError("external process could not start") from exc
@@ -447,14 +452,14 @@ class ManagedProcess:
         if self.process.poll() is not None:
             return
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 self.process.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 kill_process_group = getattr(os, "killpg")  # noqa: B009
                 kill_process_group(self.process.pid, signal.SIGTERM)
             self.process.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
-            if os.name == "nt":
+            if sys.platform == "win32":
                 self.process.kill()
             else:
                 try:

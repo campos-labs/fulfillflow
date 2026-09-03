@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import csv
+import os
+import signal
 import subprocess
 import sys
 from collections import Counter
@@ -174,6 +176,126 @@ def test_managed_process_timeout_terminates_process_group() -> None:
 
     process.ensure_stopped()
     assert process.process.poll() is not None
+
+
+def test_managed_process_uses_windows_process_group_and_bounded_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    windows_group_flag = 123
+    windows_break_event = 456
+    popen_kwargs: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 321
+
+        def __init__(self) -> None:
+            self.running = True
+            self.wait_calls = 0
+            self.signals: list[object] = []
+            self.killed = False
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def send_signal(self, event: object) -> None:
+            self.signals.append(event)
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired("synthetic", timeout)
+            self.running = False
+            return 0
+
+        def kill(self) -> None:
+            self.killed = True
+
+    fake_process = FakeProcess()
+
+    def fake_popen(_command: list[str], **kwargs: object) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return fake_process
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", windows_group_flag, raising=False)
+    monkeypatch.setattr(signal, "CTRL_BREAK_EVENT", windows_break_event, raising=False)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    process = ManagedProcess(["safe-command"])
+    process.terminate()
+
+    assert popen_kwargs["creationflags"] == windows_group_flag
+    assert popen_kwargs["start_new_session"] is False
+    assert "shell" not in popen_kwargs
+    assert fake_process.signals == [windows_break_event]
+    assert fake_process.killed is True
+    assert fake_process.running is False
+
+
+def test_managed_process_uses_posix_session_and_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    popen_kwargs: dict[str, object] = {}
+    group_signals: list[tuple[int, int]] = []
+
+    class FakeProcess:
+        pid = 654
+        running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.running = False
+            return 0
+
+    fake_process = FakeProcess()
+
+    def fake_popen(_command: list[str], **kwargs: object) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return fake_process
+
+    def fake_killpg(pid: int, event: int) -> None:
+        group_signals.append((pid, event))
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(os, "killpg", fake_killpg, raising=False)
+
+    process = ManagedProcess(["safe-command"])
+    process.terminate()
+
+    assert popen_kwargs["creationflags"] == 0
+    assert popen_kwargs["start_new_session"] is True
+    assert "shell" not in popen_kwargs
+    assert group_signals == [(fake_process.pid, signal.SIGTERM)]
+
+
+def test_managed_process_does_not_signal_completed_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group_signals: list[tuple[int, int]] = []
+
+    class CompletedProcess:
+        pid = 987
+
+        def poll(self) -> int:
+            return 0
+
+    completed_process = CompletedProcess()
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: completed_process)
+    monkeypatch.setattr(
+        os,
+        "killpg",
+        lambda pid, event: group_signals.append((pid, event)),
+        raising=False,
+    )
+
+    ManagedProcess(["safe-command"]).terminate()
+
+    assert group_signals == []
 
 
 def test_managed_process_start_failure_is_sanitized(
