@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "name": "synthetic-smoke-only",
+  "official": false,
+  "release": "v1.0.0",
+  "git_sha": "417fe958146fc81a4546374abc46bb1b0e83a8f5",
+  "profile": "mixed",
+  "loads": [
+    {
+      "name": "synthetic-4-users",
+      "users": 4,
+      "spawn_rate": 2.0
+    }
+  ],
+  "workers": 1,
+  "warmup_seconds": 60,
+  "measurement_seconds": 300,
+  "repetitions": 1,
+  "warmup_quota_per_shipment": 2,
+  "occurred_at_step_microseconds": 1000,
+  "warmup_occurred_at_base": "2026-09-01T00:00:00Z",
+  "measurement_occurred_at_base": "2026-09-02T00:00:00Z",
+  "weights": {
+    "shipment_detail": 25,
+    "timeline": 25,
+    "webhook": 30,
+    "shipment_list": 20
+  },
+  "resources": {
+    "app": {"cpus": "1.0", "memory": "512m"},
+    "postgres": {"cpus": "1.0", "memory": "512m"},
+    "loadgen": {"cpus": "1.0", "memory": "512m"}
+  },
+  "pool": {
+    "size": 5,
+    "max_overflow": 0,
+    "timeout_seconds": 5.0,
+    "statement_timeout_ms": 5000
+  },
+  "images": {
+    "app": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "postgres": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "loadgen": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "cohorts": {
+    "dataset_manifest": "../datasets/benchmark-v1.0.json",
+    "dataset_sha256": "5897d7441f73fec77d98ff97196aff0becc3f301e45c708febff493d8f4a63bf",
+    "warmup": "mutable_component.warmup",
+    "measurement": "mutable_component.measurement",
+    "timeline": "timeline_read_cohort"
+  },
+  "telemetry": {
+    "log_level": "WARNING",
+    "log_format": "json",
+    "tracing_enabled": false,
+    "tracing_sampling": 0.0
+  },
+  "environment": {
+    "compose_project": "fulfillflow-benchmark",
+    "compose_file": "compose.benchmark.yaml",
+    "services": {
+      "app": "app",
+      "postgres": "db",
+      "loadgen": "loadgen"
+    }
+  },
+  "database": {
+    "structural_contract_version": 1,
+    "schema_sha256": "0ee99170b78404380541ac12cf676126d047fc60275a4e2947fbe5a68b32652b",
+    "alembic_heads": ["0004_notifications"]
+  },
+  "timeouts": {
+    "preparation_seconds": 120.0,
+    "phase_start_seconds": 30.0,
+    "warmup_process_seconds": 90.0,
+    "measurement_process_seconds": 330.0,
+    "drain_seconds": 10.0,
+    "request_seconds": 10.0,
+    "command_seconds": 30.0
+  },
+  "collection_interval_seconds": 1.0
+}

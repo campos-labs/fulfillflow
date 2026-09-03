@@ -1,0 +1,128 @@
+name: fulfillflow-benchmark
+
+x-app-environment: &app-environment
+  APP_ENV: benchmark
+  APP_NAME: FulfillFlow
+  APP_HOST: 0.0.0.0
+  APP_PORT: "8000"
+  APP_TIMEZONE: America/Sao_Paulo
+  DATABASE_URL: "${BENCH_DATABASE_URL:?Set BENCH_DATABASE_URL for the isolated benchmark database}"
+  DB_POOL_SIZE: "${BENCH_DB_POOL_SIZE:?Set BENCH_DB_POOL_SIZE from the campaign manifest}"
+  DB_MAX_OVERFLOW: "${BENCH_DB_MAX_OVERFLOW:?Set BENCH_DB_MAX_OVERFLOW from the campaign manifest}"
+  DB_POOL_TIMEOUT_SECONDS: "${BENCH_DB_POOL_TIMEOUT_SECONDS:?Set BENCH_DB_POOL_TIMEOUT_SECONDS}"
+  DB_STATEMENT_TIMEOUT_MS: "${BENCH_DB_STATEMENT_TIMEOUT_MS:?Set BENCH_DB_STATEMENT_TIMEOUT_MS}"
+  LOG_LEVEL: "${BENCH_LOG_LEVEL:-WARNING}"
+  LOG_FORMAT: "${BENCH_LOG_FORMAT:-json}"
+  SESSION_SECRET: "${SESSION_SECRET:?Set a benchmark-only SESSION_SECRET}"
+  CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:?Set the Alpha benchmark secret}"
+  CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:?Set the Beta benchmark secret}"
+  WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: "300"
+  MAX_WEBHOOK_BODY_BYTES: "65536"
+  METRICS_ENABLED: "false"
+  OTEL_ENABLED: "${BENCH_OTEL_ENABLED:-false}"
+  OTEL_SERVICE_NAME: fulfillflow
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${BENCH_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  OTEL_TRACES_SAMPLER: "${BENCH_OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+  OTEL_TRACES_SAMPLER_ARG: "${BENCH_OTEL_TRACES_SAMPLER_ARG:-0.0}"
+  SEED_RANDOM_SEED: "20260828"
+
+x-app-image: &app-image
+  image: fulfillflow:benchmark-local
+  build:
+    context: .
+    target: runtime
+
+services:
+  db:
+    image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: "${BENCH_POSTGRES_DB:?Set the isolated benchmark database name}"
+      POSTGRES_USER: "${BENCH_POSTGRES_USER:?Set the isolated benchmark database user}"
+      POSTGRES_PASSWORD: "${BENCH_POSTGRES_PASSWORD:?Set the isolated benchmark database password}"
+    volumes:
+      - benchmark_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready --host=127.0.0.1 --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_POSTGRES_CPUS:?Set PostgreSQL CPU limit from the manifest}"
+          memory: "${BENCH_POSTGRES_MEMORY:?Set PostgreSQL memory limit from the manifest}"
+
+  migrate:
+    <<: *app-image
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  app:
+    <<: *app-image
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "fulfillflow.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "1",
+      ]
+    environment: *app-environment
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${BENCH_APP_PORT:-18007}:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_APP_CPUS:?Set app CPU limit from the manifest}"
+          memory: "${BENCH_APP_MEMORY:?Set app memory limit from the manifest}"
+
+  loadgen:
+    image: fulfillflow-loadgen:benchmark-local
+    build:
+      context: .
+      target: loadgen
+    profiles: ["campaign"]
+    environment:
+      CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:?Set the Alpha benchmark secret}"
+      CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:?Set the Beta benchmark secret}"
+    entrypoint: ["python"]
+    command: ["-c", "import time; time.sleep(2147483647)"]
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import locust"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      app:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_LOADGEN_CPUS:?Set loadgen CPU limit from the manifest}"
+          memory: "${BENCH_LOADGEN_MEMORY:?Set loadgen memory limit from the manifest}"
+
+volumes:
+  benchmark_postgres_data:

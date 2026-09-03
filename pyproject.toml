@@ -19,6 +19,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+benchmark = [
+    "locust>=2.43,<3",
+]
 dev = [
     "fastapi-cli>=0.0.32,<1",
     "httpx>=0.28.1,<1",
@@ -40,7 +43,7 @@ required-version = ">=0.12.7,<0.13"
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-src = ["src", "tests", "alembic"]
+src = ["src", "tests", "alembic", "scripts", "benchmarks"]
 extend-exclude = ["AGENTS.md", "DESIGN.md"]
 
 [tool.ruff.lint]
@@ -53,7 +56,7 @@ known-first-party = ["fulfillflow"]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src"]
+files = ["src", "scripts/seed_demo.py", "scripts/seed_benchmark.py", "benchmarks"]
 show_error_codes = true
 pretty = true
 

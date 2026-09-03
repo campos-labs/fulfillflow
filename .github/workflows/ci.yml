@@ -10,7 +10,7 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
       TEST_DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
@@ -44,7 +44,7 @@ jobs:
           enable-cache: true
 
       - name: Install locked dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --all-groups
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -53,7 +53,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Mypy
-        run: uv run mypy src
+        run: uv run mypy
 
       - name: Import contracts
         run: uv run lint-imports
@@ -70,8 +70,13 @@ jobs:
       - name: Verify metadata has no migration drift
         run: uv run alembic check
 
+      - name: Structural DatabaseProbe Docker integration
+        run: uv run pytest tests/integration/test_benchmark_schema_contract.py -q
+
       - name: PostgreSQL integration tests
-        run: uv run pytest tests/integration -q
+        run: >-
+          uv run pytest tests/integration -q
+          --ignore=tests/integration/test_benchmark_schema_contract.py
 
       - name: Operational UI tests
         run: uv run pytest tests/ui -q
@@ -80,13 +85,43 @@ jobs:
         run: uv run pytest tests/e2e/test_external_simulator_journey.py -q
 
       - name: Coverage gate
-        run: uv run pytest --cov=fulfillflow --cov-report=term-missing
+        run: >-
+          uv run pytest --cov=fulfillflow --cov-report=term-missing
+          --ignore=tests/integration/test_benchmark_schema_contract.py
 
       - name: Validate Docker Compose
         run: docker compose config --quiet
 
+      - name: Validate benchmark Docker Compose
+        env:
+          BENCH_DATABASE_URL: postgresql+psycopg://fulfillflow:benchmark-ci-db-2026@db:5432/fulfillflow_benchmark
+          BENCH_POSTGRES_DB: fulfillflow_benchmark
+          BENCH_POSTGRES_USER: fulfillflow
+          BENCH_POSTGRES_PASSWORD: benchmark-ci-db-2026
+          BENCH_DB_POOL_SIZE: 5
+          BENCH_DB_MAX_OVERFLOW: 0
+          BENCH_DB_POOL_TIMEOUT_SECONDS: 5
+          BENCH_DB_STATEMENT_TIMEOUT_MS: 5000
+          BENCH_APP_CPUS: 1.0
+          BENCH_APP_MEMORY: 512m
+          BENCH_POSTGRES_CPUS: 1.0
+          BENCH_POSTGRES_MEMORY: 512m
+          BENCH_LOADGEN_CPUS: 1.0
+          BENCH_LOADGEN_MEMORY: 512m
+          SESSION_SECRET: 99a4f30f5c3f4b69bb7f04a4018a831f
+          CARRIER_ALPHA_WEBHOOK_SECRET: 248d825ae4334fb5a019df0bd2bca41d
+          CARRIER_BETA_WEBHOOK_SECRET: 5e0062c5d62c49e4abc5c61e9376c951
+          BENCHMARK_CAMPAIGN_MANIFEST: benchmarks/fixtures/smoke-campaign.json
+          BENCHMARK_LOAD_NAME: synthetic-4-users
+        run: docker compose -f compose.benchmark.yaml config --quiet
+
       - name: Build runtime image
         run: docker compose build app
+
+      - name: Build and smoke loadgen image
+        run: |
+          docker build --target loadgen --tag fulfillflow-loadgen:ci .
+          docker run --rm --entrypoint python fulfillflow-loadgen:ci -m locust --version
 
       - name: Smoke test Compose stack
         env:

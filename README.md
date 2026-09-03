@@ -10,8 +10,9 @@ Este incremento inclui os Carriers simulados Alpha e Beta, allowlist estática d
 adapters, autenticação HMAC sobre os bytes originais, inbox auditável, timeline
 canônica e registro persistente de Notifications simuladas para transições
 aplicadas durante o processamento síncrono. A interface operacional é renderizada
-no servidor e permite demonstrar esse fluxo completo. Seed de demonstração,
-benchmark e processamento assíncrono permanecem fora deste incremento.
+no servidor e permite demonstrar esse fluxo completo. A Fase A da preparação de
+benchmark adiciona seeds sintéticos determinísticos e o harness reproduzível;
+processamento assíncrono e a execução de uma baseline oficial permanecem fora.
 
 ## Subida local com Docker Compose
 
@@ -170,6 +171,50 @@ uv run alembic check
 uv run fastapi dev src/fulfillflow/main.py
 ```
 
+## Seeds sintéticos e benchmark
+
+Os seeds são fail-closed e aceitam somente PostgreSQL 18 via `postgresql+psycopg`.
+Eles exigem `APP_ENV` explícito, schema no head do Alembic e confirmação literal do
+nome do banco. Não limpam, substituem ou corrigem dados existentes: banco vazio é
+carregado atomicamente, repetição do dataset exato é no-op e qualquer divergência
+falha sem escrita.
+
+```powershell
+$env:APP_ENV = "local"
+$env:DATABASE_URL = "postgresql+psycopg://<user>:<password>@127.0.0.1:5432/fulfillflow_demo"
+uv run python scripts/seed_demo.py --confirm-database-name fulfillflow_demo
+```
+
+O documento lógico integral do benchmark e o SHA-256 dos mesmos bytes canônicos
+ficam em `benchmarks/datasets`. O documento contém metadata, coortes e todas as
+linhas usadas pelo seed; a campanha autentica o arquivo e o sidecar antes de
+expor qualquer slot ao loadgen. A documentação do contrato, das duas fases
+Locust, dos coletores externos e dos artefatos está em `benchmarks/README.md`.
+O único manifest de campanha versionado é uma fixture sintética não oficial;
+não existe manifest `v1-baseline` nem resultado oficial.
+
+```powershell
+uv sync --frozen --all-groups
+uv run python -m benchmarks.dataset
+uv run python -m benchmarks.run_campaign `
+  --manifest benchmarks/fixtures/smoke-campaign.json `
+  --validate-only
+docker compose -f compose.benchmark.yaml config --quiet
+docker build --target loadgen --tag fulfillflow-loadgen:smoke .
+```
+
+O target Docker `runtime` continua sem Locust. O target separado `loadgen` instala
+o grupo `benchmark` e executa somente o cliente HTTP. Em uma execução aprovada,
+o runner usa processos Locust fisicamente distintos para warm-up e measurement,
+confere o ambiente Docker, o head Alembic e o digest estrutural específico da release,
+e compara integralmente o conteúdo PostgreSQL observado com o artefato autenticado
+antes do warm-up. Depois dele, valida cada evento e
+relação lógica esperada, preserva individualmente os 15.000 eventos iniciais,
+coleta recursos e
+mantém os resultados completos visíveis ao Git. A CI valida contratos, hashes,
+seeds, Compose e a imagem do loadgen, mas não executa warm-up de 60 segundos,
+measurement de 300 segundos ou campanha completa.
+
 ## Testes e qualidade
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
@@ -187,7 +232,7 @@ uv run pytest
 uv run pytest --cov=fulfillflow --cov-report=term-missing
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src
+uv run mypy
 uv run lint-imports
 docker compose config --quiet
 ```
