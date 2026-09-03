@@ -14,6 +14,8 @@ no servidor e permite demonstrar esse fluxo completo. A Fase A da preparação d
 benchmark adiciona seeds sintéticos determinísticos e o harness reproduzível;
 processamento assíncrono e a execução de uma baseline oficial permanecem fora.
 
+O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
+
 ## Subida local com Docker Compose
 
 O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
