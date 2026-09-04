@@ -84,6 +84,23 @@ a release-specific PostgreSQL structural-schema digest. An official manifest mus
 five repetitions. Every load is capped at 188 users and must use a multiple of four so its active
 slots remain balanced across both carriers and both initial states.
 
+The manifest also requires finite, nonnegative `stabilization_seconds` and a `host` contract.
+Official stabilization must be positive; the synthetic fixture deliberately uses zero and empty
+host expectations, not approved host parameters. After database preparation/verification and runtime
+manifest installation, every repetition waits the declared interval before warm-up. Metadata records
+`started_at`, `finished_at`, `expected_seconds` and monotonic `observed_seconds`. Dynamic host checks
+then gate warm-up admission. A fixed wait is not evidence of thermal or memory quiescence.
+
+Process timeouts are finite and must satisfy exactly these strict inequalities:
+
+```text
+warmup_process_seconds > 60 + drain_seconds
+measurement_process_seconds > 300 + drain_seconds
+```
+
+These are minimum consistency rules, not an added numeric safety margin or a guarantee that process
+startup/export overhead fits. The phase-start timeout and per-request timeout remain separate.
+
 Host-dependent users, spawn rate, load levels, CPU, memory, and even warm-up quota `q` are not
 selected in Phase A. There is intentionally no `benchmarks/campaigns/v1-baseline.json`. The file
 `benchmarks/fixtures/smoke-campaign.json` is explicitly synthetic, non-official, and exists only for
@@ -133,6 +150,48 @@ timeouts, PostgreSQL 18, and logging/tracing. Metadata stores expected and obser
 comparison result; declarations are never presented as observations. Official runs refuse tracked
 or staged changes. Synthetic smoke records `worktree_clean=false` when appropriate.
 
+### Sanitized host contract
+
+`host_probe.py` supports the official Windows/WSL2 host with bounded, read-only commands and no new
+dependency. Import, construction and `--validate-only` do not run a probe. At execution, stable
+identity is observed once (also saved in campaign `metadata.json`); each repetition records that
+identity and a fresh dynamic observation in its own `metadata.json`, including a refused host gate.
+
+All `host.identity` fields are essential in an official manifest: `os` (`Windows`), `os_version`,
+`os_build` (build plus UBR), `cpu_model`, `physical_cores`, `logical_processors`,
+`physical_memory_bytes`, `docker_engine`, `docker_compose`, `wsl_version`, `wsl_kernel`,
+`docker_cpus` and `docker_memory_bytes`. Docker's reported kernel must match `docker-desktop`'s
+observed WSL2 kernel. Effective Docker resources come from the daemon, not a personal configuration
+file. A changed host/VM requires a new invocation and review of the declared contract.
+
+Essential `host.conditions` fields are `ac_power`, `power_plan_guid` (lowercase GUID, never a custom
+plan name) and `concurrent_containers` (running count excluding the campaign's verified app,
+PostgreSQL and loadgen IDs). No names or IDs of foreign containers are persisted. A missing campaign
+container makes that check unconfirmed, not zero. Essential declarations/observations missing in an
+official campaign, or any declared mismatch even in a non-official run, fail closed.
+
+Dynamic `available_memory_bytes`, `committed_bytes`, `commit_limit_bytes`,
+`pagefile_allocated_bytes`, `pagefile_used_bytes`, `wsl_swap_total_bytes` and `wsl_swap_free_bytes`
+are recorded without uncalibrated acceptance thresholds. Each field has `expected`, `observed`,
+`matches` and `status`; unavailable optional observations use null plus `not_confirmed`. An
+undeclared optional comparison has `matches=null`, never a fabricated success. Thresholds, stable
+power conditions and the final stabilization interval still need an approved execution protocol.
+
+Only allowlisted values are retained. No hostname, user, serial, IP/MAC, personal path, general
+process inventory, environment dump, secret, proprietary sensor or raw error output is recorded.
+The probe does not change power, Docker or WSL settings and does not read personal configuration
+files. It is a point-in-time check, not continuous detection of host interference during measurement.
+
+### Comparable resource budget
+
+The primary comparison fixes aggregate CPU/memory separately for the application tier and the data
+tier. A monolith and extracted services share the same total application budget; any additional
+database shares the same total data budget. Distribution overhead is included, not granted free
+resources. Loadgen remains separate and identical; connection pools must respect the same aggregate
+connection budget instead of multiplying it by component. v1.0 retains one Uvicorn worker.
+Per-component resource experiments may supplement, but never replace or mix with, this primary
+comparison. This defines no future implementation or final resource values.
+
 ## HTTP workload contract
 
 `benchmarks/locustfile.py` imports only the benchmark contract, Python/Locust libraries, and uses
@@ -177,6 +236,13 @@ required mismatch invalidates the repetition. `checksums.sha256` covers every fi
 artifact except itself. Completed result directories are intentionally visible to Git for later
 audit and preservation.
 
+The same `ResourceSampler` also covers warm-up, writing `warmup/resources.csv`. Both phase resource
+files are required and checksummed. After each process exits, validation rejects absent/empty files,
+incomplete or duplicate service cycles, wrong container IDs, invalid timestamps, nonfinite/negative
+CPU, invalid memory and missing PostgreSQL connection counts. This verifies data completeness, not
+an uncalibrated cadence tolerance: actual sample timestamps must still be reviewed for collection
+overhead and gaps. Measurement sampling and canonical measurement CSV locations remain unchanged.
+
 For an approved official campaign, five valid repetitions per profile/load are retained and
 `summary.csv` reports their medians for throughput, error rate, p50, and p95. Invalid or interrupted
 repetitions remain marked incomplete and never enter the median. Phase A implements this capability
@@ -187,8 +253,12 @@ without generating official results or claiming a baseline.
 All users reach a barrier before the 60-second clock starts. The manifest fixes an even quota `q`
 per warm-up Shipment. A deterministic global index composed from sequence index and slot rank gives
 every event a distinct offset distributed throughout the window; the final offset is strictly before
-60 seconds. No extra mutations are emitted after quota completion, and an incomplete quota or drain
-timeout invalidates the repetition without extending warm-up.
+60 seconds. The remaining interval is admission headroom, not a final-response deadline (for
+188 users and `q=2`, `60 / (188*2+1)` is approximately 159 ms). An admitted request may complete
+during `drain_seconds`, still subject to its request timeout. No extra mutations are emitted after
+quota completion. Quota is checked after drain: all users must have exactly `q` confirmed `APPLIED`
+events. An incomplete quota or drain timeout invalidates the repetition without extending admission.
+`q=2` is only a synthetic fixture/future probe, not an approved calibration or official quota.
 
 At the boundary, the warm-up process stops admitting requests, drains all requests already in flight,
 exits, and is checked against the exact quota, expected database deltas and final cohort states. The
@@ -219,5 +289,6 @@ records a DSN, password, HMAC secret, signature, or raw webhook body.
 
 CI may regenerate/verify datasets, exercise seed safety against PostgreSQL 18, validate manifests,
 test the Locust contract, validate Compose, build the loadgen target, and run a minimal version or
-import smoke. It must never run the 60-second warm-up, the 300-second measurement, or a complete
-campaign. Official outputs belong only to a separately approved execution phase.
+import smoke. HostProbe tests use simulated executors only, never the real CI host; stabilization
+tests use injected clocks/waits. CI must never run the 60-second warm-up, the 300-second measurement,
+or a complete campaign. Official outputs belong only to a separately approved execution phase.

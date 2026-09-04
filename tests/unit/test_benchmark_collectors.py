@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +17,7 @@ from benchmarks.collectors import (
     ResourceSampler,
     _normalize_finite_number,
     run_capture,
+    validate_resource_samples,
     write_database_counts,
 )
 from benchmarks.database_contract import (
@@ -109,8 +109,8 @@ def test_resource_sampler_writes_all_services_and_postgres_connections(tmp_path:
     )
 
     sampler.start()
-    time.sleep(0.03)
     sampler.stop()
+    validate_resource_samples(sampler.output_path, sampler.container_ids)
 
     content = (tmp_path / "resources.csv").read_text(encoding="utf-8")
     assert "app,app-id,1.5,10485760,536870912," in content
@@ -134,9 +134,43 @@ def test_resource_sampler_fails_closed_when_a_mandatory_sample_cannot_be_obtaine
     )
 
     sampler.start()
-    time.sleep(0.02)
     with pytest.raises(ExternalCommandError, match="mandatory resource sampling failed"):
         sampler.stop()
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["empty", "header", "truncated", "duplicate", "nan", "container", "memory", "connections"],
+)
+def test_resource_completeness_rejects_missing_cycles_and_invalid_rows(
+    tmp_path: Path, defect: str
+) -> None:
+    path = tmp_path / "resources.csv"
+    ids = {"app": "app-id", "postgres": "postgres-id", "loadgen": "loadgen-id"}
+    sampler = ResourceSampler(path, ids, _FakeDatabase(), 1, command_runner=_stats_runner)  # type: ignore[arg-type]
+    sampler.start()
+    sampler.stop()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if defect == "empty":
+        lines = []
+    elif defect == "header":
+        lines = lines[:1]
+    elif defect == "truncated":
+        lines = lines[:-1]
+    elif defect == "duplicate":
+        lines.append(lines[-1])
+    else:
+        substitutions = {
+            "nan": ("1.5", "nan"),
+            "container": ("app-id", "foreign-id"),
+            "memory": ("10485760", "-1"),
+            "connections": (",7", ",-1"),
+        }
+        old, new = substitutions[defect]
+        lines = [line.replace(old, new) for line in lines]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ExternalCommandError, match="resource CSV"):
+        validate_resource_samples(path, ids)
 
 
 def test_database_counts_contains_snapshots_and_explicit_deltas(tmp_path: Path) -> None:

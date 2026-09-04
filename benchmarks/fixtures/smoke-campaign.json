@@ -15,6 +15,7 @@
   "workers": 1,
   "warmup_seconds": 60,
   "measurement_seconds": 300,
+  "stabilization_seconds": 0.0,
   "repetitions": 1,
   "warmup_quota_per_shipment": 2,
   "occurred_at_step_microseconds": 1000,
@@ -63,6 +64,10 @@
       "postgres": "db",
       "loadgen": "loadgen"
     }
+  },
+  "host": {
+    "identity": {},
+    "conditions": {}
   },
   "database": {
     "structural_contract_version": 1,

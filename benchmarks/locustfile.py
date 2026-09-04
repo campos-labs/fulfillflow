@@ -282,8 +282,8 @@ class FulfillFlowBenchmarkUser(HttpUser):
             gevent.sleep(0.01)
             return
         assert runtime.phase_started_at is not None
-        # Leave one full interval after the final request so every response can finish
-        # before the fixed 60-second barrier is evaluated.
+        # The final interval is admission headroom, not a response deadline:
+        # requests admitted before 60 seconds may finish during the bounded drain.
         scheduled = runtime.phase_started_at + _warmup_scheduled_offset(
             completed,
             quota,

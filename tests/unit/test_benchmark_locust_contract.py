@@ -311,6 +311,38 @@ def test_measurement_coordinator_invalidates_when_drain_timeout_expires(
     runner.quit.assert_called_once_with()
 
 
+def test_warmup_quota_can_complete_during_drain_without_new_admissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _bundle()
+    runtime = CampaignRuntime(bundle, bundle.manifest.loads[0], "warmup")
+    for index in range(runtime.load.users):
+        runtime.register_user()
+        for _ in range(bundle.manifest.warmup_quota_per_shipment - (index == 0)):
+            runtime.record_warmup_applied(index)
+    clock = {"value": 0.0}
+
+    def sleep(_duration: float) -> None:
+        if runtime.phase == "warmup":
+            assert runtime.begin_request()
+            clock["value"] = 60.0
+        elif runtime.phase == "draining":
+            assert not runtime.begin_request()
+            assert not runtime.warmup_complete
+            clock["value"] += 1.0  # Exceeds 159 ms; admitted work still has drain budget.
+            runtime.record_warmup_applied(0)
+            runtime.finish_request()
+
+    environment = SimpleNamespace(process_exit_code=None, runner=Mock())
+    monkeypatch.setattr("benchmarks.locustfile.time.monotonic", lambda: clock["value"])
+    monkeypatch.setattr("benchmarks.locustfile.gevent.sleep", sleep)
+    _coordinate_campaign(environment, runtime)  # type: ignore[arg-type]
+    assert runtime.warmup_complete
+    assert not runtime.is_invalid
+    assert runtime.in_flight == 0
+    environment.runner.quit.assert_called_once_with()
+
+
 @pytest.mark.parametrize(
     "kind",
     ["shipment_detail", "timeline", "shipment_list", "webhook"],

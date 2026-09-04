@@ -18,6 +18,7 @@ import tempfile
 import time
 import tomllib
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,6 +46,7 @@ from benchmarks.collectors import (
     ObservedEnvironment,
     ResourceSampler,
     run_capture,
+    validate_resource_samples,
     write_database_counts,
 )
 from benchmarks.database_contract import (
@@ -52,6 +54,7 @@ from benchmarks.database_contract import (
     DatabaseIdentityError,
     StructuralSchemaIdentity,
 )
+from benchmarks.host_probe import HostProbe
 from benchmarks.semantic import normalize_frozen_payload, validate_semantic_document
 
 ProcessPhase = Literal["warmup", "measurement"]
@@ -180,6 +183,19 @@ def _execute(
     completed_directories: list[Path] = []
     try:
         docker = DockerProbe(bundle, repository_root)
+        host = HostProbe(
+            bundle.manifest.host,
+            official=bundle.manifest.official,
+            timeout_seconds=bundle.manifest.timeouts.command_seconds,
+        )
+        try:
+            host_identity = host.identity()
+        except EnvironmentMismatchError as exc:
+            _write_json(
+                results_directory / "metadata.json", {"valid": False, "host_identity": exc.report}
+            )
+            raise
+        _write_json(results_directory / "metadata.json", {"host_identity": host_identity})
         for load in bundle.manifest.loads:
             for repetition in range(1, bundle.manifest.repetitions + 1):
                 final_directory = results_directory / f"{load.name}-r{repetition:02d}"
@@ -208,6 +224,20 @@ def _execute(
                     observed.container_ids["loadgen"],
                     partial_directory,
                 )
+                stabilization = _stabilize(bundle.manifest.stabilization_seconds)
+                preflight_metadata: dict[str, object] = {
+                    "valid": False,
+                    "host_identity": host_identity,
+                    "stabilization": stabilization,
+                }
+                try:
+                    host_state = host.dynamic(observed.container_ids)
+                except EnvironmentMismatchError as exc:
+                    preflight_metadata["host_state"] = exc.report
+                    _write_json(partial_directory / "metadata.json", preflight_metadata)
+                    raise
+                preflight_metadata["host_state"] = host_state
+                _write_json(partial_directory / "metadata.json", preflight_metadata)
                 warmup = _run_phase(
                     bundle,
                     load,
@@ -255,6 +285,9 @@ def _execute(
                         pre_measurement_identity,
                         warmup,
                         measurement,
+                        stabilization,
+                        host_identity,
+                        host_state,
                     ),
                 )
                 _require_repetition_artifacts(partial_directory)
@@ -282,6 +315,26 @@ def _run_preparation(command: list[str], timeout_seconds: float) -> None:
         process.ensure_stopped()
     if returncode != 0:
         raise CampaignExecutionError("database preparation command failed")
+
+
+def _stabilize(
+    seconds: float,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    utc_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> dict[str, object]:
+    started_at = utc_now()
+    started = monotonic()
+    deadline = started + seconds
+    while (remaining := deadline - monotonic()) > 0:
+        sleep(remaining)
+    return {
+        "expected_seconds": seconds,
+        "started_at": started_at.isoformat(),
+        "finished_at": utc_now().isoformat(),
+        "observed_seconds": monotonic() - started,
+    }
 
 
 def _run_phase(
@@ -316,6 +369,7 @@ def _run_phase(
     )
     process = ManagedProcess(command)
     sampler: ResourceSampler | None = None
+    destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
     started_at: datetime | None = None
     try:
         _wait_for_container_file(
@@ -325,15 +379,14 @@ def _run_phase(
             bundle.manifest.timeouts.command_seconds,
         )
         started_at = datetime.now(UTC)
-        if phase == "measurement":
-            sampler = ResourceSampler(
-                partial_directory / "resources.csv",
-                observed.container_ids,
-                database,
-                bundle.manifest.collection_interval_seconds,
-                command_timeout_seconds=bundle.manifest.timeouts.command_seconds,
-            )
-            sampler.start()
+        sampler = ResourceSampler(
+            destination / "resources.csv",
+            observed.container_ids,
+            database,
+            bundle.manifest.collection_interval_seconds,
+            command_timeout_seconds=bundle.manifest.timeouts.command_seconds,
+        )
+        sampler.start()
         timeout = (
             bundle.manifest.timeouts.warmup_process_seconds
             if phase == "warmup"
@@ -357,13 +410,13 @@ def _run_phase(
         bundle.manifest.timeouts.command_seconds,
         bundle.manifest.timeouts.command_seconds,
     )
-    destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
     destination.mkdir(exist_ok=True)
     run_capture(
         ["docker", "cp", f"{container_id}:{container_directory}/.", str(destination)],
         bundle.manifest.timeouts.command_seconds,
     )
     _remove_runtime_markers(destination)
+    validate_resource_samples(destination / "resources.csv", observed.container_ids)
     return PhaseExecution(phase, started_at, datetime.now(UTC), returncode)
 
 
@@ -756,6 +809,9 @@ def _metadata(
     pre_measurement_identity: LogicalDatabaseIdentity,
     warmup: PhaseExecution,
     measurement: PhaseExecution,
+    stabilization: dict[str, object],
+    host_identity: dict[str, dict[str, object]],
+    host_state: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     return {
         "campaign": bundle.manifest.name,
@@ -772,6 +828,9 @@ def _metadata(
         "platform": platform.platform(),
         "python": platform.python_version(),
         "environment_checks": observed.checks,
+        "host_identity": host_identity,
+        "host_state": host_state,
+        "stabilization": stabilization,
         "container_ids": observed.container_ids,
         "protocol_expected": bundle.manifest.model_dump(mode="json", exclude={"loads"}),
         "database_snapshots": [
@@ -860,6 +919,7 @@ def _require_repetition_artifacts(directory: Path) -> None:
         "response_codes.csv",
         "operational_results.csv",
         "resources.csv",
+        "warmup/resources.csv",
         "database_counts.csv",
         "metadata.json",
     }

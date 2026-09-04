@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 import csv
+import json
 import os
 import signal
 import subprocess
 import sys
 from collections import Counter
 from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,7 +22,12 @@ from benchmarks.campaign import (
     deterministic_event_id,
     load_campaign,
 )
-from benchmarks.collectors import DatabaseSnapshot, EventObservation, ObservedEnvironment
+from benchmarks.collectors import (
+    DatabaseSnapshot,
+    EnvironmentMismatchError,
+    EventObservation,
+    ObservedEnvironment,
+)
 from benchmarks.database_contract import (
     DatabaseDigests,
     StructuralSchemaIdentity,
@@ -31,14 +38,18 @@ from benchmarks.database_contract import (
 from benchmarks.run_campaign import (
     CampaignExecutionError,
     GitProvenance,
+    LogicalDatabaseIdentity,
     ManagedProcess,
+    PhaseExecution,
     _execute,
     _expected_warmup_events,
     _git_provenance,
     _locust_command,
     _project_release,
+    _require_repetition_artifacts,
     _run_phase,
     _run_preparation,
+    _stabilize,
     _validate_prepare_command,
     _verify_initial_state,
     _verify_measurement,
@@ -110,11 +121,11 @@ def test_run_phase_physically_separates_warmup_from_measurement_csvs(
             return None
 
     class FakeSampler:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
+        def __init__(self, path: Path, *_args: object, **_kwargs: object) -> None:
+            self.path = path
 
         def start(self) -> None:
-            return None
+            _write_resources(self.path)
 
         def stop(self) -> None:
             return None
@@ -166,16 +177,239 @@ def test_run_phase_physically_separates_warmup_from_measurement_csvs(
     checksums = (repetition / "checksums.sha256").read_text(encoding="ascii")
     assert "  warmup/locust_stats_history.csv" in checksums
     assert "  locust_stats_history.csv" in checksums
+    assert "  warmup/resources.csv" in checksums
+    assert "  resources.csv" in checksums
 
 
-def test_managed_process_timeout_terminates_process_group() -> None:
-    process = ManagedProcess([sys.executable, "-c", "import time; time.sleep(30)"])
+def test_managed_process_timeout_terminates_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TimedOutProcess:
+        def wait(self, timeout: float) -> int:
+            raise subprocess.TimeoutExpired("synthetic", timeout)
+
+    terminated: list[bool] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: TimedOutProcess())
+    monkeypatch.setattr(ManagedProcess, "terminate", lambda _self: terminated.append(True))
+    process = ManagedProcess(["synthetic"])
 
     with pytest.raises(CampaignExecutionError, match="timeout"):
         process.wait(0.01)
 
-    process.ensure_stopped()
-    assert process.process.poll() is not None
+    assert terminated == [True]
+
+
+def _write_resources(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "timestamp_utc,service,container_id,cpu_percent,memory_usage_bytes,"
+        "memory_limit_bytes,postgres_active_connections\n"
+        "2026-09-04T00:00:00+00:00,app,app-id,1,10,100,\n"
+        "2026-09-04T00:00:00+00:00,loadgen,loadgen-id,1,10,100,\n"
+        "2026-09-04T00:00:00+00:00,postgres,postgres-id,1,10,100,2\n",
+        encoding="utf-8",
+    )
+
+
+def test_stabilization_uses_injected_clock_and_wait_and_records_observed_duration() -> None:
+    elapsed = 0.0
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        waits.append(seconds)
+        elapsed += seconds + 0.25
+
+    origin = datetime(2026, 9, 4, tzinfo=UTC)
+    result = _stabilize(
+        3,
+        monotonic=lambda: elapsed,
+        sleep=sleep,
+        utc_now=lambda: origin + timedelta(seconds=elapsed),
+    )
+    assert waits == [3]
+    assert result == {
+        "expected_seconds": 3,
+        "observed_seconds": 3.25,
+        "started_at": origin.isoformat(),
+        "finished_at": (origin + timedelta(seconds=3.25)).isoformat(),
+    }
+    waits.clear()
+    assert _stabilize(0, monotonic=lambda: elapsed, sleep=sleep)["observed_seconds"] == 0
+    assert waits == []
+
+
+def test_repetition_requires_warmup_resource_artifact(tmp_path: Path) -> None:
+    for name in (
+        "locust_stats.csv",
+        "locust_stats_history.csv",
+        "locust_failures.csv",
+        "locust_exceptions.csv",
+        "response_codes.csv",
+        "operational_results.csv",
+        "resources.csv",
+        "database_counts.csv",
+        "metadata.json",
+    ):
+        (tmp_path / name).touch()
+    with pytest.raises(CampaignExecutionError, match=r"warmup/resources\.csv"):
+        _require_repetition_artifacts(tmp_path)
+    _write_resources(tmp_path / "warmup" / "resources.csv")
+    _require_repetition_artifacts(tmp_path)
+
+
+@pytest.mark.parametrize("failure", [None, "identity", "dynamic"])
+def test_execute_orders_preparation_stabilization_and_host_gates_for_every_repetition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str | None,
+) -> None:
+    from benchmarks import run_campaign as runner
+
+    bundle = _bundle()
+    loads = (bundle.manifest.loads[0], bundle.manifest.loads[0].model_copy(update={"name": "next"}))
+    bundle = replace(
+        bundle, manifest=bundle.manifest.model_copy(update={"repetitions": 2, "loads": loads})
+    )
+    order: list[str] = []
+    identity = LogicalDatabaseIdentity(DatabaseDigests("0" * 64, {}), DatabaseDigests("1" * 64, {}))
+    observed = ObservedEnvironment(
+        {},
+        {"app": "app-id", "postgres": "postgres-id", "loadgen": "loadgen-id"},
+        "synthetic",
+        "synthetic",
+    )
+    report = {"synthetic": {"expected": 1, "observed": 1, "matches": True}}
+    stabilization = {
+        "started_at": "synthetic-start",
+        "finished_at": "synthetic-end",
+        "observed_seconds": 0,
+    }
+
+    def step(name: str, value: object = None) -> object:
+        order.append(name)
+        return value
+
+    class FakeHost:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def identity(self) -> object:
+            step("identity")
+            if failure == "identity":
+                raise EnvironmentMismatchError({"os": {"matches": False}})
+            return report
+
+        def dynamic(self, _ids: object) -> object:
+            step("dynamic")
+            if failure == "dynamic":
+                raise EnvironmentMismatchError({"ac_power": {"matches": False}})
+            return report
+
+    class FakeDocker:
+        def __init__(self, *_a: object) -> None:
+            pass
+
+        def observe(self) -> object:
+            return step("docker", observed)
+
+    class FakeDatabase:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def snapshot(self, label: str) -> DatabaseSnapshot:
+            return DatabaseSnapshot(label, {}, {}, {})
+
+    def phase(*args: object) -> PhaseExecution:
+        name = args[2]
+        order.append(str(name))
+        directory = args[-1]
+        assert isinstance(directory, Path)
+        if name == "warmup":
+            _write_resources(directory / "warmup" / "resources.csv")
+        else:
+            _write_resources(directory / "resources.csv")
+            for filename in (
+                "locust_stats.csv",
+                "locust_stats_history.csv",
+                "locust_failures.csv",
+                "locust_exceptions.csv",
+                "response_codes.csv",
+                "operational_results.csv",
+            ):
+                (directory / filename).touch()
+        instant = datetime(2026, 9, 4, tzinfo=UTC)
+        return PhaseExecution(name, instant, instant, 0)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        runner,
+        "_git_provenance",
+        lambda _p: GitProvenance(bundle.manifest.git_sha, "release/v1.0.0", True, True),
+    )
+    monkeypatch.setattr(runner, "HostProbe", FakeHost)
+    monkeypatch.setattr(runner, "DockerProbe", FakeDocker)
+    monkeypatch.setattr(runner, "DatabaseProbe", FakeDatabase)
+    monkeypatch.setattr(runner, "_run_preparation", lambda *_a: step("prepare"))
+    monkeypatch.setattr(
+        runner,
+        "_verify_initial_state",
+        lambda *_a: step("verify", (DatabaseSnapshot("initial", {}, {}, {}), identity)),
+    )
+    monkeypatch.setattr(
+        runner, "_install_runtime_manifest", lambda *_a: step("install", "/synthetic")
+    )
+    monkeypatch.setattr(runner, "_stabilize", lambda seconds: step("stabilize", stabilization))
+    monkeypatch.setattr(runner, "_run_phase", phase)
+    monkeypatch.setattr(runner, "_verify_warmup", lambda *_a: identity)
+    monkeypatch.setattr(runner, "_verify_measurement", lambda *_a: None)
+    monkeypatch.setattr(runner, "_merge_operational_results", lambda *_a: None)
+    directory = tmp_path / "synthetic"
+    if failure:
+        with pytest.raises(EnvironmentMismatchError):
+            _execute(bundle, FIXTURE, "http://synthetic", directory, ["synthetic"])
+        assert "warmup" not in order
+        path = (
+            directory / "metadata.json"
+            if failure == "identity"
+            else directory / "synthetic-4-users-r01.partial" / "metadata.json"
+        )
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        assert metadata["valid"] is False
+        if failure == "dynamic":
+            assert metadata["stabilization"] == stabilization
+        assert (directory / ".incomplete.json").is_file()
+    else:
+        assert _execute(bundle, FIXTURE, "http://synthetic", directory, ["synthetic"]) == 0
+        assert (
+            order
+            == ["identity"]
+            + [
+                "prepare",
+                "docker",
+                "verify",
+                "install",
+                "stabilize",
+                "dynamic",
+                "warmup",
+                "measurement",
+            ]
+            * 4
+        )
+        for path in directory.glob("*-r??/metadata.json"):
+            metadata = json.loads(path.read_text(encoding="utf-8"))
+            assert metadata["host_identity"] == metadata["host_state"] == report
+            assert metadata["stabilization"] == stabilization
+            assert metadata["valid"] is True
+        assert not (directory / ".incomplete.json").exists()
+
+
+def test_validate_only_never_constructs_a_host_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchmarks import run_campaign as runner
+
+    def forbidden(*_a: object, **_k: object) -> None:
+        pytest.fail("validate-only must not inspect the host")
+
+    monkeypatch.setattr(runner, "HostProbe", forbidden)
+    monkeypatch.setattr(sys, "argv", ["campaign", "--manifest", str(FIXTURE), "--validate-only"])
+    assert runner.main() == 0
 
 
 def test_managed_process_uses_windows_process_group_and_bounded_fallback(

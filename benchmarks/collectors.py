@@ -1,10 +1,11 @@
-"""External Docker/psql probes and measurement-only resource collection."""
+"""External Docker/psql probes and phase-separated resource collection."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
 import json
+import math
 import re
 import subprocess
 import threading
@@ -41,7 +42,7 @@ class EnvironmentMismatchError(RuntimeError):
 
     def __init__(self, report: dict[str, dict[str, object]]) -> None:
         self.report = report
-        failed = sorted(name for name, value in report.items() if not value["matches"])
+        failed = sorted(name for name, value in report.items() if value["matches"] is False)
         super().__init__(f"observed benchmark environment diverges: {', '.join(failed)}")
 
 
@@ -529,7 +530,7 @@ class DatabaseProbe:
 
 
 class ResourceSampler:
-    """Sample mandatory container resources only while measurement is active."""
+    """Sample mandatory container resources during one warm-up or measured phase."""
 
     def __init__(
         self,
@@ -614,6 +615,46 @@ class ResourceSampler:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ExternalCommandError("docker stats returned an invalid sample") from exc
         return cpu, _parse_memory_bytes(usage.strip()), _parse_memory_bytes(limit.strip())
+
+
+def validate_resource_samples(path: Path, container_ids: Mapping[str, str]) -> None:
+    """Require nonempty, complete sampling cycles; do not invent cadence tolerances."""
+    try:
+        with path.open(encoding="utf-8", newline="") as stream:
+            rows = csv.DictReader(stream)
+            timestamp: datetime | None = None
+            services: set[str] = set()
+            for row in rows:
+                instant = datetime.fromisoformat(row["timestamp_utc"])
+                if instant.utcoffset() is None:
+                    raise ValueError
+                if instant != timestamp:
+                    if timestamp is not None and (
+                        instant <= timestamp or services != set(container_ids)
+                    ):
+                        raise ValueError
+                    timestamp, services = instant, set()
+                service = row["service"]
+                if service in services or row["container_id"] != container_ids[service]:
+                    raise ValueError
+                cpu = float(row["cpu_percent"])
+                if not math.isfinite(cpu) or cpu < 0:
+                    raise ValueError
+                if int(row["memory_usage_bytes"]) < 0 or int(row["memory_limit_bytes"]) <= 0:
+                    raise ValueError
+                connections = row["postgres_active_connections"]
+                if service == "postgres":
+                    if int(connections) < 0:
+                        raise ValueError
+                elif connections != "":
+                    raise ValueError
+                services.add(service)
+            if timestamp is None or services != set(container_ids):
+                raise ValueError
+    except (OSError, KeyError, TypeError, ValueError, csv.Error) as exc:
+        raise ExternalCommandError(
+            "resource CSV is missing or has incomplete/invalid samples"
+        ) from exc
 
 
 def run_capture(command: list[str], timeout_seconds: float) -> subprocess.CompletedProcess[str]:

@@ -1382,12 +1382,42 @@ Detalhes operacionais completos ficam em `benchmarks/README.md`; este DESIGN fix
 - janela medida de 5 minutos;
 - pelo menos 5 repetições por perfil e carga;
 - banco restaurado para o mesmo estado antes de cada repetição;
+- estabilização declarada por `stabilization_seconds` em toda repetição, após preparação e
+  verificação do banco e antes do warm-up; positiva em campanha oficial, podendo ser zero em
+  fixtures não oficiais; início, fim e duração monotônica observada registrados no metadata;
 - dependências bloqueadas pelo mesmo lockfile da release;
 - mesma configuração de workers, pool de conexões, recursos e sampling;
 - nenhuma outra carga relevante no host;
 - resultados exportados em CSV;
-- amostras de CPU e memória coletadas a cada segundo em CSV separado;
-- registro de hardware, SO, Docker, versões, commit e horário.
+- amostras de CPU, memória e conexões do PostgreSQL coletadas pelo mesmo sampler nas duas
+  fases, em `warmup/resources.csv` e `resources.csv`, sem misturar estatísticas;
+- arquivos de recursos obrigatórios, com ciclos completos de app/PostgreSQL/loadgen e
+  checksums; intervalo declarado de coleta de um segundo, com cadência real auditável;
+- timeouts finitos dos processos estritamente maiores que `60 + drain_seconds` no warm-up
+  e `300 + drain_seconds` na measurement, sem margem numérica adicional imposta;
+- registro de hardware, SO, Docker, versões, commit e horário; identidade estável observada
+  uma vez e estado dinâmico observado antes do warm-up de cada repetição.
+
+O host oficial é Windows/WSL2. O manifest declara SO/versão/build, modelo da CPU, núcleos
+físicos/lógicos, RAM física, versões Docker Engine/Compose, versão/kernel WSL2 e CPUs/RAM
+efetivas da VM Docker. Declara também alimentação AC, GUID do plano de energia e quantidade
+de containers concorrentes, excluindo os três containers verificados da campanha. Esses
+campos são essenciais: ausência ou divergência impede campanha oficial. Expectativas
+declaradas também são verificadas em execuções não oficiais.
+
+RAM disponível, commit/limite de commit, pagefile alocado/usado e swap WSL total/livre são
+observações dinâmicas, sem thresholds automáticos ainda não calibrados. Indisponibilidade
+não essencial é `not_confirmed`; metadata separa `expected`, `observed` e `matches` (nulo
+quando não há comparação). Não registrar hostname, usuário, serial, IP/MAC, caminhos pessoais,
+lista geral de processos, secrets ou sensores proprietários. O probe usa comandos somente
+leitura e nunca altera configurações. CI valida esse contrato apenas com executores simulados.
+
+Na comparação arquitetural principal, o orçamento agregado de CPU e memória da camada de
+aplicação e o da camada de dados permanecem fixos separadamente. Serviços extraídos dividem
+o orçamento da aplicação; bancos adicionais dividem o de dados, incluindo overhead de
+distribuição. O loadgen tem orçamento separado e idêntico. O pool total de conexões não é
+multiplicado por componente. A v1.0 mantém um worker Uvicorn. Ensaios suplementares com
+recursos por componente devem ser identificados separadamente da comparação principal.
 
 ### 22.3 Métricas
 

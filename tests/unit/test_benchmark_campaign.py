@@ -49,6 +49,38 @@ def test_warmup_quota_must_be_even() -> None:
         CampaignManifest.model_validate(payload)
 
 
+@pytest.mark.parametrize("seconds", [-1, float("inf"), float("nan")])
+def test_stabilization_must_be_finite_and_nonnegative(seconds: float) -> None:
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload["stabilization_seconds"] = seconds
+    with pytest.raises(ValidationError, match="stabilization_seconds"):
+        CampaignManifest.model_validate(payload)
+
+
+def test_official_requires_positive_stabilization_and_essential_host_declarations() -> None:
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload.update(official=True, repetitions=5)
+    with pytest.raises(ValidationError, match="stabilization_seconds must be positive"):
+        CampaignManifest.model_validate(payload)
+    payload["stabilization_seconds"] = 1
+    with pytest.raises(ValidationError, match="essential host expectation"):
+        CampaignManifest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field,duration", [("warmup_process_seconds", 60), ("measurement_process_seconds", 300)]
+)
+def test_process_timeout_strictly_contains_phase_and_drain(field: str, duration: int) -> None:
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    boundary = duration + payload["timeouts"]["drain_seconds"]
+    for value in (boundary - 1, boundary):
+        payload["timeouts"][field] = value
+        with pytest.raises(ValidationError, match="must exceed"):
+            CampaignManifest.model_validate(payload)
+    payload["timeouts"][field] = boundary + 0.001
+    assert CampaignManifest.model_validate(payload).timeouts.model_dump()[field] == boundary + 0.001
+
+
 def test_campaign_requires_a_well_formed_release_specific_schema_digest() -> None:
     missing = json.loads(FIXTURE.read_text(encoding="utf-8"))
     del missing["database"]["schema_sha256"]

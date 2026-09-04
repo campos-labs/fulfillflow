@@ -146,6 +146,8 @@ class DatabaseContract(StrictModel):
 
 
 class TimeoutContract(StrictModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     preparation_seconds: PositiveFloat
     phase_start_seconds: PositiveFloat
     warmup_process_seconds: PositiveFloat = Field(gt=WARMUP_SECONDS)
@@ -153,6 +155,47 @@ class TimeoutContract(StrictModel):
     drain_seconds: PositiveFloat
     request_seconds: PositiveFloat
     command_seconds: PositiveFloat
+
+    @model_validator(mode="after")
+    def validate_drain_budget(self) -> Self:
+        if not self.warmup_process_seconds > WARMUP_SECONDS + self.drain_seconds:
+            raise ValueError("warmup_process_seconds must exceed 60 + drain_seconds")
+        if not self.measurement_process_seconds > MEASUREMENT_SECONDS + self.drain_seconds:
+            raise ValueError("measurement_process_seconds must exceed 300 + drain_seconds")
+        return self
+
+
+class HostIdentity(StrictModel):
+    """Allowlisted expectations; every field is essential for an official campaign."""
+
+    os: Literal["Windows"] | None = None
+    os_version: str | None = Field(default=None, pattern=r"^\d+(\.\d+)+$")
+    os_build: str | None = Field(default=None, pattern=r"^\d+\.\d+$")
+    cpu_model: str | None = Field(default=None, min_length=1, max_length=160)
+    physical_cores: PositiveInt | None = None
+    logical_processors: PositiveInt | None = None
+    physical_memory_bytes: PositiveInt | None = None
+    docker_engine: str | None = Field(default=None, pattern=r"^\d+[\w.+-]*$")
+    docker_compose: str | None = Field(default=None, pattern=r"^\d+[\w.+-]*$")
+    wsl_version: str | None = Field(default=None, pattern=r"^\d+(\.\d+)+$")
+    wsl_kernel: str | None = Field(default=None, pattern=r"^[\w.+-]+WSL2[\w.+-]*$")
+    docker_cpus: PositiveInt | None = None
+    docker_memory_bytes: PositiveInt | None = None
+
+
+class HostConditions(StrictModel):
+    """Exact dynamic expectations, not uncalibrated utilization thresholds."""
+
+    ac_power: bool | None = None
+    power_plan_guid: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+    )
+    concurrent_containers: int | None = Field(default=None, ge=0)
+
+
+class HostContract(StrictModel):
+    identity: HostIdentity
+    conditions: HostConditions
 
 
 class CampaignManifest(StrictModel):
@@ -168,6 +211,7 @@ class CampaignManifest(StrictModel):
     workers: Literal[1]
     warmup_seconds: Literal[60]
     measurement_seconds: Literal[300]
+    stabilization_seconds: float = Field(ge=0, allow_inf_nan=False)
     repetitions: PositiveInt
     warmup_quota_per_shipment: PositiveInt
     occurred_at_step_microseconds: PositiveInt
@@ -180,6 +224,7 @@ class CampaignManifest(StrictModel):
     cohorts: CohortReferences
     telemetry: TelemetryContract
     environment: EnvironmentContract
+    host: HostContract
     database: DatabaseContract
     timeouts: TimeoutContract
     collection_interval_seconds: PositiveFloat
@@ -188,6 +233,14 @@ class CampaignManifest(StrictModel):
     def validate_protocol(self) -> Self:
         if self.official and self.repetitions != OFFICIAL_REPETITIONS:
             raise ValueError("an official campaign must contain exactly five repetitions")
+        if self.official and self.stabilization_seconds <= 0:
+            raise ValueError("official stabilization_seconds must be positive")
+        if self.official and any(
+            value is None
+            for section in (self.host.identity, self.host.conditions)
+            for value in section.model_dump().values()
+        ):
+            raise ValueError("official campaign requires every essential host expectation")
         if self.warmup_quota_per_shipment % 2 != 0:
             raise ValueError("warm-up quota q must be even for every Shipment")
         if self.warmup_occurred_at_base.tzinfo is None:
