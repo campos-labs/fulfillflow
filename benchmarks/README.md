@@ -128,6 +128,26 @@ JSON, `bytea`, enum/string, null, and relationship values participate in per-tab
 digests, so equal counts cannot conceal changed content. It never repairs database state and reports
 only sanitized divergence classes and digests, never row contents.
 
+`benchmarks.prepare_database` is the preparation argv entry point. It accepts only the fixed
+`compose.benchmark.yaml`, the literal `fulfillflow-benchmark` project (or the narrowly allowlisted
+isolated E2E prefix), and the literal `fulfillflow_benchmark` database confirmed twice. The database
+URL must come from `BENCH_DATABASE_URL`, address only the Compose `db` service, and agree with the
+declared PostgreSQL user, password, and database without placing any of them in argv. Each call runs
+scoped `config`, removes only that project's containers/network/volume, starts all campaign services
+with `--no-build --wait`, atomically installs the authenticated dataset in a fresh migrated database,
+then reuses `DockerProbe` and the runner's complete initial-state verification. Failure after cleanup
+begins attempts the same scoped cleanup and emits no command output or credential detail.
+
+The exact preparation argv for a normal campaign is:
+
+```text
+[".venv\\Scripts\\python.exe","-B","-m","benchmarks.prepare_database","--manifest","<manifest-path>","--project-name","fulfillflow-benchmark","--confirm-project-name","fulfillflow-benchmark","--database-name","fulfillflow_benchmark","--confirm-database-name","fulfillflow_benchmark","--timeout-seconds","85","--cleanup-timeout-seconds","20"]
+```
+
+Supply that JSON array to `--prepare-command-json`; replace only `<manifest-path>` with the campaign
+manifest path. The enclosing runner still applies the manifest's preparation timeout. Cleanup after
+the final repetition remains an explicit, equally confirmed operation using `--cleanup`.
+
 Structural contract version 1 includes the exact public application tables; column ordinal, full
 physical type, nullability, normalized default, identity and generated mode; primary, unique,
 foreign-key and check constraints with columns, actions and deferrability; and complete index keys,

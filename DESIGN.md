@@ -1382,6 +1382,11 @@ Detalhes operacionais completos ficam em `benchmarks/README.md`; este DESIGN fix
 - janela medida de 5 minutos;
 - pelo menos 5 repetições por perfil e carga;
 - banco restaurado para o mesmo estado antes de cada repetição;
+- preparação executada por argv sem shell, com projeto Compose e banco confirmados literalmente:
+  remove apenas os recursos e o volume do projeto de benchmark, sobe os três serviços sem build,
+  aplica migrations pelo Compose, carrega atomicamente o dataset autenticado em banco vazio e só
+  retorna após repetir as verificações integrais de ambiente, schema e conteúdo inicial; falhas
+  tentam cleanup do mesmo projeto e nunca exibem DSN, secrets ou saídas brutas;
 - estabilização declarada por `stabilization_seconds` em toda repetição, após preparação e
   verificação do banco e antes do warm-up; positiva em campanha oficial, podendo ser zero em
   fixtures não oficiais; início, fim e duração monotônica observada registrados no metadata;
