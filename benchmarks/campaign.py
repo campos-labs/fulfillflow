@@ -196,6 +196,16 @@ class HostConditions(StrictModel):
 class HostContract(StrictModel):
     identity: HostIdentity
     conditions: HostConditions
+    docker_memory_tolerance_bytes: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_docker_memory_tolerance(self) -> Self:
+        if (
+            self.docker_memory_tolerance_bytes is not None
+            and self.identity.docker_memory_bytes is None
+        ):
+            raise ValueError("docker memory tolerance requires an expected docker_memory_bytes")
+        return self
 
 
 class CampaignManifest(StrictModel):

@@ -1410,6 +1410,13 @@ de containers concorrentes, excluindo os três containers verificados da campanh
 campos são essenciais: ausência ou divergência impede campanha oficial. Expectativas
 declaradas também são verificadas em execuções não oficiais.
 
+`docker_memory_bytes` é a única exceção à igualdade exata: o manifest pode declarar uma tolerância
+absoluta em bytes e a comparação inclusiva aceita `abs(observado - esperado) <= tolerância`. Expected,
+observed e tolerance permanecem registrados em bytes exatos; tolerância ausente mantém igualdade
+exata e valor acima do limite falha fechado. Nenhum outro campo aceita tolerância. O valor e a
+tolerância oficiais serão congelados após medições entre reinicializações do WSL2 e serão idênticos
+nas campanhas v1.0 e v1.1.
+
 RAM disponível, commit/limite de commit, pagefile alocado/usado e swap WSL total/livre são
 observações dinâmicas, sem thresholds automáticos ainda não calibrados. Indisponibilidade
 não essencial é `not_confirmed`; metadata separa `expected`, `observed` e `matches` (nulo

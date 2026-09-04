@@ -42,8 +42,14 @@ METRICS = {
 CONTAINERS = {"app": "a" * 64, "postgres": "b" * 64, "loadgen": "c" * 64}
 
 
-def _contract() -> HostContract:
-    return HostContract.model_validate({"identity": IDENTITY, "conditions": CONDITIONS})
+def _contract(*, docker_memory_tolerance_bytes: int | None = None) -> HostContract:
+    return HostContract.model_validate(
+        {
+            "identity": IDENTITY,
+            "conditions": CONDITIONS,
+            "docker_memory_tolerance_bytes": docker_memory_tolerance_bytes,
+        }
+    )
 
 
 class Commands:
@@ -136,6 +142,87 @@ def test_every_essential_identity_field_fails_closed_on_missing_or_drift(
     with pytest.raises(EnvironmentMismatchError) as captured:
         probe.identity()
     assert captured.value.report[field]["matches"] is False
+
+
+@pytest.mark.parametrize("difference", [0, 1, -1, 1024 * 1024, -(1024 * 1024)])
+def test_docker_memory_accepts_exact_inside_and_inclusive_tolerance(difference: int) -> None:
+    commands = Commands()
+    commands.identity["docker_memory_bytes"] = IDENTITY["docker_memory_bytes"] + difference
+    report = HostProbe(
+        _contract(docker_memory_tolerance_bytes=1024 * 1024),
+        official=False,
+        timeout_seconds=2,
+        command_runner=commands,
+        platform="win32",
+    ).identity()["docker_memory_bytes"]
+    assert report == {
+        "expected": IDENTITY["docker_memory_bytes"],
+        "observed": IDENTITY["docker_memory_bytes"] + difference,
+        "matches": True,
+        "status": "confirmed",
+        "tolerance_bytes": 1024 * 1024,
+    }
+
+
+@pytest.mark.parametrize("difference", [1024 * 1024 + 1, -(1024 * 1024 + 1)])
+def test_docker_memory_above_tolerance_fails_closed(difference: int) -> None:
+    commands = Commands()
+    commands.identity["docker_memory_bytes"] = IDENTITY["docker_memory_bytes"] + difference
+    probe = HostProbe(
+        _contract(docker_memory_tolerance_bytes=1024 * 1024),
+        official=False,
+        timeout_seconds=2,
+        command_runner=commands,
+        platform="win32",
+    )
+    with pytest.raises(EnvironmentMismatchError) as captured:
+        probe.identity()
+    assert captured.value.report["docker_memory_bytes"] == {
+        "expected": IDENTITY["docker_memory_bytes"],
+        "observed": IDENTITY["docker_memory_bytes"] + difference,
+        "matches": False,
+        "status": "confirmed",
+        "tolerance_bytes": 1024 * 1024,
+    }
+
+
+def test_absent_docker_memory_tolerance_preserves_exact_equality() -> None:
+    commands = Commands()
+    commands.identity["docker_memory_bytes"] = IDENTITY["docker_memory_bytes"] + 1
+    probe = HostProbe(
+        _contract(),
+        official=False,
+        timeout_seconds=2,
+        command_runner=commands,
+        platform="win32",
+    )
+    with pytest.raises(EnvironmentMismatchError) as captured:
+        probe.identity()
+    assert captured.value.report["docker_memory_bytes"]["tolerance_bytes"] is None
+    assert captured.value.report["docker_memory_bytes"]["matches"] is False
+
+
+@pytest.mark.parametrize("invalid", [-1, 1.5, "1048576", True])
+def test_docker_memory_tolerance_rejects_invalid_values(invalid: object) -> None:
+    with pytest.raises(ValueError, match="docker_memory_tolerance_bytes"):
+        HostContract.model_validate(
+            {
+                "identity": IDENTITY,
+                "conditions": CONDITIONS,
+                "docker_memory_tolerance_bytes": invalid,
+            }
+        )
+
+
+def test_docker_memory_tolerance_requires_an_expected_value() -> None:
+    with pytest.raises(ValueError, match="requires an expected docker_memory_bytes"):
+        HostContract.model_validate(
+            {
+                "identity": {},
+                "conditions": {},
+                "docker_memory_tolerance_bytes": 1024 * 1024,
+            }
+        )
 
 
 @pytest.mark.parametrize("field", list(CONDITIONS))

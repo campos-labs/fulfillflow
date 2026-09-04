@@ -172,12 +172,26 @@ class HostProbe:
         for key, value in expected.items():
             actual = observed.get(key)
             required = value is not None or (self.official and key not in optional)
+            tolerance = (
+                self.contract.docker_memory_tolerance_bytes
+                if key == "docker_memory_bytes"
+                else None
+            )
+            matches: bool | None = None
+            if required:
+                matches = actual is not None and (
+                    abs(actual - value) <= tolerance
+                    if tolerance is not None and type(actual) is int and type(value) is int
+                    else actual == value
+                )
             report[key] = {
                 "expected": value,
                 "observed": actual,
-                "matches": actual is not None and actual == value if required else None,
+                "matches": matches,
                 "status": "confirmed" if actual is not None else "not_confirmed",
             }
+            if key == "docker_memory_bytes":
+                report[key]["tolerance_bytes"] = tolerance
         if any(item["matches"] is False for item in report.values()):
             raise EnvironmentMismatchError(report)
         return report

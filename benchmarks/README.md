@@ -91,6 +91,11 @@ manifest installation, every repetition waits the declared interval before warm-
 `started_at`, `finished_at`, `expected_seconds` and monotonic `observed_seconds`. Dynamic host checks
 then gate warm-up admission. A fixed wait is not evidence of thermal or memory quiescence.
 
+The optional `host.docker_memory_tolerance_bytes` applies only to `docker_memory_bytes`. Expected and
+observed values remain exact byte counts, metadata records the declared `tolerance_bytes`, and the
+inclusive rule is `abs(observed - expected) <= tolerance`. Omitting the tolerance preserves exact
+equality; exceeding it fails closed. No other identity or condition accepts a tolerance.
+
 Process timeouts are finite and must satisfy exactly these strict inequalities:
 
 ```text
@@ -182,7 +187,9 @@ All `host.identity` fields are essential in an official manifest: `os` (`Windows
 `physical_memory_bytes`, `docker_engine`, `docker_compose`, `wsl_version`, `wsl_kernel`,
 `docker_cpus` and `docker_memory_bytes`. Docker's reported kernel must match `docker-desktop`'s
 observed WSL2 kernel. Effective Docker resources come from the daemon, not a personal configuration
-file. A changed host/VM requires a new invocation and review of the declared contract.
+file. A changed host/VM requires a new invocation and review of the declared contract. The final
+official Docker-memory expectation and tolerance will be frozen only after measurements across WSL2
+restarts and must be identical for the v1.0 and v1.1 campaigns.
 
 Essential `host.conditions` fields are `ac_power`, `power_plan_guid` (lowercase GUID, never a custom
 plan name) and `concurrent_containers` (running count excluding the campaign's verified app,

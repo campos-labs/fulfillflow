@@ -67,6 +67,7 @@
   },
   "host": {
     "identity": {},
+    "docker_memory_tolerance_bytes": null,
     "conditions": {}
   },
   "database": {
