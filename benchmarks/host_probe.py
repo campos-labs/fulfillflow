@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from collections.abc import Mapping
 
 from pydantic import ValidationError
 
 from benchmarks.campaign import HostConditions, HostContract, HostIdentity
-from benchmarks.collectors import CommandRunner, EnvironmentMismatchError, run_capture
+from benchmarks.collectors import (
+    CommandRunner,
+    EnvironmentMismatchError,
+    ExternalCommandError,
+    run_capture,
+)
 
 # Never serialize CIM objects, command output, environment, container names or errors.
 _WINDOWS_IDENTITY = r"""
@@ -189,12 +195,44 @@ class HostProbe:
         return result if isinstance(result, dict) else {}
 
     def _text(self, command: list[str]) -> str:
+        if command[:4] == ["wsl", "--distribution", "docker-desktop", "--exec"]:
+            # Do not cache: the distribution may stop between identity and dynamic probes.
+            self._require_running_docker_desktop()
         try:
             completed = self.runner(command, self.timeout_seconds)
             return completed.stdout.replace("\x00", "").strip() if completed.returncode == 0 else ""
         except (RuntimeError, OSError, ValueError):
             # No raw exception or command output is persisted, even on probe failure.
             return ""
+
+    def _require_running_docker_desktop(self) -> None:
+        try:
+            completed = self.runner(["wsl", "--list", "--running", "--quiet"], self.timeout_seconds)
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            raise ExternalCommandError(
+                "WSL running-state query failed; inspection refused"
+            ) from None
+        if completed.returncode != 0:
+            raise ExternalCommandError("WSL running-state query failed; inspection refused")
+
+        output = completed.stdout.removeprefix("\ufeff")
+        if "\x00" in output:
+            # run_capture decodes UTF-8. Accept only intact ASCII UTF-16 code units,
+            # including its decoded BOM; never repair arbitrary embedded NULs.
+            output = output.removeprefix("\ufffd\ufffd")
+            if re.fullmatch(r"(?:[\t\r\n\x20-\x7e]\x00)+", output):
+                output = output[::2]
+            elif re.fullmatch(r"(?:\x00[\t\r\n\x20-\x7e])+", output):
+                output = output[1::2]
+            else:
+                raise ExternalCommandError(
+                    "WSL running-state output is invalid; inspection refused"
+                )
+        names = [line.strip(" \t\r") for line in output.split("\n") if line.strip(" \t\r")]
+        if any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None for name in names):
+            raise ExternalCommandError("WSL running-state output is invalid; inspection refused")
+        if not any(name.lower() == "docker-desktop" for name in names):
+            raise ExternalCommandError("WSL docker-desktop is not running; inspection refused")
 
 
 def _validated_fields(

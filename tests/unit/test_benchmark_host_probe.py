@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import traceback
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,7 @@ class Commands:
         self.state = {**CONDITIONS, **METRICS}
         self.extra_container = False
         self.swap = "SwapTotal: 2097152 kB\nSwapFree: 1048576 kB"
+        self.running = "docker-desktop\r\n"
 
     def __call__(self, command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
         assert timeout == 2
@@ -72,6 +74,8 @@ class Commands:
                     "kernel": self.identity.get("wsl_kernel"),
                 }
             )
+        elif command == ["wsl", "--list", "--running", "--quiet"]:
+            output = self.running
         elif command == ["wsl", "--version"]:
             output = "WSL version: " + str(self.identity.get("wsl_version", ""))
             output = "\x00".join(output)  # WSL can emit NUL-interleaved console text.
@@ -196,7 +200,8 @@ def test_explicit_nonofficial_expectations_are_also_enforced() -> None:
 @pytest.mark.parametrize("output", ["not JSON PRIVATE", "[]", "{}"])
 def test_unavailable_or_malformed_probes_never_become_confirmed_observations(output: str) -> None:
     def commands(command: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(command, 0, output, "PRIVATE")
+        value = "docker-desktop" if command == ["wsl", "--list", "--running", "--quiet"] else output
+        return subprocess.CompletedProcess(command, 0, value, "PRIVATE")
 
     probe = HostProbe(
         _contract(), official=True, timeout_seconds=2, command_runner=commands, platform="win32"
@@ -211,6 +216,8 @@ def test_command_failure_and_unsupported_host_are_explicitly_unconfirmed() -> No
 
     def failed(_command: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
         calls.append(True)
+        if _command == ["wsl", "--list", "--running", "--quiet"]:
+            return subprocess.CompletedProcess(_command, 0, "docker-desktop", "")
         raise ExternalCommandError("PRIVATE")
 
     empty = HostContract.model_validate({"identity": {}, "conditions": {}})
@@ -243,3 +250,92 @@ def test_complete_synthetic_official_declarations_validate_and_missing_essential
             with pytest.raises(ValueError, match="essential host expectation"):
                 CampaignManifest.model_validate(payload)
             payload["host"][section][field] = value
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be"])
+def test_running_guard_accepts_safe_encoding_whitespace_and_case(encoding: str) -> None:
+    commands = Commands()
+    commands.running = " \tDoCkEr-DeSkToP \t\r\nUbuntu-24.04\r\n".encode(encoding).decode(
+        "utf-8", errors="replace"
+    )
+    probe = HostProbe(
+        _contract(), official=True, timeout_seconds=2, command_runner=commands, platform="win32"
+    )
+    identity = probe.identity()
+    dynamic = probe.dynamic(CONTAINERS)
+    for index, command in enumerate(commands.calls):
+        if "--exec" in command:
+            assert commands.calls[index - 1] == ["wsl", "--list", "--running", "--quiet"]
+    assert sum("--exec" in command for command in commands.calls) == 2
+    assert "Ubuntu" not in json.dumps([identity, dynamic])
+    assert "Ubuntu" not in repr(vars(probe))
+
+
+@pytest.mark.parametrize("phase", ["identity", "dynamic"])
+@pytest.mark.parametrize("output", ["", " \r\n", "PRIVATE-distribution\n", "docker-desktop-data\n"])
+def test_absent_distribution_refuses_before_any_internal_command(phase: str, output: str) -> None:
+    commands = Commands()
+    commands.running = output
+    probe = HostProbe(
+        _contract(), official=False, timeout_seconds=2, command_runner=commands, platform="win32"
+    )
+    with pytest.raises(ExternalCommandError, match="not running") as captured:
+        probe.identity() if phase == "identity" else probe.dynamic(CONTAINERS)
+    assert not any("--exec" in command for command in commands.calls)
+    assert "PRIVATE" not in str(captured.value)
+
+
+@pytest.mark.parametrize("phase", ["identity", "dynamic"])
+@pytest.mark.parametrize(
+    "failure",
+    ["exit", "exception", "timeout", "invalid", "nul", "replacement", "confusable", "control"],
+)
+def test_running_guard_errors_are_sanitized_and_do_not_execute_internal_commands(
+    phase: str,
+    failure: str,
+) -> None:
+    commands = Commands()
+
+    def runner(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        if command != ["wsl", "--list", "--running", "--quiet"]:
+            return commands(command, timeout)
+        commands.calls.append(command)
+        if failure == "exception":
+            raise ExternalCommandError("PRIVATE secret path")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("PRIVATE", timeout, output="PRIVATE", stderr="PRIVATE")
+        output = {
+            "exit": "docker-desktop\nPRIVATE",
+            "invalid": 'docker-desktop\n{"PRIVATE":"secret"}',
+            "nul": "doc\x00ker-desktop\nPRIVATE",
+            "replacement": "docker-desktop\n\ufffdPRIVATE",
+            "confusable": "doc\u212aer-desktop\nPRIVATE",
+            "control": "docker-desktop\x0bPRIVATE",
+        }[failure]
+        return subprocess.CompletedProcess(
+            command, 1 if failure == "exit" else 0, output, "PRIVATE"
+        )
+
+    probe = HostProbe(
+        _contract(), official=False, timeout_seconds=2, command_runner=runner, platform="win32"
+    )
+    with pytest.raises(ExternalCommandError, match="inspection refused") as captured:
+        probe.identity() if phase == "identity" else probe.dynamic(CONTAINERS)
+    assert not any("--exec" in command for command in commands.calls)
+    assert "PRIVATE" not in str(captured.value)
+    assert "PRIVATE" not in "".join(traceback.format_exception(captured.value))
+    assert captured.value.__suppress_context__ or captured.value.__context__ is None
+
+
+def test_running_guard_is_not_cached_between_observations() -> None:
+    commands = Commands()
+    probe = HostProbe(
+        _contract(), official=False, timeout_seconds=2, command_runner=commands, platform="win32"
+    )
+    probe.identity()
+    commands.calls.clear()
+    commands.running = ""
+    with pytest.raises(ExternalCommandError, match="not running"):
+        probe.dynamic(CONTAINERS)
+    assert commands.calls[-1] == ["wsl", "--list", "--running", "--quiet"]
+    assert not any("--exec" in command for command in commands.calls)
