@@ -35,6 +35,21 @@ class OrderDetailView:
     order: OrderRead
     shipments: list[ShipmentSummaryRead]
 
+    @property
+    def can_confirm(self) -> bool:
+        """Offer confirmation only when it changes the Order state."""
+        return self.order.status is OrderStatus.CREATED
+
+    @property
+    def can_cancel(self) -> bool:
+        """Offer cancellation only before the Order has been confirmed."""
+        return self.order.status is OrderStatus.CREATED
+
+    @property
+    def can_create_shipment(self) -> bool:
+        """Offer Shipment creation only for a confirmed Order."""
+        return self.order.status is OrderStatus.CONFIRMED
+
 
 @dataclass(frozen=True, slots=True)
 class DashboardView:

@@ -441,7 +441,7 @@ async def test_created_order_can_be_cancelled_idempotently(
     assert "CANCELLED" in cancelled_page.text
     repeated = await ui_client.post(
         f"{order_path}/cancel",
-        data={"csrf_token": csrf_token(cancelled_page)},
+        data={"csrf_token": token},
     )
     assert repeated.status_code == 303
 
@@ -607,11 +607,12 @@ async def test_order_actions_and_shipment_form_use_prg_and_surface_conflicts(
     assert confirmed.status_code == 303
     assert confirmed.headers["location"] == order_path
 
-    # The stable session token keeps the idempotent repeat a genuine second submission.
+    # Reuse the session token for a direct replay; the detail no longer offers Confirm.
     repeated_page = await ui_client.get(order_path)
+    assert repeated_page.status_code == 200
     repeated = await ui_client.post(
         f"{order_path}/confirm",
-        data={"csrf_token": csrf_token(repeated_page)},
+        data={"csrf_token": token},
     )
     assert repeated.status_code == 303
 
@@ -656,9 +657,10 @@ async def test_order_actions_and_shipment_form_use_prg_and_surface_conflicts(
     assert cancel_again.status_code == 303
 
     conflict_page = await ui_client.get(order_path)
+    assert conflict_page.status_code == 200
     invalid_cancel = await ui_client.post(
         f"{order_path}/cancel",
-        data={"csrf_token": csrf_token(conflict_page)},
+        data={"csrf_token": token},
     )
     assert invalid_cancel.status_code == 409
     assert "INVALID_ORDER_TRANSITION" in invalid_cancel.text
