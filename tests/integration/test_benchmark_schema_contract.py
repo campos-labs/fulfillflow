@@ -68,6 +68,26 @@ def test_real_database_probe_accepts_exact_migrated_and_seeded_database(
         _assert_real_probe_transport(target)
 
 
+def test_real_event_observation_preserves_notification_uuid_and_counts(
+    structural_postgres: _DockerPostgres,
+) -> None:
+    with structural_postgres.provision_database("notification-uuid") as target:
+        row = target.probe.query_scalar(
+            "SELECT i.external_event_id || '|' || n.id::text || '|' || e.id::text "
+            "FROM notifications n JOIN tracking_events e ON e.id = n.tracking_event_id "
+            "JOIN carrier_event_inbox i ON i.id = e.inbox_event_id ORDER BY n.id LIMIT 1"
+        )
+        event_id, notification_id, tracking_id = row.split("|")
+        observed = target.probe.event_observations([event_id])[event_id]
+        assert observed.notification_id == notification_id
+        assert observed.tracking_event_id == tracking_id
+        assert observed.notification_count == 1
+        assert observed.matching_notification_count == 1
+        assert observed.raw_body_sha256 == observed.payload_sha256
+        assert target.probe.structural_schema_identity().sha256 == EXPECTED_SCHEMA_SHA256
+        _assert_real_probe_transport(target)
+
+
 @pytest.mark.parametrize(
     ("case", "ddl", "verification_sql", "verification_result"),
     [
@@ -355,6 +375,8 @@ class _DockerPostgres:
                     "exec",
                     self.container,
                     "pg_isready",
+                    # The initialization server accepts sockets before its shutdown.
+                    "--host=127.0.0.1",
                     "--username",
                     POSTGRES_USER,
                     "--dbname",

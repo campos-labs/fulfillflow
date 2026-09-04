@@ -813,6 +813,7 @@ def test_verify_warmup_accepts_complete_logical_identity() -> None:
         "payload-hash",
         "normalized-status",
         "notification-link",
+        "duplicate-notification",
         "shipment-ordering",
         "measurement-cohort",
         "initial-event",
@@ -839,6 +840,10 @@ def test_verify_warmup_rejects_logical_drift_with_preserved_cardinalities(
         database.observations[event_id] = replace(observation, canonical_status="EXCEPTION")
     elif mutation == "notification-link":
         database.observations[event_id] = replace(observation, matching_notification_count=0)
+    elif mutation == "duplicate-notification":
+        database.observations[event_id] = replace(
+            observation, notification_count=2, matching_notification_count=2
+        )
     elif mutation == "shipment-ordering":
         shipment_id = observation.shipment_id
         state = database.states[shipment_id]

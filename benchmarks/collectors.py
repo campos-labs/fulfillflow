@@ -431,7 +431,7 @@ class DatabaseProbe:
             "'application_result', e.application_result::text, "
             "'previous_shipment_status', e.previous_shipment_status::text, "
             "'resulting_shipment_status', e.resulting_shipment_status::text, "
-            "'notification_id', coalesce(min(n.id)::text, ''), "
+            "'notification_id', coalesce(min(n.id::text), ''), "
             "'notification_count', count(n.id), "
             "'matching_notification_count', count(n.id) FILTER (WHERE "
             "n.shipment_id = e.shipment_id AND n.tracking_event_id = e.id))::text "
