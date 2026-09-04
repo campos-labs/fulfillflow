@@ -183,22 +183,29 @@ preserva o inbox, normaliza o evento, registra o `TrackingEvent`, atualiza a
 Detalhes de transações, locks e idempotência permanecem documentados em
 `DESIGN.md`.
 
-## Capturas recomendadas
+## Capturas da demonstração
 
-As imagens devem ser capturadas da aplicação real, usando somente dados
-sintéticos. Não use geração de imagens e não exponha secrets, assinaturas, DSN
-ou variáveis de ambiente.
+As imagens abaixo foram obtidas da aplicação real FulfillFlow v1.0.0 em ambiente
+local controlado. Todos os dados apresentados são sintéticos.
 
-| Arquivo planejado | Conteúdo | Evidência |
-|---|---|---|
-| `docs/assets/demo/dashboard.webp` | Dashboard após o cenário | visão operacional e eventos recentes |
-| `docs/assets/demo/order-detail.webp` | Order em `FULFILLED` e sua Shipment | conclusão da jornada |
-| `docs/assets/demo/tracking-timeline.webp` | quatro eventos `APPLIED` | evolução persistida até `DELIVERED` |
-| `docs/assets/demo/carrier-inbox.webp` | inbox filtrado em `PROCESSED` | recepção e auditoria do webhook |
-| `docs/assets/demo/carrier-simulator.webp` | saída sanitizada do simulador no PowerShell | envio externo dos quatro eventos |
+Não use geração de imagens e não exponha secrets, assinaturas, DSN ou variáveis
+de ambiente.
 
-Os nomes acima são apenas o plano das capturas. Não devem ser transformados em
-links Markdown antes de os arquivos existirem.
+![Dashboard operacional do FulfillFlow v1.0.0](assets/demo/dashboard.png)
+
+Dashboard com os estados operacionais e os eventos recentes.
+
+![Detalhe de Order concluído](assets/demo/order-detail.png)
+
+Order em `FULFILLED`, com sua Shipment vinculada.
+
+![Timeline de Tracking de uma Shipment](assets/demo/tracking-timeline.png)
+
+Linha do tempo dos eventos da Shipment e seus resultados de aplicação.
+
+![Painel instrucional do simulador de transportadoras](assets/demo/carrier-simulator.png)
+
+Instruções para executar o simulador externo; o painel não envia eventos.
 
 ## Encerrar o ambiente
 
