@@ -203,6 +203,60 @@ def test_managed_process_timeout_terminates_process_group(monkeypatch: pytest.Mo
     assert terminated == [True]
 
 
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_phase_supervision_refuses_failure_despite_healthy_container(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
+) -> None:
+    bundle = _bundle()
+    observed = ObservedEnvironment(
+        {"loadgen.health": {"matches": True, "observed": "healthy"}},
+        {"app": "app-id", "postgres": "postgres-id", "loadgen": "loadgen-id"},
+        "fulfillflow",
+        "fulfillflow_benchmark",
+    )
+    stopped: list[str] = []
+
+    class FailedProcess:
+        def wait(self, _timeout: float) -> int:
+            if failure == "timeout":
+                raise CampaignExecutionError("external process exceeded its frozen timeout")
+            return 7
+
+        def ensure_stopped(self) -> None:
+            stopped.append("process")
+
+    class Sampler:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            stopped.append("sampler")
+
+    monkeypatch.setattr("benchmarks.run_campaign.ManagedProcess", lambda _argv: FailedProcess())
+    monkeypatch.setattr("benchmarks.run_campaign.ResourceSampler", lambda *_a, **_k: Sampler())
+    monkeypatch.setattr("benchmarks.run_campaign._wait_for_container_file", lambda *_a: None)
+    monkeypatch.setattr(
+        "benchmarks.run_campaign._terminate_container_phase", lambda *_a: stopped.append("phase")
+    )
+    monkeypatch.setattr(
+        "benchmarks.run_campaign.run_capture",
+        lambda *_a: pytest.fail("must not export a failed phase"),
+    )
+    with pytest.raises(CampaignExecutionError, match=r"timeout|invalidated"):
+        _run_phase(
+            bundle,
+            bundle.manifest.loads[0],
+            "measurement",
+            "http://app:8000",
+            observed,
+            object(),  # type: ignore[arg-type]
+            "/runtime/campaign.json",
+            tmp_path,
+        )
+    assert "process" in stopped and "sampler" in stopped
+    assert ("phase" in stopped) is (failure == "timeout")
+
+
 def _write_resources(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

@@ -153,6 +153,16 @@ Supply that JSON array to `--prepare-command-json`; replace only `<manifest-path
 manifest path. The enclosing runner still applies the manifest's preparation timeout. Cleanup after
 the final repetition remains an explicit, equally confirmed operation using `--cleanup`.
 
+Loadgen readiness separates dependency validation from periodic health. The one-shot
+`loadgen-init` service uses the same loadgen image and resource limits to run `python -c "import
+locust"`; Compose cannot start `loadgen` until that service completes successfully. Import failure
+therefore prevents readiness. Once started, `loadgen` uses `python -c "pass"` every five seconds,
+with the existing timeout/retry settings. This lightweight check does not validate dependencies
+or workload progress: the runner still supervises process exits, bounded timeouts, phase markers
+and final artifacts. Use this same mechanism in the primary v1.0 versus v1.1 comparison. Earlier
+nonofficial pilots retain their original configuration and results; the isolated no-request
+healthcheck diagnostic establishes no application-throughput gain.
+
 Structural contract version 1 includes the exact public application tables; column ordinal, full
 physical type, nullability, normalized default, identity and generated mode; primary, unique,
 foreign-key and check constraints with columns, actions and deferrability; and complete index keys,

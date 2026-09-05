@@ -1509,6 +1509,9 @@ Pode adicionar Jaeger e exportação OTLP sem alterar a lógica de negócio. O p
 
 - recursos de app e banco;
 - serviço `loadgen` isolado, sem execução dentro do container da aplicação;
+- importação obrigatória de Locust em etapa transitória da mesma imagem, concluída com sucesso
+  antes de iniciar o loadgen; healthcheck periódico leve (`python -c "pass"`), sem substituir
+  a supervisão de erros e timeouts do workload pelo runner; mesmo mecanismo na comparação v1.0 × v1.1;
 - um worker do app;
 - configuração de logging e tracing;
 - banco e volumes exclusivos;

@@ -32,6 +32,12 @@ x-app-image: &app-image
     context: .
     target: runtime
 
+x-loadgen-image: &loadgen-image
+  image: fulfillflow-loadgen:benchmark-local
+  build:
+    context: .
+    target: loadgen
+
 services:
   db:
     image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
@@ -97,11 +103,22 @@ services:
           cpus: "${BENCH_APP_CPUS:?Set app CPU limit from the manifest}"
           memory: "${BENCH_APP_MEMORY:?Set app memory limit from the manifest}"
 
+  loadgen-init:
+    <<: *loadgen-image
+    profiles: ["campaign"]
+    entrypoint: ["python"]
+    command: ["-c", "import locust"]
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_LOADGEN_CPUS:?Set loadgen CPU limit from the manifest}"
+          memory: "${BENCH_LOADGEN_MEMORY:?Set loadgen memory limit from the manifest}"
+
   loadgen:
-    image: fulfillflow-loadgen:benchmark-local
-    build:
-      context: .
-      target: loadgen
+    <<: *loadgen-image
     profiles: ["campaign"]
     environment:
       CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:?Set the Alpha benchmark secret}"
@@ -110,7 +127,7 @@ services:
     command: ["-c", "import time; time.sleep(2147483647)"]
     init: true
     healthcheck:
-      test: ["CMD", "python", "-c", "import locust"]
+      test: ["CMD", "python", "-c", "pass"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -118,6 +135,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      loadgen-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
