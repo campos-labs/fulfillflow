@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import csv
 import json
 import os
 from collections import Counter
@@ -32,11 +33,74 @@ from benchmarks.locustfile import (
     _target_status,
     _warmup_scheduled_offset,
     _webhook_failure,
+    _write_response_artifacts,
     effective_request_weights,
 )
+from benchmarks.run_campaign import _promote_final_statistics
 from locust import stats as locust_stats
+from locust.env import Environment
 
 FIXTURE = Path("benchmarks/fixtures/smoke-campaign.json")
+
+
+def test_final_export_includes_last_drained_response_and_its_percentiles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    environment = Environment()
+    tally = ResponseTally()
+    monkeypatch.setattr("benchmarks.locustfile._TALLY", tally)
+    monkeypatch.setenv("BENCHMARK_RESPONSE_CODES_FILE", str(tmp_path / "response_codes.csv"))
+    monkeypatch.setenv(
+        "BENCHMARK_OPERATIONAL_RESULTS_FILE", str(tmp_path / "operational_results.http.csv")
+    )
+    environment.stats.log_request("GET", "route", 10, 1)
+    tally.record(200, "{}")
+    with (tmp_path / "locust_stats.csv").open("w", newline="") as stream:
+        locust_stats.StatsCSV(environment, locust_stats.PERCENTILES_TO_REPORT).requests_csv(
+            csv.writer(stream)
+        )
+    # Accepted before the deadline, completed after the periodic snapshot.
+    environment.stats.log_request("GET", "route", 1000, 1)
+    tally.record(200, "{}")
+    _write_response_artifacts(environment)
+    _promote_final_statistics(tmp_path)
+    with (tmp_path / "locust_stats.csv").open() as stream:
+        final = list(csv.DictReader(stream))[-1]
+    assert final["Request Count"] == "2"
+    assert final["95%"] == "1000"
+
+
+def test_final_export_refuses_response_tally_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    environment = Environment()
+    monkeypatch.setattr("benchmarks.locustfile._TALLY", ResponseTally())
+    monkeypatch.setenv("BENCHMARK_RESPONSE_CODES_FILE", str(tmp_path / "response_codes.csv"))
+    monkeypatch.setenv(
+        "BENCHMARK_OPERATIONAL_RESULTS_FILE", str(tmp_path / "operational_results.http.csv")
+    )
+    environment.stats.log_request("GET", "route", 10, 1)
+    with pytest.raises(RuntimeError, match="diverge"):
+        _write_response_artifacts(environment)
+    assert environment.process_exit_code == 2
+
+
+def test_admission_rejects_at_exact_deadline_without_waiting_for_coordinator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _bundle()
+    clock = [0.0]
+    monkeypatch.setattr("benchmarks.locustfile.time.monotonic", lambda: clock[0])
+    runtime = CampaignRuntime(bundle, bundle.manifest.loads[0], "measurement")
+    runtime.begin_phase("measurement")
+    clock[0] = 299.999
+    assert runtime.begin_request()
+    clock[0] = 300.0
+    assert not runtime.begin_request()
+    assert runtime.in_flight == 1
+    runtime.finish_request()
+    assert runtime.in_flight == 0
 
 
 @lru_cache(maxsize=1)

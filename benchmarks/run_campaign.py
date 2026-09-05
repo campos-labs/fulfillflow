@@ -416,6 +416,7 @@ def _run_phase(
         bundle.manifest.timeouts.command_seconds,
     )
     _remove_runtime_markers(destination)
+    _promote_final_statistics(destination)
     validate_resource_samples(destination / "resources.csv", observed.container_ids)
     return PhaseExecution(phase, started_at, datetime.now(UTC), returncode)
 
@@ -470,6 +471,27 @@ def _locust_command(
         )
     )
     return command
+
+
+def _promote_final_statistics(directory: Path) -> None:
+    """Require a final drained snapshot instead of trusting the periodic export."""
+    try:
+        final = directory / "locust_final_stats.csv"
+        with final.open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        aggregate = [row for row in rows if row["Name"] == "Aggregated"]
+        with (directory / "response_codes.csv").open(encoding="utf-8", newline="") as stream:
+            responses = sum(int(row["count"]) for row in csv.DictReader(stream))
+        if len(aggregate) != 1 or int(aggregate[0]["Request Count"]) != responses:
+            raise ValueError
+        if (
+            sum(int(row["Request Count"]) for row in rows if row["Name"] != "Aggregated")
+            != responses
+        ):
+            raise ValueError
+        final.replace(directory / "locust_stats.csv")
+    except (OSError, KeyError, ValueError, csv.Error) as exc:
+        raise CampaignExecutionError("final Locust statistics are missing or inconsistent") from exc
 
 
 class ManagedProcess:

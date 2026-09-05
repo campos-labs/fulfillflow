@@ -136,6 +136,12 @@ def test_run_phase_physically_separates_warmup_from_measurement_csvs(
         destination = Path(command[3])
         destination.mkdir(parents=True, exist_ok=True)
         phase = "warmup" if "/warmup/." in source else "measurement"
+        (destination / "locust_final_stats.csv").write_text(
+            "Name,Request Count\nroute,1\nAggregated,1\n", encoding="utf-8"
+        )
+        (destination / "response_codes.csv").write_text(
+            "status_code,problem_code,count\n200,,1\n", encoding="utf-8"
+        )
         (destination / "locust_stats_history.csv").write_text(
             f"timestamp,name\n1,{phase}-request\n",
             encoding="utf-8",

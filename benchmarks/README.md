@@ -270,6 +270,14 @@ CPU, invalid memory and missing PostgreSQL connection counts. This verifies data
 an uncalibrated cadence tolerance: actual sample timestamps must still be reviewed for collection
 overhead and gaps. Measurement sampling and canonical measurement CSV locations remain unchanged.
 
+The sampler reads fresh one-shot counters from the local Docker Engine through its current
+context's Unix socket or Windows named pipe. One bounded helper process reads all three containers;
+CPU percentages use consecutive cumulative CPU/system-counter deltas with Docker's CPU scale,
+and memory excludes inactive file cache as in Docker CLI stats. PostgreSQL connection counts remain
+a read-only `psql` query. Deadlines are monotonic and fixed to the declared interval; missed deadlines
+are skipped without catch-up bursts. Collection cost and actual cadence still require review under
+load. No cadence tolerance or resource threshold is introduced.
+
 For an approved official campaign, five valid repetitions per profile/load are retained and
 `summary.csv` reports their medians for throughput, error rate, p50, and p95. Invalid or interrupted
 repetitions remain marked incomplete and never enter the median. Phase A implements this capability
@@ -298,6 +306,13 @@ Locust process then starts the independent
 application/PostgreSQL caches are warmed, but HTTP connections from the warm-up process are not
 reused. At the measurement deadline, all request types stop being admitted and bounded draining
 finishes before CSVs, counters, and checksums are finalized.
+
+Admission checks the exact deadline for every request, independently of coordinator wake-up latency.
+After bounded drain and user shutdown, the final Locust histogram is exported separately from the
+periodic writer. Once the process exits, the runner verifies its aggregate and per-route request
+counts against the final response tally, then promotes it to canonical `locust_stats.csv` before
+checksumming. Final counts and percentiles therefore include all admitted requests completed during
+drain. `locust_stats_history.csv` remains periodic history; its last row is not the final snapshot.
 
 Pre-measurement identity is logical and cardinal: the same external event IDs, raw payload hashes,
 `occurred_at` values, results, cohort states, row counts, and preserved 15,000 initial events. UUIDs,

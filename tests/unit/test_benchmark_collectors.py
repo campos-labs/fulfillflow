@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from benchmarks.collectors import (
     ExternalCommandError,
     ResourceSampler,
     _normalize_finite_number,
+    _resource_delta,
     run_capture,
     validate_resource_samples,
     write_database_counts,
@@ -300,11 +302,80 @@ class _FakeDatabase:
         return 7
 
 
+_stats_sequence = count(1)
+
+
 def _stats_runner(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
     del timeout
-    assert command[:3] == ["docker", "stats", "--no-stream"]
-    payload = json.dumps({"CPUPerc": "1.5%", "MemUsage": "10MiB / 512MiB"})
+    if command[:3] == ["docker", "context", "inspect"]:
+        return subprocess.CompletedProcess(command, 0, "unix:///var/run/docker.sock", "")
+    assert command[1:4] == ["-B", "-m", "benchmarks.resource_snapshot"]
+    index = next(_stats_sequence)
+    payload = json.dumps(
+        {
+            identifier: {
+                "read": f"{index:020}",
+                "cpu": index * 3,
+                "system": index * 400,
+                "cpus": 2,
+                "memory": 10485760,
+                "limit": 536870912,
+            }
+            for identifier in command[5:]
+        }
+    )
     return subprocess.CompletedProcess(command, 0, payload, "")
+
+
+def test_resource_delta_requires_fresh_counters_and_preserves_docker_cpu_scale() -> None:
+    old = {
+        "read": "2026-09-04T00:00:00Z",
+        "cpu": 100,
+        "system": 1000,
+        "cpus": 8,
+        "memory": 100,
+        "limit": 1000,
+    }
+    new = dict(old, read="2026-09-04T00:00:01Z", cpu=200, system=1800)
+    assert _resource_delta(old, new) == (100.0, 100, 1000)
+    with pytest.raises(ValueError, match="advance"):
+        _resource_delta(old, old)
+    with pytest.raises(ValueError, match="delta"):
+        _resource_delta(old, dict(new, cpu=99))
+
+
+@pytest.mark.parametrize(("query_seconds", "expected_wait"), [(0.3, 0.7), (1.4, 0.6)])
+def test_sampler_schedules_deadlines_without_adding_query_time_or_catchup_bursts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    query_seconds: float,
+    expected_wait: float,
+) -> None:
+    clock = [0.0]
+    waits: list[float] = []
+    monkeypatch.setattr("benchmarks.collectors.time.monotonic", lambda: clock[0])
+
+    class Stop:
+        def wait(self, seconds: float) -> bool:
+            waits.append(seconds)
+            clock[0] += seconds
+            return len(waits) == 3
+
+    def runner(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        clock[0] += query_seconds
+        return _stats_runner(command, timeout)
+
+    sampler = ResourceSampler(
+        tmp_path / "resources.csv",
+        {"postgres": "postgres-id"},
+        _FakeDatabase(),
+        1,
+        command_runner=runner,
+    )  # type: ignore[arg-type]
+    sampler._stop = Stop()  # type: ignore[assignment]
+    sampler._run()
+    assert sampler.error is None
+    assert waits == pytest.approx([expected_wait] * 3)
 
 
 def _docker_runner(*, app_cpus: float = 1.0, tracing_sampling: str = "0.0"):

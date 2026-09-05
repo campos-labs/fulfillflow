@@ -130,6 +130,14 @@ class CampaignRuntime:
         with self._lock:
             if self.phase not in {"warmup", "measurement"}:
                 return False
+            duration = (
+                self.bundle.manifest.warmup_seconds
+                if self.phase == "warmup"
+                else self.bundle.manifest.measurement_seconds
+            )
+            assert self.phase_started_at is not None
+            if time.monotonic() >= self.phase_started_at + duration:
+                return False
             self._in_flight += 1
             return True
 
@@ -610,11 +618,19 @@ def _write_runtime_file(variable: str, content: str) -> None:
 
 
 def _write_response_artifacts(environment: Environment, **_kwargs: object) -> None:
-    del environment
     response = os.environ.get("BENCHMARK_RESPONSE_CODES_FILE")
     operational = os.environ.get("BENCHMARK_OPERATIONAL_RESULTS_FILE")
     if response and operational:
         _TALLY.write(Path(response), Path(operational))
+        # The periodic Locust writer can lag the drained response set. Write to a
+        # separate file; the runner promotes it only after the process exits.
+        if environment.stats.total.num_requests != sum(_TALLY._response_codes.values()):
+            environment.process_exit_code = 2
+            raise RuntimeError("final Locust statistics diverge from response tally")
+        exporter = locust_stats.StatsCSV(environment, locust_stats.PERCENTILES_TO_REPORT)
+        final_path = Path(response).with_name("locust_final_stats.csv")
+        with final_path.open("w", encoding="utf-8", newline="") as stream:
+            exporter.requests_csv(csv.writer(stream, lineterminator="\n"))
 
 
 events.init.add_listener(_initialize)  # type: ignore[no-untyped-call]

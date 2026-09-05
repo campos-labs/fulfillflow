@@ -8,6 +8,7 @@ import json
 import math
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -579,12 +580,18 @@ class ResourceSampler:
                         "postgres_active_connections",
                     )
                 )
+                endpoint = self.command_runner(
+                    ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                    self.command_timeout_seconds,
+                ).stdout.strip()
+                previous = self._snapshot(endpoint)
                 next_sample = time.monotonic()
                 while True:
                     timestamp = datetime.now(UTC).isoformat()
                     active_connections = self.database.active_connections()
+                    current = self._snapshot(endpoint)
                     for service, identifier in sorted(self.container_ids.items()):
-                        stats = self._stats(identifier)
+                        stats = _resource_delta(previous[identifier], current[identifier])
                         writer.writerow(
                             (
                                 timestamp,
@@ -597,24 +604,54 @@ class ResourceSampler:
                             )
                         )
                     stream.flush()
+                    previous = current
                     next_sample += self.interval_seconds
+                    # Skip missed deadlines instead of generating catch-up bursts.
+                    now = time.monotonic()
+                    if next_sample < now:
+                        next_sample += (
+                            math.floor((now - next_sample) / self.interval_seconds) + 1
+                        ) * self.interval_seconds
                     if self._stop.wait(max(0.0, next_sample - time.monotonic())):
                         break
         except Exception:
             self.error = "mandatory resource sampling failed"
 
-    def _stats(self, identifier: str) -> tuple[float, int, int]:
+    def _snapshot(self, endpoint: str) -> dict[str, dict[str, Any]]:
         completed = self.command_runner(
-            ["docker", "stats", "--no-stream", "--format", "{{json .}}", identifier],
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "benchmarks.resource_snapshot",
+                endpoint,
+                *self.container_ids.values(),
+            ],
             self.command_timeout_seconds,
         )
         try:
             payload = json.loads(completed.stdout)
-            cpu = float(str(payload["CPUPerc"]).rstrip("%"))
-            usage, limit = str(payload["MemUsage"]).split("/", maxsplit=1)
+            if not isinstance(payload, dict) or set(payload) != set(self.container_ids.values()):
+                raise ValueError
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ExternalCommandError("docker stats returned an invalid sample") from exc
-        return cpu, _parse_memory_bytes(usage.strip()), _parse_memory_bytes(limit.strip())
+        return payload
+
+
+def _resource_delta(previous: dict[str, Any], current: dict[str, Any]) -> tuple[float, int, int]:
+    for sample in (previous, current):
+        if any(
+            type(sample[key]) is not int or sample[key] < 0
+            for key in ("cpu", "system", "cpus", "memory", "limit")
+        ):
+            raise ValueError("invalid resource counters")
+    if current["read"] <= previous["read"]:
+        raise ValueError("resource snapshot did not advance")
+    system = current["system"] - previous["system"]
+    cpu = current["cpu"] - previous["cpu"]
+    if system <= 0 or cpu < 0 or current["cpus"] <= 0 or current["limit"] <= 0:
+        raise ValueError("invalid resource counter delta")
+    return cpu / system * current["cpus"] * 100, current["memory"], current["limit"]
 
 
 def validate_resource_samples(path: Path, container_ids: Mapping[str, str]) -> None:
