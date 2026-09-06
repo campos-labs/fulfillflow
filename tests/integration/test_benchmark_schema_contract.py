@@ -84,6 +84,18 @@ def test_real_event_observation_preserves_notification_uuid_and_counts(
         assert observed.notification_count == 1
         assert observed.matching_notification_count == 1
         assert observed.raw_body_sha256 == observed.payload_sha256
+        before = target.probe.snapshot("before")
+        # Real large SQL transport, without emitting workload or changing the seeded rows.
+        missing_ids = [f"benchmark-warmup-missing-{index:064d}" for index in range(5159)]
+        target.runner.records.clear()
+        many = target.probe.event_observations([event_id, *missing_ids])
+        assert many == {event_id: observed}
+        record = target.runner.records[0]
+        assert len(record.input_text or "") > 373_000
+        assert len(subprocess.list2cmdline(record.argv)) < 1024
+        assert "--file=-" in record.argv and "--interactive" in record.argv
+        assert "--command" not in record.argv
+        assert target.probe.snapshot("after").metrics() == before.metrics()
         assert target.probe.structural_schema_identity().sha256 == EXPECTED_SCHEMA_SHA256
         _assert_real_probe_transport(target)
 
@@ -155,6 +167,7 @@ def test_real_database_probe_refuses_committed_structural_drift_before_content(
 class _CommandRecord:
     argv: tuple[str, ...]
     output_line_count: int
+    input_text: str | None = None
 
 
 class _RecordingRealRunner:
@@ -167,10 +180,11 @@ class _RecordingRealRunner:
         self,
         command: list[str],
         timeout_seconds: float,
+        input_text: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        completed = run_capture(command, timeout_seconds)
+        completed = run_capture(command, timeout_seconds, input_text)
         line_count = len([line for line in completed.stdout.splitlines() if line.strip()])
-        self.records.append(_CommandRecord(tuple(command), line_count))
+        self.records.append(_CommandRecord(tuple(command), line_count, input_text))
         return completed
 
 
@@ -279,6 +293,7 @@ class _DockerPostgres:
                 POSTGRES_USER,
                 database,
                 command_runner=runner,
+                input_command_runner=runner,
                 timeout_seconds=30.0,
             )
             yield _ProvisionedDatabase(

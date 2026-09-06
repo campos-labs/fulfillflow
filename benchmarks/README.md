@@ -309,10 +309,16 @@ At the boundary, the warm-up process stops admitting requests, drains all reques
 exits, and is checked against the exact quota, expected database deltas and final cohort states. The
 runner checks each warm-up external event ID, carrier and Shipment, exact payload hash and
 `occurred_at`, normalized status, `APPLIED` transition edge, inbox-to-event-to-Notification links,
-and the Shipment ordering pointer. It also rechecks every original dataset row. The measurement
-cohort must remain untouched, including all ordering fields and per-Shipment event counts. A new
-Locust process then starts the independent
-300-second measurement window; its statistics and CSV writers are new rather than reset. The
+and the Shipment ordering pointer. It also rechecks every original dataset row.
+
+The warm-up event-identity query is not sampled or truncated: verification sends its complete SQL
+through stdin to `docker exec --interactive ... psql --file=-`, avoiding Windows argument-length
+limits. It remains one read-only query with the same finite timeout, `ON_ERROR_STOP`, sanitized
+errors and exact identity/cardinality checks. Periodic resource queries keep their existing transport.
+
+The measurement cohort must remain untouched, including all ordering fields and per-Shipment event
+counts. A new Locust process then starts the independent 300-second measurement window; its
+statistics and CSV writers are new rather than reset. The
 application/PostgreSQL caches are warmed, but HTTP connections from the warm-up process are not
 reused. At the measurement deadline, all request types stop being admitted and bounded draining
 finishes before CSVs, counters, and checksums are finalized.

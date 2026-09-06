@@ -32,6 +32,7 @@ from benchmarks.database_contract import (
 )
 
 CommandRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
+InputCommandRunner = Callable[[list[str], float, str], subprocess.CompletedProcess[str]]
 
 
 class ExternalCommandError(RuntimeError):
@@ -285,12 +286,14 @@ class DatabaseProbe:
         database: str,
         *,
         command_runner: CommandRunner | None = None,
+        input_command_runner: InputCommandRunner | None = None,
         timeout_seconds: float = 30,
     ) -> None:
         self.container_id = container_id
         self.user = user
         self.database = database
         self.command_runner = command_runner or run_capture
+        self.input_command_runner = input_command_runner or run_capture
         self.timeout_seconds = timeout_seconds
 
     def server_major(self) -> int:
@@ -440,7 +443,8 @@ class DatabaseProbe:
             "LEFT JOIN tracking_events e ON e.inbox_event_id = i.id "
             "LEFT JOIN notifications n ON n.tracking_event_id = e.id "
             f"WHERE i.external_event_id IN ({literals}) "
-            "GROUP BY i.id, e.id ORDER BY i.external_event_id"
+            "GROUP BY i.id, e.id ORDER BY i.external_event_id",
+            via_stdin=True,
         )
         result: dict[str, EventObservation] = {}
         for row in rows:
@@ -482,9 +486,9 @@ class DatabaseProbe:
                 ) from exc
         return result
 
-    def _json_rows(self, sql: str) -> list[dict[str, object]]:
+    def _json_rows(self, sql: str, *, via_stdin: bool = False) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
-        for line in _output_lines(self._psql(sql)):
+        for line in _output_lines(self._psql(sql, via_stdin=via_stdin)):
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -509,10 +513,11 @@ class DatabaseProbe:
             raise ExternalCommandError("psql scalar probe did not return exactly one row")
         return lines[0]
 
-    def _psql(self, sql: str) -> str:
+    def _psql(self, sql: str, *, via_stdin: bool = False) -> str:
         command = [
             "docker",
             "exec",
+            *(["--interactive"] if via_stdin else []),
             self.container_id,
             "psql",
             "--no-psqlrc",
@@ -524,9 +529,13 @@ class DatabaseProbe:
             "--no-align",
             "--field-separator=|",
             "--set=ON_ERROR_STOP=1",
-            "--command",
-            sql,
         ]
+        if via_stdin:
+            # Event quotas can exceed Windows argv limits. Keep one unchanged query,
+            # outside the measured window, with EOF and ON_ERROR_STOP controlling psql.
+            command.append("--file=-")
+            return self.input_command_runner(command, self.timeout_seconds, sql).stdout
+        command.extend(["--command", sql])
         return self.command_runner(command, self.timeout_seconds).stdout
 
 
@@ -694,13 +703,17 @@ def validate_resource_samples(path: Path, container_ids: Mapping[str, str]) -> N
         ) from exc
 
 
-def run_capture(command: list[str], timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+def run_capture(
+    command: list[str], timeout_seconds: float, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run one bounded argv command without shell or sensitive failure rendering."""
     try:
         completed = subprocess.run(
             command,
             check=False,
             capture_output=True,
+            input=input_text,
+            shell=False,
             text=True,
             encoding="utf-8",
             errors="replace",

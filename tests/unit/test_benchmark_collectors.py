@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
+import sys
 from itertools import count
 from pathlib import Path
 
@@ -295,6 +297,96 @@ def test_nonzero_psql_exit_is_sanitized(
     message = str(captured.value)
     assert message == "external command failed: docker exec"
     assert sensitive not in message
+
+
+@pytest.mark.parametrize("event_count", [24, 5160])
+def test_event_query_uses_bounded_argv_and_complete_stdin(event_count: int) -> None:
+    event_ids = [f"benchmark-warmup-{index:064d}" for index in range(event_count)]
+    calls: list[tuple[list[str], float, str]] = []
+
+    def input_runner(
+        command: list[str], timeout: float, sql: str
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, timeout, sql))
+        assert command[:4] == ["docker", "exec", "--interactive", "postgres-id"]
+        assert command[-1] == "--file=-"
+        assert "--command" not in command
+        assert "--set=ON_ERROR_STOP=1" in command
+        assert len(subprocess.list2cmdline(command)) < 1024
+        assert timeout == 7.0
+        assert all(sql.count(f"'{event_id}'") == 1 for event_id in event_ids)
+        assert "min(n.id::text)" in sql
+        assert "count(n.id)" in sql
+        assert sql.count("SELECT ") == 1
+        # Exercise the real OS pipe without Docker, a shell, or sensitive output.
+        digest = run_capture(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())",
+            ],
+            timeout,
+            sql,
+        ).stdout.strip()
+        assert digest == hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    probe = DatabaseProbe(
+        "postgres-id",
+        "user",
+        "target_database",
+        input_command_runner=input_runner,
+        timeout_seconds=7.0,
+    )
+    assert probe.event_observations(event_ids) == {}
+    assert len(calls) == 1
+    if event_count == 5160:
+        assert len(calls[0][2]) > 373_000
+    assert probe.event_observations([]) == {}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "oserror"])
+def test_stdin_query_failures_preserve_timeout_and_sanitization(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    sensitive = "synthetic-secret raw_body=private database-url-private"
+    calls: list[dict[str, object]] = []
+
+    def process(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(kwargs)
+        assert kwargs["timeout"] == 7.0
+        assert kwargs["shell"] is False
+        assert kwargs["input"] and sensitive in str(kwargs["input"])
+        assert sensitive not in " ".join(command)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 7.0, sensitive, sensitive)
+        if failure == "oserror":
+            raise OSError(sensitive)
+        return subprocess.CompletedProcess(command, 2, sensitive, sensitive)
+
+    monkeypatch.setattr(subprocess, "run", process)
+    probe = DatabaseProbe("postgres-id", "user", "target_database", timeout_seconds=7.0)
+    with pytest.raises(ExternalCommandError) as captured:
+        probe.event_observations([sensitive])
+    assert len(calls) == 1
+    assert sensitive not in str(captured.value)
+    assert "docker exec" in str(captured.value)
+
+
+@pytest.mark.parametrize("output", ["not-json", "{}\n{}"])
+def test_stdin_event_query_rejects_invalid_identity_output(output: str) -> None:
+    def input_runner(
+        command: list[str], _timeout: float, _sql: str
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    probe = DatabaseProbe(
+        "postgres-id", "user", "target_database", input_command_runner=input_runner
+    )
+    with pytest.raises(ExternalCommandError, match="invalid"):
+        probe.event_observations(["synthetic-event"])
 
 
 class _FakeDatabase:
