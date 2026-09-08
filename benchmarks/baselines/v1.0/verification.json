@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-08",
+  "measured_commit": "ae15e0a2da465f4aec3d9c699655441ad1947265",
+  "accepted_repetitions": 30,
+  "points": 6,
+  "valid_repetitions_per_point": 5,
+  "original_interruption_cause": "not_confirmed",
+  "partial_attempt_counted": false,
+  "prior_diagnostics_counted": 0,
+  "canonical_source_hashes": "run-index.json",
+  "summary_transformation": "byte-identical to report-original/summary.json",
+  "index_transformation": "only source paths changed to archive-relative paths",
+  "manifests": "original bytes unchanged",
+  "offline_runtime": "CPython 3.13.1 Windows x64, preserved standard library, -I -S -B",
+  "offline_dependencies": "archive evidence and Python standard library only; no original temporary directories, Docker, PostgreSQL, Locust, uv or installed site-packages",
+  "tests": {"stdlib_unit_tests": 7, "ruff": "passed", "format": "passed", "mypy": "passed; 81 source files; unchanged strict gate"},
+  "typing_revision": {
+    "scope": "annotations, explicit frozen-artifact shapes, casts and local aliases only",
+    "executable_ast_after_erasing_types_and_aliases": "identical to archived publication for both Python files",
+    "summary_and_index_recalculation": "identical to accepted publication",
+    "archived_consolidate_sha256": "15d0033ccd874e96beea99ddb26864c8d4290c3c68e6b1c7a9195382faa14de7",
+    "archived_test_consolidate_sha256": "e050a4a22e4c3e2b14d165cdff4f5719f1567f585686e34e4157380d95ca5734",
+    "historical_archive_and_backup_modified": false
+  },
+  "workload_executed_for_publication": false,
+  "source_evidence_modified": false,
+  "publication_is_documental_not_remeasured": true,
+  "independent_backup_of_notebook": "pending",
+  "backup_local_copy_inventory_verified": "f12a54a7f4bd3696ed0de5f99f30b3df0507f2e7c79e3c5a6fc189a6d043fc82",
+  "backup_cloud_sync_status": "not_confirmed",
+  "publication_status_at_verification": "documentary commit/push authorized; tag/release pending separate approval"
+}

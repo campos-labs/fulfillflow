@@ -1,8 +1,10 @@
-# FulfillFlow benchmark harness — Phase A
+# FulfillFlow benchmark harness
 
-This directory defines reproducible data and workload artifacts. It does not contain an official
-`v1-baseline` campaign or official results. Creating host-specific values and executing the five
-official repetitions are a separate approved phase.
+This directory defines reproducible data and workload artifacts. The accepted v1.0 baseline has
+30 valid official repetitions: mixed/timeline/ingestion, 4/12 users, five repetitions per point.
+See [the portable baseline publication](baselines/v1.0/README.md) for reports, immutable manifests,
+artifact hashes, offline reconstruction and the distinction between measured and release commits.
+Raw results and private diagnostics are archived locally, not included in Git.
 
 ## Frozen logical datasets
 
@@ -106,8 +108,9 @@ measurement_process_seconds > 300 + drain_seconds
 These are minimum consistency rules, not an added numeric safety margin or a guarantee that process
 startup/export overhead fits. The phase-start timeout and per-request timeout remain separate.
 
-Host-dependent users, spawn rate, load levels, CPU, memory, and even warm-up quota `q` are not
-selected in Phase A. There is intentionally no `benchmarks/campaigns/v1-baseline.json`. The file
+Phase A left host-dependent users, spawn rate, CPU, memory and warm-up quota open. The v1.0
+campaign now freezes them in three profile manifests plus the mixed/12 complement; there is no
+single `benchmarks/campaigns/v1-baseline.json`. The file
 `benchmarks/fixtures/smoke-campaign.json` is explicitly synthetic, non-official, and exists only for
 contract tests and validation smoke.
 

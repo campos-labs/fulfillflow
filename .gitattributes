@@ -1,0 +1,3 @@
+# Preserve the frozen manifests and checksummed publication byte-for-byte on checkout.
+benchmarks/campaigns/v1-baseline-*.json -text
+benchmarks/baselines/v1.0/* -text

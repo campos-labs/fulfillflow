@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "name": "v1-baseline-mixed",
+  "official": true,
+  "release": "v1.0.0",
+  "git_sha": "ae15e0a2da465f4aec3d9c699655441ad1947265",
+  "profile": "mixed",
+  "loads": [
+    {
+      "name": "mixed-12-users",
+      "users": 12,
+      "spawn_rate": 16
+    }
+  ],
+  "workers": 1,
+  "warmup_seconds": 60,
+  "measurement_seconds": 300,
+  "stabilization_seconds": 300,
+  "repetitions": 5,
+  "warmup_quota_per_shipment": 430,
+  "occurred_at_step_microseconds": 1000,
+  "warmup_occurred_at_base": "2026-09-01T00:00:00Z",
+  "measurement_occurred_at_base": "2026-09-02T00:00:00Z",
+  "weights": {
+    "shipment_detail": 25,
+    "timeline": 25,
+    "webhook": 30,
+    "shipment_list": 20
+  },
+  "resources": {
+    "app": {
+      "cpus": "2.0",
+      "memory": "1536m"
+    },
+    "postgres": {
+      "cpus": "2.0",
+      "memory": "2560m"
+    },
+    "loadgen": {
+      "cpus": "2.0",
+      "memory": "1536m"
+    }
+  },
+  "pool": {
+    "size": 10,
+    "max_overflow": 0,
+    "timeout_seconds": 5,
+    "statement_timeout_ms": 5000
+  },
+  "images": {
+    "app": "sha256:0fd4920104d4fa867fe9a0ba4a46e9761c0ff80ba5c03178dac5b85080db1fc1",
+    "postgres": "sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280",
+    "loadgen": "sha256:f5b7118626bc3cf156029b9d31399bcba78013a035835db16815616c46bdd906"
+  },
+  "cohorts": {
+    "dataset_manifest": "../datasets/benchmark-v1.0.json",
+    "dataset_sha256": "5897d7441f73fec77d98ff97196aff0becc3f301e45c708febff493d8f4a63bf",
+    "warmup": "mutable_component.warmup",
+    "measurement": "mutable_component.measurement",
+    "timeline": "timeline_read_cohort"
+  },
+  "telemetry": {
+    "log_level": "WARNING",
+    "log_format": "json",
+    "tracing_enabled": false,
+    "tracing_sampling": 0
+  },
+  "environment": {
+    "compose_project": "fulfillflow-benchmark",
+    "compose_file": "compose.benchmark.yaml",
+    "services": {
+      "app": "app",
+      "postgres": "db",
+      "loadgen": "loadgen"
+    }
+  },
+  "host": {
+    "identity": {
+      "os": "Windows",
+      "os_version": "10.0.26200",
+      "os_build": "26200.9278",
+      "cpu_model": "Intel(R) Core(TM) 5 120U",
+      "physical_cores": 10,
+      "logical_processors": 12,
+      "physical_memory_bytes": 16847921152,
+      "docker_engine": "29.7.2",
+      "docker_compose": "5.5.0",
+      "wsl_version": "2.3.24.0",
+      "wsl_kernel": "5.15.153.1-microsoft-standard-WSL2",
+      "docker_cpus": 12,
+      "docker_memory_bytes": 8165453824
+    },
+    "docker_memory_tolerance_bytes": 1048576,
+    "conditions": {
+      "ac_power": true,
+      "power_plan_guid": "ab6534a3-bc02-4c44-94d1-a8535b2eb070",
+      "concurrent_containers": 0
+    }
+  },
+  "database": {
+    "structural_contract_version": 1,
+    "schema_sha256": "0ee99170b78404380541ac12cf676126d047fc60275a4e2947fbe5a68b32652b",
+    "alembic_heads": [
+      "0004_notifications"
+    ]
+  },
+  "timeouts": {
+    "preparation_seconds": 120,
+    "phase_start_seconds": 30,
+    "warmup_process_seconds": 90,
+    "measurement_process_seconds": 330,
+    "drain_seconds": 10,
+    "request_seconds": 10,
+    "command_seconds": 30
+  },
+  "collection_interval_seconds": 1
+}

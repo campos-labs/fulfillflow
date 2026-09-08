@@ -13,3 +13,5 @@ htmlcov/
 .ruff_cache/
 dist/
 build/
+.vscode/settings.json
+benchmarks/results/
