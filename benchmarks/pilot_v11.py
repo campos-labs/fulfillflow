@@ -13,7 +13,14 @@ from benchmarks.campaign import CampaignManifest, load_campaign
 from benchmarks.collectors import run_capture
 from benchmarks.host_probe import HostProbe
 from benchmarks.operational_errors import diagnostics, error_report, write_report
-from benchmarks.prepare_v11 import COMPOSE, ROOT, compose_prefix, reuse_loadgen_audit
+from benchmarks.prepare_v11 import (
+    COMPOSE,
+    PILOT_WINDOWS_NAME,
+    ROOT,
+    compose_prefix,
+    pilot_windows_document,
+    reuse_loadgen_audit,
+)
 
 
 def pilot_document(candidate: Path, destination: Path) -> dict[str, Any]:
@@ -22,8 +29,12 @@ def pilot_document(candidate: Path, destination: Path) -> dict[str, Any]:
     baseline = CampaignManifest.model_validate_json(
         (ROOT / "benchmarks/campaigns/v1-baseline-mixed.json").read_text()
     ).model_dump(mode="json")
-    if document["release"] != "v1.1.0" or not document["official"]:
-        raise ValueError("pilot requires a reviewed v1.1 official-matrix candidate")
+    if document["release"] != "v1.1.0":
+        raise ValueError("pilot requires a reviewed v1.1 candidate")
+    if not document["official"]:
+        if document["name"] != PILOT_WINDOWS_NAME:
+            raise ValueError("unrecognized non-official pilot decision")
+        baseline = pilot_windows_document(baseline)
     if document["internal_timeouts"] != {"core_seconds": 6, "tracking_seconds": 8}:
         raise ValueError("candidate differs from the reviewed internal deadlines")
     changed = {
@@ -50,7 +61,8 @@ def pilot_document(candidate: Path, destination: Path) -> dict[str, Any]:
     if document["environment"]["compose_file"] != COMPOSE.name:
         raise ValueError("candidate must use the reviewed owner Compose")
     compose_prefix(document["environment"]["compose_project"])
-    document.update(name="v11-pilot-mixed-4-q430", official=False, repetitions=1)
+    if document["official"]:
+        document.update(name="v11-pilot-mixed-4-q430", official=False, repetitions=1)
     document["loads"] = [load for load in document["loads"] if load["users"] == 4]
     if len(document["loads"]) != 1 or document["warmup_quota_per_shipment"] != 430:
         raise ValueError("pilot requires mixed/4 and q=430")

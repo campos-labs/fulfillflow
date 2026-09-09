@@ -163,6 +163,58 @@ snapshot SQL global nem recovery sem reentrega. Falhas deixam a repetição inco
 
 ## Duração e limites de aceite
 
+### Candidato exclusivo do piloto no Windows 26200.9445
+
+Foi autorizada a geração, sem execução, de um novo candidato não oficial no build
+`26200.9445`. A baseline `26200.9278` e seus manifests/resultados continuam históricos
+e imutáveis. `prepare_v11 manifest --pilot-windows-26200-9445` usa o fluxo de identidades
+observadas, produz somente mixed/4, q=430, uma repetição, e grava `environment-decision.json`
+com a referência/hash da baseline e a divergência explícita. A opção não consulta o OS
+para escolher a expectativa; qualquer build diferente continuará bloqueado pelo comparador.
+
+Pacote novo: `benchmarks/results/v11-pilot-win9445-review`. Arquivo candidato:
+`v11-pilot-mixed-4-q430-win-26200-9445.json`. A evidência do preflight completo fica no
+mesmo pacote. O launcher aceita essa decisão delimitada, preservando todos os outros
+parâmetros. Uma consulta Docker vazia só confirma zero containers quando retorna sucesso;
+erro, saída inválida ou containers esperados ausentes continuam bloqueando o preflight.
+
+Comando manual, **somente após autorização da execução**, a partir da raiz:
+
+```powershell
+pwsh -NoProfile -File .\scripts\Invoke-V11Pilot.ps1 `
+  -Candidate .\benchmarks\results\v11-pilot-win9445-review\v11-pilot-mixed-4-q430-win-26200-9445.json `
+  -Audit .\benchmarks\results\v11-pilot-win9445-review\loadgen-compatibility.json `
+  -Destination .\benchmarks\results\v11-pilot-win9445-attempt-01
+```
+
+Acrescentar `-PlanOnly` verifica o plano sem carga. O pacote anterior continua reproduzível
+e recusará o build atual. O launcher exige `pwsh` 7; registrar versão e caminho observados
+no pacote. Um preflight aprovado é uma observação, não dispensa os gates na execução futura.
+
+### Proposta delimitada antes da comparação oficial — ainda não autorizada
+
+Os dados existentes sustentam a descrição da v1.0 no build antigo e os testes funcionais
+de consistência. Uma comparação com v1.1 no build novo deve declarar a mudança como fator
+de confusão: não permite atribuir a diferença de desempenho somente à extração. Um piloto
+v1.1 válido também não estima o efeito da atualização sobre v1.0 nem prova efeito nulo.
+
+Para sustentar uma comparação no host atual, proponho revalidação delimitada de v1.0:
+inicialmente **12 execuções diagnósticas**, duas por célula dos três perfis × 4/12 users,
+com imagens/lock/dataset/workload e tempos v1.0 preservados, apenas a expectativa explícita
+do novo build e identidades próprias em destino novo. Isso cobre toda a matriz com um
+escopo menor que repetir automaticamente as 30 oficiais. Duas repetições são triagem;
+não bastam para demonstrar equivalência ou efeito nulo.
+
+Antes da triagem, acordar margens de relevância prática para throughput, latências e
+recursos, usando a dispersão histórica como referência, sem escolher limites depois de
+ver resultados. Verificar primeiro validade HTTP/efeitos, completude e condições do host.
+Diferenças sistemáticas ou resultados inconclusivos justificam ampliar a amostra nas
+células afetadas e estabelecer referência v1.0 pareada no novo host antes de alegações
+quantitativas. Se não houver revalidação, restringir conclusões a comparação descritiva
+entre ambientes, explicitando a impossibilidade de separar seus efeitos. A quantidade
+final e eventual necessidade de uma nova baseline oficial serão decididas com essas
+evidências; nenhuma repetição histórica é sobrescrita nem 30 novas execuções presumidas.
+
 Matriz futura: três perfis × 4/12 users × cinco repetições = 30 válidas. O piso temporal é
 30 × (300 s estabilização + 60 s warm-up + 300 s measurement) = **5 h 30 min**, mais preparo,
 drain, verificações e exportações. O teto configurado das esperas principais, sem exportação,

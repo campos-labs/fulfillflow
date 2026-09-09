@@ -41,6 +41,43 @@ def test_derivation_changes_only_authorized_selection_and_path(candidate, tmp_pa
         assert result[key] == original[key]
 
 
+def test_windows_pilot_is_explicit_nonofficial_and_preserves_other_parameters(candidate, tmp_path):
+    original = json.loads(candidate.read_text())
+    pinned = prepare.pilot_windows_document(original)
+    assert original["host"]["identity"]["os_build"] == "26200.9278"
+    assert pinned["official"] is False and pinned["repetitions"] == 1
+    assert pinned["host"]["identity"]["os_build"] == "26200.9445"
+    host = json.loads(json.dumps(pinned["host"]))
+    host["identity"]["os_build"] = "26200.9278"
+    assert host == original["host"]
+    for key in original.keys() - {"name", "loads", "official", "repetitions", "host"}:
+        assert pinned[key] == original[key]
+    write_report(candidate, pinned)
+    derived = pilot.pilot_document(candidate, tmp_path / "attempt")
+    assert derived["name"] == prepare.PILOT_WINDOWS_NAME
+    assert derived["host"] == pinned["host"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("build", "26200.9999"),
+        ("official", True),
+        ("repetitions", 2),
+        ("profile", "timeline"),
+    ],
+)
+def test_windows_decision_cannot_expand_or_follow_the_host(candidate, tmp_path, field, value):
+    pinned = prepare.pilot_windows_document(json.loads(candidate.read_text()))
+    if field == "build":
+        pinned["host"]["identity"]["os_build"] = value
+    else:
+        pinned[field] = value
+    write_report(candidate, pinned)
+    with pytest.raises(ValueError):
+        pilot.pilot_document(candidate, tmp_path / "attempt")
+
+
 @pytest.mark.parametrize(
     "field,value", [("warmup_quota_per_shipment", 432), ("stabilization_seconds", 0)]
 )

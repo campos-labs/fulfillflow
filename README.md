@@ -22,6 +22,9 @@ ao incremento III e ainda exigem autorização.
 No chat 11, a entrada `scripts/Invoke-V11Pilot.ps1` foi preparada para uma única
 tentativa não oficial mixed/4 com preflight bloqueante e preservação de diagnósticos.
 O pacote descreve o modo `-PlanOnly` sem carga e o comando futuro; nenhum piloto foi executado.
+Uma decisão posterior autoriza preparar um candidato exclusivamente não oficial no
+Windows `26200.9445`, com divergência da baseline registrada e sem adaptar expectativas
+automaticamente. O comando e a pendência metodológica oficial estão no mesmo pacote.
 
 O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
 

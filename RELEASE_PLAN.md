@@ -140,6 +140,12 @@ Registro histórico do primeiro incremento; a situação atual está abaixo.
 
 ## Situação do incremento II
 
+Autorização posterior ao chat 11: preparar exclusivamente um piloto não oficial mixed/4,
+q=430, uma repetição no Windows `26200.9445`, declarando a divergência da baseline
+`26200.9278`. Expectativa fixada no candidato novo; comparador e demais gates preservados.
+Execução do piloto e tratamento da mudança de ambiente na comparação oficial continuam
+pendentes de autorização. Proposta de revalidação delimitada em `benchmarks/V11_REVIEW.md`.
+
 - Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
 - Implementados matriz adversa adicional, loader/restauração segregados, identidades v1.1,
   deadlines internos compatíveis, telemetria separada/agregada, conciliação e geração de manifests candidatos.

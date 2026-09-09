@@ -1830,6 +1830,13 @@ recria apenas um projeto isolado cuja propriedade foi registrada quando estava a
 O pacote e os comandos estão em `benchmarks/V11_REVIEW.md`; os manifests candidatos
 são materializados com HEAD/imagens/schemas reais e conservam as expectativas do host.
 
+Exceção autorizada exclusivamente para o piloto não oficial: Windows build
+`26200.9445`, divergente da baseline `26200.9278`, fixado na geração de um candidato
+novo mixed/4, q=430, uma repetição. O comparador permanece exato; não há atualização
+automática de expectativas. Demais parâmetros são preservados. Essa autorização
+não estende a mudança à campanha oficial, cuja comparabilidade de ambiente exige
+decisão própria conforme a proposta em `benchmarks/V11_REVIEW.md`.
+
 A instrumentação deve observar Core/Tracking separados e agregados, reconciliar
 Locust/HTTP/efeitos nos dois bancos e preservar completude e checksums. Mantém-se a
 importação obrigatória de Locust antes da prontidão, healthcheck periódico leve e

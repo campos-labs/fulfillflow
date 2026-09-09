@@ -9,7 +9,9 @@ import os
 import re
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from benchmarks.campaign import CampaignManifest, load_campaign
 from benchmarks.collectors import DatabaseProbe, DockerProbe, ExternalCommandError, run_capture
@@ -23,6 +25,25 @@ ROOT = Path(__file__).resolve().parents[1]
 FROZEN_LOADGEN = "sha256:f5b7118626bc3cf156029b9d31399bcba78013a035835db16815616c46bdd906"
 FROZEN_TAG = "fulfillflow-loadgen:v10-frozen-f5b7118626bc"
 COMPOSE = ROOT / "compose.benchmark-v11.yaml"
+PILOT_WINDOWS_BUILD = "26200.9445"
+PILOT_WINDOWS_NAME = "v11-pilot-mixed-4-q430-win-26200-9445"
+
+
+def pilot_windows_document(matrix: dict[str, Any]) -> dict[str, Any]:
+    """Apply the explicit pilot-only decision; never observe or adopt the running OS."""
+    if (
+        matrix["profile"] != "mixed"
+        or not matrix["official"]
+        or matrix["host"]["identity"]["os_build"] != "26200.9278"
+    ):
+        raise ValueError("Windows pilot must derive from the original mixed matrix")
+    result = deepcopy(matrix)
+    result.update(name=PILOT_WINDOWS_NAME, official=False, repetitions=1)
+    result["loads"] = [load for load in result["loads"] if load["users"] == 4]
+    if len(result["loads"]) != 1:
+        raise ValueError("mixed/4 load is required")
+    result["host"]["identity"]["os_build"] = PILOT_WINDOWS_BUILD
+    return result
 
 
 def compose_prefix(project: str) -> list[str]:
@@ -303,7 +324,13 @@ def reuse_loadgen_audit(candidate: str, report_path: Path) -> dict[str, object]:
     return report
 
 
-def materialize(project: str, destination: Path, audit_report: Path | None = None) -> None:
+def materialize(
+    project: str,
+    destination: Path,
+    audit_report: Path | None = None,
+    *,
+    pilot_windows_26200_9445: bool = False,
+) -> None:
     """Record real identities and unchanged workload parameters in candidate manifests."""
     compose = compose_prefix(project)
     if run_capture(["git", "status", "--porcelain", "--untracked-files=no"], 10).stdout.strip():
@@ -356,7 +383,7 @@ def materialize(project: str, destination: Path, audit_report: Path | None = Non
     destination.mkdir(parents=True, exist_ok=False)
     incomplete = destination / ".incomplete.json"
     incomplete.write_text('{"ready": false}\n', encoding="utf-8")
-    for profile in ("mixed", "timeline", "ingestion"):
+    for profile in ("mixed",) if pilot_windows_26200_9445 else ("mixed", "timeline", "ingestion"):
         baseline = json.loads(
             (ROOT / f"benchmarks/campaigns/v1-baseline-{profile}.json").read_text()
         )
@@ -392,6 +419,8 @@ def materialize(project: str, destination: Path, audit_report: Path | None = Non
         baseline["cohorts"]["dataset_manifest"] = os.path.relpath(
             ROOT / "benchmarks/datasets/benchmark-v1.0.json", destination
         ).replace("\\", "/")
+        if pilot_windows_26200_9445:
+            baseline = pilot_windows_document(baseline)
         manifest = CampaignManifest.model_validate(baseline)
         target = destination / f"{manifest.name}.json"
         target.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -420,6 +449,23 @@ def materialize(project: str, destination: Path, audit_report: Path | None = Non
     (destination / "loadgen-compatibility.json").write_text(
         json.dumps(compatibility, indent=2) + "\n", encoding="utf-8"
     )
+    if pilot_windows_26200_9445:
+        reference = ROOT / "benchmarks/campaigns/v1-baseline-mixed.json"
+        write_report(
+            destination / "environment-decision.json",
+            {
+                "scope": "non-official mixed/4 pilot only; execution not authorized",
+                "field": "host.identity.os_build",
+                "baseline": "26200.9278",
+                "candidate": PILOT_WINDOWS_BUILD,
+                "automatic_adaptation": False,
+                "baseline_manifest": "benchmarks/campaigns/v1-baseline-mixed.json",
+                "baseline_manifest_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
+                "candidate_manifest": target.name,
+                "candidate_manifest_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "official_comparison": "pending a separate methodological decision",
+            },
+        )
     incomplete.unlink()
     checksums = {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -437,13 +483,19 @@ def main() -> int:
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--with-loadgen", action="store_true")
     parser.add_argument("--audit-report", type=Path)
+    parser.add_argument("--pilot-windows-26200-9445", action="store_true")
     args = parser.parse_args()
     if args.action == "build-loadgen":
         print(build_loadgen())
     elif args.action == "manifest":
         if args.destination is None:
             parser.error("--destination is required")
-        materialize(args.project, args.destination, args.audit_report)
+        materialize(
+            args.project,
+            args.destination,
+            args.audit_report,
+            pilot_windows_26200_9445=args.pilot_windows_26200_9445,
+        )
     else:
         restore(
             args.project,
