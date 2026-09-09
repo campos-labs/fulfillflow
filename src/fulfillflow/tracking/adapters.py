@@ -8,12 +8,12 @@ from typing import ClassVar, Protocol
 
 from pydantic import ValidationError
 
-from fulfillflow.carriers.schemas import (
+from fulfillflow.contracts.tracking import CarrierPayloadProjection
+from fulfillflow.tracking.carrier_schemas import (
     AlphaCarrierPayload,
     BetaCarrierPayload,
     CanonicalCarrierEvent,
     CanonicalShipmentStatus,
-    CarrierPayloadProjection,
 )
 
 

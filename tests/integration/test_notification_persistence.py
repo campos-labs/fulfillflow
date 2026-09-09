@@ -29,7 +29,6 @@ NOTIFICATION_IDS = tuple(UUID(int=value) for value in range(936, 940))
 
 
 async def _insert_owners_and_events(database: Database, *, event_count: int = 4) -> None:
-    shipment_ids = (SHIPMENT_ID, SHIPMENT_ID, SECOND_SHIPMENT_ID, SECOND_SHIPMENT_ID)
     async with database.engine.begin() as connection:
         await connection.execute(
             text(
@@ -71,55 +70,6 @@ async def _insert_owners_and_events(database: Database, *, event_count: int = 4)
                 "carrier_id": CARRIER_ID,
                 "now": NOW,
             },
-        )
-        await connection.execute(
-            text(
-                "INSERT INTO carrier_event_inbox "
-                "(id, carrier_id, external_event_id, payload_sha256, raw_body, "
-                "parsed_payload, received_at, status, error_code, error_detail, "
-                "processed_at, request_id) VALUES "
-                "(:id, :carrier_id, :external_event_id, :payload_sha256, :raw_body, "
-                "CAST(:parsed_payload AS jsonb), :received_at, 'PROCESSED', NULL, NULL, "
-                ":processed_at, :request_id)"
-            ),
-            [
-                {
-                    "id": INBOX_IDS[index],
-                    "carrier_id": CARRIER_ID,
-                    "external_event_id": f"notification-event-{index}",
-                    "payload_sha256": f"{index + 1:x}" * 64,
-                    "raw_body": b"{}",
-                    "parsed_payload": "{}",
-                    "received_at": NOW + timedelta(minutes=index),
-                    "processed_at": NOW + timedelta(minutes=index),
-                    "request_id": REQUEST_IDS[index],
-                }
-                for index in range(event_count)
-            ],
-        )
-        await connection.execute(
-            text(
-                "INSERT INTO tracking_events "
-                "(id, inbox_event_id, shipment_id, carrier_id, external_status, "
-                "canonical_status, description, location, occurred_at, received_at, "
-                "application_result, previous_shipment_status, resulting_shipment_status, "
-                "created_at) VALUES "
-                "(:id, :inbox_event_id, :shipment_id, :carrier_id, 'in_transit', "
-                "'IN_TRANSIT', NULL, NULL, :occurred_at, :received_at, 'APPLIED', "
-                "'POSTED', 'IN_TRANSIT', :created_at)"
-            ),
-            [
-                {
-                    "id": TRACKING_EVENT_IDS[index],
-                    "inbox_event_id": INBOX_IDS[index],
-                    "shipment_id": shipment_ids[index],
-                    "carrier_id": CARRIER_ID,
-                    "occurred_at": NOW + timedelta(minutes=index),
-                    "received_at": NOW + timedelta(minutes=index),
-                    "created_at": NOW + timedelta(minutes=index),
-                }
-                for index in range(event_count)
-            ],
         )
 
 
@@ -324,14 +274,13 @@ async def test_foreign_keys_reject_missing_owners_and_restrict_deletion(
         shipment_id=SHIPMENT_ID,
         tracking_event_id=UUID(int=99_992),
     )
-    with pytest.raises(IntegrityError) as tracking_error:
-        async with postgres_database.session() as session, session.begin():
-            await NotificationRepository(session).add(missing_tracking_event)
-    tracking_diagnostic = getattr(tracking_error.value.orig, "diag", None)
-    assert tracking_diagnostic is not None
-    assert (
-        tracking_diagnostic.constraint_name == "fk_notifications_tracking_event_id_tracking_events"
-    )
+    async with postgres_database.session() as session, session.begin():
+        await NotificationRepository(session).add(missing_tracking_event)
+    async with postgres_database.session() as session:
+        assert (
+            await NotificationRepository(session).get(missing_tracking_event.id)
+            == missing_tracking_event
+        )
 
     notification = _notification(
         2,
@@ -353,19 +302,6 @@ async def test_foreign_keys_reject_missing_owners_and_restrict_deletion(
     assert shipment_delete_diagnostic is not None
     assert shipment_delete_diagnostic.constraint_name == "fk_notifications_shipment_id_shipments"
 
-    with pytest.raises(IntegrityError) as tracking_delete_error:
-        async with postgres_database.session() as session, session.begin():
-            await session.execute(
-                text("DELETE FROM tracking_events WHERE id = :id"),
-                {"id": TRACKING_EVENT_IDS[0]},
-            )
-    tracking_delete_diagnostic = getattr(tracking_delete_error.value.orig, "diag", None)
-    assert tracking_delete_diagnostic is not None
-    assert (
-        tracking_delete_diagnostic.constraint_name
-        == "fk_notifications_tracking_event_id_tracking_events"
-    )
-
     async with postgres_database.session() as session:
         delete_actions = dict(
             (
@@ -383,7 +319,6 @@ async def test_foreign_keys_reject_missing_owners_and_restrict_deletion(
         )
     assert delete_actions == {
         "fk_notifications_shipment_id_shipments": "r",
-        "fk_notifications_tracking_event_id_tracking_events": "r",
     }
 
 

@@ -315,7 +315,7 @@ class ShipmentsPublic:
         """Evaluate Order completion after Tracking has staged dependent records.
 
         The caller still holds the Shipment lock. A terminal applied transition
-        acquires the Order lock last, preserving inbox -> Shipment -> Order.
+        acquires the Order lock last, preserving Core's Shipment -> Order order.
         """
         if transition.result is not ShipmentApplicationResult.APPLIED or shipment.status not in {
             ShipmentStatus.DELIVERED,

@@ -13,12 +13,12 @@ from starlette.datastructures import FormData, UploadFile
 from starlette.requests import ClientDisconnect
 from starlette.types import Message
 
+from fulfillflow.contracts.values import InboxStatus
 from fulfillflow.notifications.public import NotificationStatus
 from fulfillflow.orders.public import OrderStatus
 from fulfillflow.orders.schemas import OrderCreate
 from fulfillflow.shipments.public import ShipmentStatus
 from fulfillflow.shipments.schemas import ShipmentCreate
-from fulfillflow.tracking.public import InboxStatus
 
 MAX_FORM_BODY_BYTES = 32_768
 

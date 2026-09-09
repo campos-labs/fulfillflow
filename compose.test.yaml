@@ -1,0 +1,25 @@
+name: fulfillflow-v11-tests
+
+services:
+  db:
+    image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: v11-isolated-admin-test
+      CORE_DB_PASSWORD: v11-isolated-core-test
+      TRACKING_DB_PASSWORD: v11-isolated-tracking-test
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-18541}:5432"
+    volumes:
+      - isolated_test_data:/var/lib/postgresql
+      - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
+      - ./tests/postgres/legacy.sql:/docker-entrypoint-initdb.d/20-legacy.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --host=127.0.0.1 --username=postgres --dbname=postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  isolated_test_data:

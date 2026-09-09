@@ -4,45 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from uuid import UUID
+
+from fulfillflow.contracts.values import InboxStatus, ShipmentApplicationResult, ShipmentStatus
+
+__all__ = [
+    "CarrierEventInbox",
+    "InboxStatus",
+    "JsonValue",
+    "ShipmentApplicationResult",
+    "ShipmentStatus",
+    "TrackingEvent",
+]
 
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
-
-
-class InboxStatus(StrEnum):
-    """Lifecycle of one authenticated Carrier webhook."""
-
-    RECEIVED = "RECEIVED"
-    PROCESSED = "PROCESSED"
-    REJECTED = "REJECTED"
-
-
-class ShipmentStatus(StrEnum):
-    """Shipment status values copied into the immutable Tracking timeline.
-
-    Tracking owns this persisted representation. Conversion to and from the
-    Shipments public enum happens in the application service boundary.
-    """
-
-    PENDING = "PENDING"
-    POSTED = "POSTED"
-    IN_TRANSIT = "IN_TRANSIT"
-    OUT_FOR_DELIVERY = "OUT_FOR_DELIVERY"
-    DELIVERED = "DELIVERED"
-    EXCEPTION = "EXCEPTION"
-    RETURNED = "RETURNED"
-    CANCELLED = "CANCELLED"
-
-
-class ShipmentApplicationResult(StrEnum):
-    """Result persisted for application of one canonical event."""
-
-    APPLIED = "APPLIED"
-    NO_STATE_CHANGE = "NO_STATE_CHANGE"
-    IGNORED_STALE = "IGNORED_STALE"
-    IGNORED_INVALID_TRANSITION = "IGNORED_INVALID_TRANSITION"
 
 
 @dataclass(slots=True)
@@ -61,6 +37,7 @@ class CarrierEventInbox:
     error_detail: str | None
     processed_at: datetime | None
     request_id: UUID
+    command: dict[str, JsonValue] | None = None
 
     def mark_processed(self, processed_at: datetime) -> None:
         """Finalize a successfully normalized event."""

@@ -13,6 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from fulfillflow.api.dependencies import get_clock, get_session
+from fulfillflow.contracts.tracking import (
+    CarrierEventFilters,
+)
+from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.tracking_client import get_tracking
 from fulfillflow.notifications.public import NotificationService, NotificationStatus
 from fulfillflow.notifications.schemas import (
     NotificationFilters,
@@ -29,13 +34,6 @@ from fulfillflow.shipments.public import (
 from fulfillflow.shipments.schemas import (
     ShipmentListFilters,
     ShipmentRead,
-)
-from fulfillflow.tracking.public import InboxStatus, TrackingService
-from fulfillflow.tracking.schemas import (
-    CarrierEventFilters,
-    CarrierEventRead,
-    CarrierEventSummaryRead,
-    TrackingEventRead,
 )
 from fulfillflow.web.forms import (
     FormBoundaryError,
@@ -108,7 +106,7 @@ async def dashboard(
     session: SessionDependency,
     clock: ClockDependency,
 ) -> Response:
-    view = await get_dashboard(session, clock)
+    view = await get_dashboard(session, clock, get_tracking(request))
     return render_page(
         request,
         "content/dashboard.html",
@@ -427,7 +425,7 @@ async def shipment_tracking(
     except (FormBoundaryError, ValueError) as error:
         return _query_error(request, error)
     shipment = ShipmentRead.from_view(await ShipmentService(session, clock).get(shipment_id))
-    result = await TrackingService(session, clock).timeline(
+    result = await get_tracking(request).timeline(
         shipment_id,
         page=page,
         page_size=_PAGE_SIZE,
@@ -439,7 +437,7 @@ async def shipment_tracking(
         section="shipments",
         context={
             "shipment": shipment,
-            "events": [TrackingEventRead.from_event(item) for item in result.items],
+            "events": result.items,
             "pager": _pager(request, result.page, result.page_size, result.total),
         },
     )
@@ -466,7 +464,7 @@ async def list_inbox(
         query = parse_query(InboxListQuery, raw)
     except (FormBoundaryError, ValidationError) as error:
         return _query_error(request, error)
-    result = await TrackingService(session, clock).list_inbox(
+    result = await get_tracking(request).list_inbox(
         CarrierEventFilters(
             carrier_code=query.carrier_code,
             status=query.status,
@@ -483,7 +481,7 @@ async def list_inbox(
         title="Carrier event inbox",
         section="inbox",
         context={
-            "events": [CarrierEventSummaryRead.from_view(item) for item in result.items],
+            "events": result.items,
             "carriers": _CARRIERS,
             "inbox_statuses": tuple(InboxStatus),
             "filters": _filter_values(
@@ -508,9 +506,7 @@ async def inbox_detail(
     session: SessionDependency,
     clock: ClockDependency,
 ) -> Response:
-    event = CarrierEventRead.from_view(
-        await TrackingService(session, clock).get_inbox(inbox_event_id)
-    )
+    event = await get_tracking(request).get_inbox(inbox_event_id)
     return render_page(
         request,
         "content/inbox_detail.html",

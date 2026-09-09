@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from httpx import AsyncClient, HTTPError
+from scripts.prepare_demo_v11 import prepare
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
@@ -23,10 +24,14 @@ from fulfillflow.db import Database
 async def test_external_simulator_updates_the_complete_operational_ui(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_settings: Settings,
 ) -> None:
     del postgres_database  # Owns schema cleanup; the live app opens an independent engine.
-    async with _live_application(postgres_settings) as base_url:
+    async with _live_application(postgres_settings, postgres_tracking_settings) as base_url:
         async with AsyncClient(base_url=base_url, timeout=10) as client:
+            first_demo = await prepare(client)
+            assert await prepare(client) == first_demo
+            assert len(first_demo["shipments"]) == 2
             order_response = await client.post(
                 "/api/v1/orders",
                 json={
@@ -139,8 +144,11 @@ async def test_external_simulator_updates_the_complete_operational_ui(
 
 
 @asynccontextmanager
-async def _live_application(settings: Settings) -> AsyncIterator[str]:
+async def _live_application(settings: Settings, tracking: Settings) -> AsyncIterator[str]:
     port = _available_port()
+    tracking_port = _available_port()
+    while tracking_port == port:
+        tracking_port = _available_port()
     environment = dict(os.environ)
     environment.update(
         {
@@ -148,6 +156,10 @@ async def _live_application(settings: Settings) -> AsyncIterator[str]:
             "APP_HOST": "127.0.0.1",
             "APP_PORT": str(port),
             "DATABASE_URL": settings.database_dsn,
+            "SERVICE_ROLE": "core",
+            "INTERNAL_API_SECRET": settings.internal_api_secret.get_secret_value(),
+            "CORE_BASE_URL": f"http://127.0.0.1:{port}",
+            "TRACKING_BASE_URL": f"http://127.0.0.1:{tracking_port}",
             "SESSION_SECRET": settings.session_secret.get_secret_value(),
             "CARRIER_ALPHA_WEBHOOK_SECRET": (
                 settings.carrier_alpha_webhook_secret.get_secret_value()
@@ -158,19 +170,37 @@ async def _live_application(settings: Settings) -> AsyncIterator[str]:
             "PYTHONUNBUFFERED": "1",
         }
     )
-    process = await asyncio.to_thread(_start_application, environment)
+    tracking_environment = dict(environment)
+    tracking_environment.update(
+        SERVICE_ROLE="tracking", APP_PORT=str(tracking_port), DATABASE_URL=tracking.database_dsn
+    )
+    tracking_environment.pop("SESSION_SECRET", None)
+    environment.pop("CARRIER_ALPHA_WEBHOOK_SECRET", None)
+    environment.pop("CARRIER_BETA_WEBHOOK_SECRET", None)
+    processes: list[subprocess.Popen[str]] = []
     base_url = f"http://127.0.0.1:{port}"
     try:
-        await _wait_until_ready(process, base_url)
+        for env, url in (
+            (tracking_environment, f"http://127.0.0.1:{tracking_port}"),
+            (environment, base_url),
+        ):
+            process = await asyncio.to_thread(_start_application, env)
+            processes.append(process)
+            await _wait_until_ready(process, url)
         yield base_url
     finally:
-        await asyncio.to_thread(_stop_application, process)
+        for process in reversed(processes):
+            await asyncio.to_thread(_stop_application, process)
 
 
 def _start_application(environment: Mapping[str, str]) -> subprocess.Popen[str]:
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     return subprocess.Popen(
-        [sys.executable, "-m", "fulfillflow"],
+        [
+            sys.executable,
+            "-m",
+            "fulfillflow.tracking" if environment["SERVICE_ROLE"] == "tracking" else "fulfillflow",
+        ],
         cwd=Path.cwd(),
         env=dict(environment),
         stdout=subprocess.PIPE,

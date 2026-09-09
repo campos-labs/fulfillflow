@@ -6,7 +6,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from fulfillflow.carriers.public import (
+from fulfillflow.tracking.public import (
     AlphaCarrierAdapter,
     BetaCarrierAdapter,
     CanonicalShipmentStatus,
@@ -234,3 +234,10 @@ def test_static_allowlist_resolves_only_alpha_and_beta() -> None:
         resolve_carrier_adapter("fulfillflow.evil.import_path")
 
     assert captured.value.adapter_key == "fulfillflow.evil.import_path"
+
+
+@pytest.mark.parametrize("adapter_key", ["alpha", "beta"])
+def test_invalid_payload_has_no_sanitized_query_projection(adapter_key: str) -> None:
+    from fulfillflow.tracking.adapters import project_known_carrier_payload
+
+    assert project_known_carrier_payload(adapter_key, {"unknown": "field"}) is None

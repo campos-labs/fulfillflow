@@ -2,7 +2,7 @@
 
 ## Authority and scope
 
-- Work only on FulfillFlow v1.0.0 unless the user explicitly changes the scope.
+- Work only on the user-authorized increment of the approved v1.1 Tracking extraction. Preserve the published v1.0.0; DESIGN §30 distinguishes the implemented functional extraction from pending experimental preparation.
 - Read the relevant sections of `DESIGN.md` before changing architecture, domain behavior, persistence, HTTP contracts, security, observability, seeds, or benchmarks.
 - For a targeted task, locate the applicable headings and avoid loading unrelated DESIGN sections into context.
 - `DESIGN.md` is authoritative for product and architecture. This file defines how to work in the repository.
@@ -18,9 +18,7 @@
 5. Run focused checks first, then the broadest relevant validation available.
 6. Review the final diff for scope, secrets, accidental generated files, and DESIGN drift.
 
-For broad implementation requests, advance in executable increments:
-
-`bootstrap/database → Orders/Shipments → Carriers/Tracking → idempotency/concurrency → UI/simulator → tests/seeds → benchmark/observability → CI/release`
+For v1.1 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request.
 
 Do not attempt the entire release in one undifferentiated change. Do not create empty placeholder files merely to reproduce the planned tree.
 
@@ -41,16 +39,16 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## Architecture boundaries
 
-- The application is one modular FastAPI monolith, one application image and one PostgreSQL database.
+- The published v1.0 is a modular monolith. The v1.1 functional extraction is Core + Tracking with segregated databases in one PostgreSQL instance; apply only the substitutions in DESIGN §30.
 - Business modules are `orders`, `shipments`, `carriers`, `tracking` and `notifications`.
 - `shared` contains only stable technical primitives such as clock, IDs and pagination. It contains no business rules and depends on no business module or infrastructure framework.
-- Internal modules communicate through Python public interfaces, never through HTTP.
+- Modules within a service communicate through Python public interfaces. Cross-service communication uses only the authenticated HTTP contracts in DESIGN §30; do not import another service's business implementation or persistence.
 - A module may access only its own ORM models and repositories.
-- Cross-module access goes through `public.py` or an explicitly public schema.
+- Within a service, cross-module access goes through `public.py` or an explicitly public schema.
 - Routers and templates contain no business rules. ORM models are never API schemas.
 - `domain.py` must not depend on FastAPI, SQLAlchemy, web, database or observability infrastructure.
 - Respect this dependency direction:
-  - Tracking may use public Carriers, Shipments and Notifications contracts.
+  - The v1.0 Tracking facade uses public Carriers, Shipments and Notifications contracts; its v1.1 replacement uses the Core contracts in DESIGN §30, not in-process access to those modules.
   - Shipments may use public Orders and Carriers contracts.
   - Orders, Carriers and Notifications do not depend on another business module unless DESIGN is revised first.
 - Keep Import Linter contracts executable. Do not hide forbidden imports behind local imports, `TYPE_CHECKING`, dynamic imports or re-exports.
@@ -62,9 +60,9 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - PostgreSQL 18 is the only supported database. Never introduce SQLite or an in-memory persistence substitute.
 - Use native UUID, `timestamptz`, named constraints and varchar-backed domain enums with named checks as defined in DESIGN.
 - Alembic is the only schema creation and evolution mechanism. Do not call `Base.metadata.create_all()` in runtime or integration tests.
-- Use one `AsyncSession` per request. Scripts establish explicit session and transaction boundaries.
+- Use one `AsyncSession` per request within its owning service. Hold no SQL connection, transaction or lock during cross-service HTTP. Scripts establish explicit session and transaction boundaries.
 - Repositories may query, add and `flush`; they never `commit` or `rollback` a coordinated transaction.
-- The coordinating service owns transaction boundaries. Public module services must participate in the current transaction rather than opening independent sessions.
+- The coordinating service owns local transaction boundaries. Public module services within that service participate in its current transaction; no session or transaction spans Core and Tracking.
 - Do not add a generic Unit of Work abstraction unless current code demonstrates a concrete need; `AsyncSession` may serve as the transaction context.
 - Avoid implicit async ORM I/O and lazy-loading surprises. Load required relationships explicitly.
 - Foreign keys for business records use restrictive deletion. Do not add cascading deletion of business history.
@@ -79,11 +77,12 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Keep one secret per carrier, loaded from settings. Never log secrets, signatures or complete webhook bodies.
 - Treat the database unique constraint on `(carrier_id, external_event_id)` as the final idempotency authority.
 - Same event ID and same payload hash may resume or return the original result. Same event ID with a different hash is a conflict and never overwrites the original.
-- Preserve the two transaction boundaries:
+- Preserve the historical v1.0 transaction boundaries until replaced by the approved v1.1 flow in DESIGN §30.4:
   - Transaction A commits the authenticated inbox record independently.
   - Transaction B atomically normalizes the event, records the timeline, applies Shipment state, records Notification when applicable, evaluates Order completion and finalizes the inbox.
-- Repositories inside Transaction B must not commit independently.
-- Acquire pessimistic locks only in this order: inbox, Shipment, Order. Never invert it.
+- In v1.1, use local reception, idempotent Core receipt/effects and Tracking finalization as specified in DESIGN §30.4. Preserve original identity, timestamps and outcomes on redelivery; do not claim global atomicity or automatic recovery without redelivery.
+- Repositories inside a coordinated local transaction must not commit independently.
+- In v1.0 acquire pessimistic locks only in this order: inbox, Shipment, Order. In v1.1, Core keeps Shipment before Order; inbox locks remain local to Tracking and never span HTTP.
 - Use `READ COMMITTED`, `SELECT ... FOR UPDATE` and database constraints; do not rely on check-then-insert for concurrency safety.
 - Permanent validation or domain failures mark the inbox `REJECTED`. Transient infrastructure or unexpected application failures after Transaction A preserve `RECEIVED` for synchronous retry.
 - TrackingEvent is append-only. Stale or invalid transitions are recorded without regressing Shipment state.
@@ -95,10 +94,10 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Use dedicated Pydantic schemas for create, read and list operations.
 - Return documented `application/problem+json` errors through global handlers, including framework validation, 404 and 405 responses.
 - Echo a valid `X-Request-ID` or generate a UUID; propagate it to logs, inbox records and spans.
-- Render HTML server-side. HTMX calls the same application services as the API, not internal HTTP endpoints.
+- Render HTML server-side. HTMX handlers call the same application services as the API; cross-service forwarding follows DESIGN §30, without business rules in templates or routers.
 - Keep Bootstrap and HTMX assets local and compatible with the Content Security Policy.
 - Mutating HTML forms require CSRF protection. JSON APIs and carrier webhooks remain stateless and cookie-free.
-- Keep CORS disabled by default. Do not add application rate limiting to the controlled v1.0.0 environment.
+- Keep CORS disabled by default. Do not add application rate limiting to the controlled comparison environment.
 - Never expose secrets, full signatures, raw exception traces or unsanitized external content.
 
 ## Code quality
@@ -164,7 +163,8 @@ For a completed cross-cutting change, run Ruff, formatting, Mypy, Import Linter,
 - Do not change benchmark routes, payload semantics, scenario weights, dataset, warm-up, load shape or resource configuration casually.
 - After the first valid benchmark, material changes require a documented new campaign and rerun of affected baselines.
 - Warm-up uses its own deterministic event-ID namespace, is repeated after every database restore and reaches the same pre-measurement state.
-- Keep logging, tracing, worker count, connection pool and resources identical across compared repetitions.
+- Keep logging/tracing identical across the comparison. Freeze workers, pools and component resources within each release; across v1.0/v1.1 preserve the aggregate budgets and declare the process split in DESIGN §30.5. Do not multiply budgets by component.
+- Resolve the frozen loadgen's manifest/topology compatibility in increment II (DESIGN §30.5); do not assume compatibility or silently change its image or the protocol.
 - Benchmark results must identify commit, environment, dependency lock, hardware and protocol.
 
 ## Scope guard

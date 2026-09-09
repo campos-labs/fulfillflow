@@ -7,6 +7,9 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fulfillflow.contracts.tracking import CarrierEventFilters, CarrierEventSummaryRead
+from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.tracking_client import TrackingClient
 from fulfillflow.notifications.public import NotificationService, NotificationStatus
 from fulfillflow.notifications.schemas import NotificationFilters
 from fulfillflow.orders.public import OrderService, OrdersPublic, OrderStatus
@@ -21,8 +24,6 @@ from fulfillflow.shipments.schemas import (
     ShipmentListFilters,
     ShipmentSummaryRead,
 )
-from fulfillflow.tracking.public import InboxStatus, TrackingService
-from fulfillflow.tracking.schemas import CarrierEventFilters, CarrierEventSummaryRead
 
 _COUNT_PAGE_SIZE = 1
 _RECENT_EVENT_COUNT = 10
@@ -76,11 +77,11 @@ async def get_order_detail(session: AsyncSession, order_id: UUID) -> OrderDetail
 async def get_dashboard(
     session: AsyncSession,
     clock: Clock,
+    tracking: TrackingClient,
 ) -> DashboardView:
     """Build the approved dashboard without direct model or repository access."""
     orders = OrderService(session, clock)
     shipments = ShipmentService(session, clock)
-    tracking = TrackingService(session, clock)
     notifications = NotificationService(session)
 
     order_counts: dict[str, int] = {}
@@ -129,5 +130,5 @@ async def get_dashboard(
         shipment_counts=shipment_counts,
         inbox_counts=inbox_counts,
         notification_counts=notification_counts,
-        recent_events=[CarrierEventSummaryRead.from_view(item) for item in recent.items],
+        recent_events=recent.items,
     )

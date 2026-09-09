@@ -5,6 +5,7 @@ description = "FulfillFlow v1.0.0"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "httpx>=0.28.1,<1",
     "alembic>=1.19.1,<2",
     "fastapi>=0.141.1,<1",
     "itsdangerous>=2.2.0,<3",
@@ -24,7 +25,6 @@ benchmark = [
 ]
 dev = [
     "fastapi-cli>=0.0.32,<1",
-    "httpx>=0.28.1,<1",
     "import-linter>=2.13,<3",
     "mypy>=2.3.1,<3",
     "pytest>=9.1.1,<10",
@@ -56,7 +56,7 @@ known-first-party = ["fulfillflow"]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "scripts/seed_demo.py", "scripts/seed_benchmark.py", "benchmarks"]
+files = ["src", "scripts/seed_demo.py", "scripts/seed_benchmark.py", "scripts/prepare_demo_v11.py", "benchmarks"]
 show_error_codes = true
 pretty = true
 
@@ -127,6 +127,8 @@ type = "protected"
 protected_modules = [
     "fulfillflow.shipments.domain",
     "fulfillflow.shipments.models",
+    "fulfillflow.shipments.receipt_models",
+    "fulfillflow.shipments.receipt_repository",
     "fulfillflow.shipments.repository",
     "fulfillflow.shipments.service",
 ]
@@ -136,7 +138,6 @@ allowed_importers = ["fulfillflow.shipments"]
 name = "Carriers internals are imported only by Carriers"
 type = "protected"
 protected_modules = [
-    "fulfillflow.carriers.adapters",
     "fulfillflow.carriers.models",
     "fulfillflow.carriers.repository",
 ]
@@ -146,6 +147,8 @@ allowed_importers = ["fulfillflow.carriers"]
 name = "Tracking internals are imported only by Tracking"
 type = "protected"
 protected_modules = [
+    "fulfillflow.tracking.adapters",
+    "fulfillflow.tracking.carrier_schemas",
     "fulfillflow.tracking.authentication",
     "fulfillflow.tracking.domain",
     "fulfillflow.tracking.models",
@@ -164,3 +167,31 @@ protected_modules = [
     "fulfillflow.notifications.service",
 ]
 allowed_importers = ["fulfillflow.notifications"]
+
+[[tool.importlinter.contracts]]
+name = "Core cannot import Tracking implementation or persistence"
+type = "forbidden"
+source_modules = [
+    "fulfillflow.main", "fulfillflow.core", "fulfillflow.api", "fulfillflow.web",
+    "fulfillflow.orders", "fulfillflow.shipments", "fulfillflow.carriers", "fulfillflow.notifications",
+]
+forbidden_modules = ["fulfillflow.tracking"]
+
+[[tool.importlinter.contracts]]
+name = "Tracking cannot import Core implementation or persistence"
+type = "forbidden"
+source_modules = ["fulfillflow.tracking"]
+forbidden_modules = [
+    "fulfillflow.main", "fulfillflow.core", "fulfillflow.api", "fulfillflow.web",
+    "fulfillflow.orders", "fulfillflow.shipments", "fulfillflow.carriers", "fulfillflow.notifications",
+]
+
+[[tool.importlinter.contracts]]
+name = "Wire contracts depend on no service implementation or infrastructure"
+type = "forbidden"
+source_modules = ["fulfillflow.contracts"]
+forbidden_modules = [
+    "fulfillflow.core", "fulfillflow.api", "fulfillflow.web", "fulfillflow.tracking",
+    "fulfillflow.orders", "fulfillflow.shipments", "fulfillflow.carriers", "fulfillflow.notifications",
+    "fulfillflow.db", "fulfillflow.http", "fastapi", "sqlalchemy",
+]

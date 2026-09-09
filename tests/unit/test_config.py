@@ -14,7 +14,7 @@ def test_settings_apply_documented_defaults(settings: Settings) -> None:
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8000
     assert settings.app_timezone == "America/Sao_Paulo"
-    assert settings.db_pool_size == 10
+    assert settings.db_pool_size == 5
     assert settings.db_max_overflow == 0
     assert settings.db_pool_timeout_seconds == 5
     assert settings.db_statement_timeout_ms == 5000
@@ -24,6 +24,52 @@ def test_settings_apply_documented_defaults(settings: Settings) -> None:
     assert settings.otel_enabled is False
     assert settings.seed_random_seed == 20260828
     assert ZoneInfo(settings.app_timezone).key == "America/Sao_Paulo"
+
+
+def test_service_secrets_are_scoped_to_the_verifying_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in ("SESSION_SECRET", "CARRIER_ALPHA_WEBHOOK_SECRET", "CARRIER_BETA_WEBHOOK_SECRET"):
+        monkeypatch.delenv(key, raising=False)
+    common = {
+        "_env_file": None,
+        "app_env": "local",
+        "database_url": "postgresql+psycopg://role:password@localhost/test",
+        "internal_api_secret": "62f7ba93b6f5402eb1c7d5d2037898d41a9df360",
+    }
+    core = Settings(**common, session_secret="07ed42dc5063480abbd12a51b015216b98784361")
+    assert core.service_role == "core"
+    assert core.carrier_alpha_webhook_secret.get_secret_value() == ""
+    tracking = Settings(
+        **common,
+        service_role="tracking",
+        carrier_alpha_webhook_secret="1a4e92d40e0c4d878e364075258457189c3b73f8",
+        carrier_beta_webhook_secret="0e6fad758c2e43d2baad9fbaf31df540f5d0c36f",
+    )
+    assert tracking.session_secret.get_secret_value() == ""
+    with pytest.raises(ValidationError, match="Tracking requires both"):
+        Settings(**common, service_role="tracking")
+    with pytest.raises(ValidationError, match="non-test secrets"):
+        Settings(
+            **common,
+            service_role="tracking",
+            carrier_alpha_webhook_secret="short",
+            carrier_beta_webhook_secret="other",
+        )
+
+
+@pytest.mark.parametrize("field", ["service_http_timeout_seconds", "forwarding_timeout_seconds"])
+@pytest.mark.parametrize("value", [0, float("inf"), float("nan")])
+def test_service_timeouts_are_positive_and_finite(
+    settings: Settings, field: str, value: float
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(settings.model_dump() | {field: value})
+
+
+def test_internal_authentication_cannot_be_disabled_with_an_empty_token(settings: Settings) -> None:
+    with pytest.raises(ValidationError, match="must not be empty"):
+        Settings.model_validate(settings.model_dump() | {"internal_api_secret": ""})
 
 
 def test_required_settings_cannot_be_omitted(monkeypatch: pytest.MonkeyPatch) -> None:

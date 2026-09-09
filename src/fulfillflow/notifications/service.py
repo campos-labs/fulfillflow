@@ -80,7 +80,7 @@ class NotificationsPublic:
         recipient: str,
         resulting_status: str,
     ) -> Notification:
-        """Flush one simulation record inside the caller's Transaction B."""
+        """Flush one simulation record inside the Core coordinator's local transaction."""
         notification = build_notification(
             notification_id=new_uuid(),
             shipment_id=shipment_id,

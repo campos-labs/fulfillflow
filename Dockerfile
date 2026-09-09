@@ -52,6 +52,9 @@ WORKDIR /app
 COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
 COPY --chown=10001:10001 alembic.ini ./alembic.ini
 COPY --chown=10001:10001 alembic ./alembic
+COPY --chown=10001:10001 alembic_core.ini alembic_tracking.ini ./
+COPY --chown=10001:10001 alembic_core ./alembic_core
+COPY --chown=10001:10001 alembic_tracking ./alembic_tracking
 
 USER 10001:10001
 

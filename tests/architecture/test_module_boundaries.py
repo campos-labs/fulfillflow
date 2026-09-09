@@ -206,7 +206,14 @@ def test_business_internals_are_imported_only_by_their_owner() -> None:
             for module in BUSINESS_MODULES:
                 private_prefixes = tuple(
                     f"fulfillflow.{module}.{name}"
-                    for name in ("domain", "models", "repository", "service")
+                    for name in (
+                        "domain",
+                        "models",
+                        "repository",
+                        "service",
+                        "receipt_models",
+                        "receipt_repository",
+                    )
                 )
                 if imported.startswith(private_prefixes) and owner != module:
                     violations.append(f"{relative}: {imported}")

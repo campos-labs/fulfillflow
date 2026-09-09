@@ -337,6 +337,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "itsdangerous" },
     { name = "jinja2" },
     { name = "psycopg", extra = ["binary"] },
@@ -354,7 +355,6 @@ benchmark = [
 ]
 dev = [
     { name = "fastapi-cli" },
-    { name = "httpx" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },
@@ -367,6 +367,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.19.1,<2" },
     { name = "fastapi", specifier = ">=0.141.1,<1" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "itsdangerous", specifier = ">=2.2.0,<3" },
     { name = "jinja2", specifier = ">=3.1.6,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4,<4" },
@@ -382,7 +383,6 @@ requires-dist = [
 benchmark = [{ name = "locust", specifier = ">=2.43,<3" }]
 dev = [
     { name = "fastapi-cli", specifier = ">=0.0.32,<1" },
-    { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "import-linter", specifier = ">=2.13,<3" },
     { name = "mypy", specifier = ">=2.3.1,<3" },
     { name = "pytest", specifier = ">=9.1.1,<10" },

@@ -1,13 +1,19 @@
-# FulfillFlow — Design Architecture v1.0.0
+# FulfillFlow — Design Architecture: v1.0.0 e alvo v1.1
 
 | Campo | Valor |
 |---|---|
-| Status | Aprovado para implementação |
-| Arquitetura vigente | Monólito modular |
-| Escopo | Exclusivamente v1.0.0 |
+| Status | v1.0.0 publicada; incremento I funcional da v1.1 implementado localmente, sem release |
+| Arquitetura vigente | Core + Tracking no checkout v1.1; monólito preservado na tag v1.0.0 |
+| Escopo | Contrato histórico v1.0.0 e extração delimitada de Tracking na v1.1 (§30) |
 | Runtime principal | Python 3.13 / FastAPI |
 | Persistência | PostgreSQL 18 |
-| Última revisão | 2026-08-28 |
+| Última revisão | 2026-09-09 |
+
+As seções 1–29 preservam a descrição e as restrições da v1.0.0. A seção 30 registra
+as substituições aprovadas e os invariantes da arquitetura v1.1, distinguindo o
+incremento funcional implementado da preparação experimental pendente. Regras não
+substituídas permanecem aplicáveis. A execução
+por incrementos e seu estado pertencem a `RELEASE_PLAN.md`, não a este contrato.
 
 ## 1. Objetivo
 
@@ -1644,3 +1650,204 @@ Uma implementação está em conformidade quando satisfaz simultaneamente:
 - o Definition of Done da seção 26.
 
 Ambiguidade de implementação não autoriza ampliar o escopo. Quando duas alternativas atenderem igualmente ao documento, deve prevalecer a de menor complexidade operacional e menor acoplamento, preservando os contratos observáveis.
+
+## 30. Arquitetura v1.1 — incremento I implementado; comparação pendente
+
+A v1.1 extrai deliberadamente somente Tracking, para avaliar autonomia, comunicação,
+consistência e custos. A extração não depende de a baseline provar necessidade de
+distribuição: os dados v1.0 não isolam Tracking como causa exclusiva de contenção e
+não sustentam promessa de ganho de desempenho. O incremento I entrega a extração
+funcional descrita em §30.1–30.4. A preparação experimental de §30.5 continua
+pendente; não há campanha v1.1 executada nem prontidão declarada do benchmark.
+
+### 30.1 Substituições delimitadas do contrato v1.0
+
+| Contrato histórico | Substituição v1.1 |
+| --- | --- |
+| Aplicação/imagem única e ausência de HTTP interno (§4, §23) | Core e Tracking como serviços de aplicação; HTTP somente entre serviços, interfaces Python entre módulos do mesmo serviço |
+| Adapters, schemas externos e normalização em Carriers (§7.2, §7.5, §28) | Interpretação dos eventos em Tracking; cadastro de transportadoras no Core |
+| Banco único e FKs entre todos os módulos (§4.1, §8, §18) | Uma instância PostgreSQL 18, dois bancos segregados por proprietário, sem SQL ou FKs entre bancos |
+| Transação B e ordem de locks globais (§13) | Transações locais, recibo idempotente no Core e recuperação por reentrega (§30.4) |
+| Um worker e topologia app/banco/loadgen da baseline (§22–23) | Um worker por serviço de aplicação, orçamento agregado fixo e topologia a validar (§30.5) |
+
+Essas substituições não alteram a release histórica. A tag `v1.0.0` aponta para o
+commit documental `6235f6cb2a733e23ea76cf8264d2145f3759a871`; o commit medido foi
+`ae15e0a2da465f4aec3d9c699655441ad1947265`. Manifests e resultados publicados
+continuam identificando a v1.0, sem reinterpretação como execuções distribuídas.
+Permanecem a stack Python/FastAPI/Compose, as máquinas de estados, os contratos
+externos e as exclusões do §3.2: sem broker, worker de reprocessamento, Redis,
+gateway adicional, Kubernetes/AKS ou novas capacidades de produto.
+
+### 30.2 Fronteiras e propriedade dos dados
+
+- **Core:** Orders, Shipments, Notifications, suas regras/transições e o cadastro
+  de transportadoras (identidade, código, nome, situação ativa e associação às
+  Shipments). Aplica eventos canônicos e possui o recibo idempotente dessa aplicação.
+- **Tracking:** HMAC, schemas externos, adapters Alpha/Beta, normalização, inbox
+  bruto, idempotência de recepção, coordenação do processamento, eventos canônicos
+  persistidos e timeline. Cadastro não se confunde com interpretação de eventos;
+  o Core não mantém uma segunda implementação dos adapters ou da normalização.
+
+Cada serviço tem banco, credencial e migrations próprios na mesma instância
+PostgreSQL 18. Nenhum serviço consulta tabelas, ORM ou repositories do outro.
+Referências a Carrier/Shipment no Tracking e a TrackingEvent na Notification deixam
+de ser FKs entre proprietários: identidade e existência necessárias são verificadas
+pelos contratos, sem cópia das regras de domínio. Unicidades locais permanecem,
+incluindo inbox por `(carrier_id, external_event_id)`, timeline por inbox e
+notificação por identidade do evento. Não introduzir exclusão em cascata de histórico.
+Compartilhar a instância não proporciona isolamento completo de infraestrutura.
+
+### 30.3 Comunicação e contratos internos
+
+A entrada pública permanece no Core. API, UI e simulador conservam os contratos
+externos vigentes; operações de Tracking são encaminhadas por cliente HTTP
+assíncrono, sem transformar a requisição em processamento em fila. O encaminhamento
+preserva bytes brutos para HMAC, headers relevantes, X-Request-ID, códigos HTTP,
+schemas, paginação e semântica de erros. HMAC continua obrigatório antes de parsing
+ou persistência; seus secrets ficam no serviço verificador, não em respostas ou logs.
+
+Contratos internos estreitos e autenticados, com timeouts finitos, cobrem:
+
+- Core → Tracking: recepção do webhook e consultas de inbox/timeline;
+- Tracking → Core: consultas cadastrais e de Shipment necessárias aos contratos
+  externos, sem expor persistência ou transferir interpretação de payloads;
+- Tracking → Core: aplicação do evento canônico com identidade estável vinculada
+  à transportadora, hash de conteúdo imutável e dados de ordenação originais.
+  Core devolve o resultado persistido suficiente para finalizar ou retomar no
+  Tracking sem recalcular efeitos.
+
+Nomes de endpoints e DTOs internos são detalhes de implementação; não são novas
+rotas públicas nem autorização para compartilhar implementações de negócio.
+Módulos dentro do Core continuam usando interfaces Python públicas e serviços
+proprietários. Nenhuma chamada HTTP entre serviços mantém conexão, transação ou
+lock SQL aberto, inclusive no caminho Core → Tracking → Core. Erros são sanitizados;
+autenticação interna não substitui autenticação do webhook.
+
+### 30.4 Consistência, recibo e recuperação
+
+A Transação A independente de recepção é preservada; a Transação B global é
+substituída por coordenação de commits locais:
+
+1. Tracking autentica e persiste o inbox `RECEIVED`, raw bytes/hash e identidade
+   estável recuperável do evento/comando. Preserva os casos sem persistência do
+   §14.3 e o `received_at` original em toda retomada.
+2. Core registra o recibo idempotente e aplica Shipment, Notification e Order na
+   mesma transação local. A chave única do recibo identifica o evento e sua
+   transportadora; o hash vincula o conteúdo imutável e o recibo guarda o resultado
+   original. O conflito de unicidade é tratado no banco, não por check-then-insert.
+3. Tracking persiste timeline/resultado e finaliza o inbox em transação local.
+   HTTP 200 só é confirmado após todos os efeitos previstos para esse resultado.
+
+Reentregas idênticas reutilizam as identidades, inclusive a correlação entre recibo,
+Notification e TrackingEvent. Recibo existente devolve o resultado original, sem
+reaplicar estado, notificar novamente ou consultar um estado posterior para
+reconstruir o resultado. Reutilização da identidade com outro conteúdo é conflito.
+A finalização concorrente também não duplica timeline nem sobrescreve inbox final.
+
+Core preserva `READ COMMITTED`, constraints e locks locais de Shipment antes de
+Order, assim como a ordenação `(occurred_at, received_at, external_event_id)` e
+conclusão de Order. Locks de inbox pertencem às transações locais do Tracking;
+não há ordem de locks global atravessando HTTP. Eventos distintos da mesma Shipment
+continuam serializando sua aplicação no Core, sem regressão por eventos atrasados.
+
+Retomada de `RECEIVED` é processamento normal, não `DUPLICATE` de inbox já
+`PROCESSED`. Rejeições permanentes são reproduzíveis e finalizam `REJECTED`, sem
+TrackingEvent. `NO_STATE_CHANGE` e `IGNORED_*` continuam HTTP 200 com timeline,
+não rejeições permanentes. Falhas transitórias após recepção mantêm `RECEIVED`
+e retornam 503; falhas inesperadas retornam 500 e também preservam a retomada.
+Ausência de resposta não prova rollback do Core: se houve commit, a reentrega
+obtém o recibo e conclui a finalização no Tracking. Não há retry em background
+nem garantia de recuperação automática se o remetente não reentregar.
+
+**Não existe atomicidade global na v1.1.** Entre os commits, Shipment/Order e
+Notification podem estar atualizados enquanto a timeline ainda está pendente,
+inclusive se um evento posterior já foi aplicado. Essa janela deve ser visível
+nas limitações e testada; não se promete snapshot atômico entre os dois bancos.
+Não adicionar transação distribuída, saga genérica ou compensação destrutiva.
+Testes desde o incremento I cobrem contratos, HMAC/adapters, PostgreSQL real,
+duplicatas concorrentes e resposta perdida após commit do Core; o incremento II
+completa os casos adversos e comprova recuperação em cada fronteira de commit.
+Import Linter e demais gates são adaptados à fronteira aprovada, nunca enfraquecidos.
+
+### 30.5 Comparabilidade e pendência experimental
+
+A campanha v1.1 terá identidade própria; nenhum diagnóstico ou resultado v1.0
+conta como repetição v1.1. Preservar o protocolo publicado em `benchmarks/baselines/v1.0/`
+e os manifests oficiais em `benchmarks/campaigns/`, incluindo workload, contratos externos, dataset lógico,
+coortes/pesos, q=430, spawn rate 16 users/s e matriz 4/12 users × três profiles ×
+cinco repetições válidas. Permanecem estabilização 300 s após preparação verificada,
+warm-up 60 s, measurement 300 s, coleta 1 s, admissão/drain e exportação final,
+timeouts, logging/tracing/sampling, energia e condições do host. Versões do ambiente,
+nominal de memória Docker e tolerância absoluta de 1 MiB permanecem os aprovados.
+
+Orçamento planejado da comparação principal: Core e Tracking terão cada um
+1 CPU, 768 MiB, um worker e pool 5 com overflow 0; total da aplicação 2 CPUs,
+1536 MiB e pool 10. PostgreSQL compartilhado mantém 2 CPUs/2560 MiB e o loadgen
+separado mantém 2 CPUs/1536 MiB. Custos de HTTP, recibos e distribuição cabem nesses
+orçamentos. Dois processos versus um e a partição de recursos são diferenças
+declaradas, não equivalência impossível de topologias. Fixar a divisão antes da
+campanha, sem ajustes oportunistas após observar resultados oficiais.
+
+HEAD, imagens da aplicação, migrations e schemas v1.1 terão identidades próprias;
+hash físico do schema não precisa coincidir com o monólito. Conteúdo lógico e
+geração determinística do dataset permanecem congelados; a preparação física pode
+distribuí-los pelos dois bancos, declarando recibos auxiliares sem alterar o estado
+lógico inicial. Só há prontidão quando ambos os bancos foram verificados; falha
+parcial bloqueia o ensaio, sem promessa de commit SQL global na preparação.
+
+**Pendência do incremento II:** o loadgen congelado importa `benchmarks/campaign.py`,
+cujo modelo aceita somente `release="v1.0.0"` e papéis app/postgres/loadgen. Sua
+compatibilidade com o schema de manifest e a topologia v1.1 ainda não está resolvida.
+Este DESIGN não escolhe uma solução nem autoriza alterar imagem, locustfile ou
+protocolo. Demonstrar e revisar a compatibilidade antes de declarar prontidão
+experimental; não falsificar identidades nem reconstruir o loadgen silenciosamente.
+Os imports de normalização de `benchmarks/dataset.py` e `dataset_validation.py`
+foram relocados para Tracking no incremento I; os testes dos hashes lógicos
+congelados continuam passando. A distribuição física e os demais acoplamentos do
+loader continuam pendentes, sem duplicação de regras ou alteração dos artefatos.
+
+A instrumentação deve observar Core/Tracking separados e agregados, reconciliar
+Locust/HTTP/efeitos nos dois bancos e preservar completude e checksums. Mantém-se a
+importação obrigatória de Locust antes da prontidão, healthcheck periódico leve e
+supervisão de erros/timeouts pelo runner (§23.4). Relatar custos, dispersão e limites;
+ganho de throughput não é critério de aceite. Cargas, congelamento e release exigem
+autorização própria; os incrementos e seus aceites estão em `RELEASE_PLAN.md`.
+
+### 30.6 Estado funcional do incremento I
+
+O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`
+e `fulfillflow_tracking`. As roles não possuem privilégios administrativos nem
+CONNECT ao banco do outro proprietário. Os graphs `alembic_core.ini` e
+`alembic_tracking.ini` têm heads `1101_core` e `1101_tracking`; não convertem um
+banco v1.0 existente. O graph histórico permanece destinado à regressão v1.0.
+
+As chamadas sob `/internal/v1` exigem exatamente um
+`X-FulfillFlow-Internal-Token`, comparado em tempo constante antes de decodificar
+o corpo. O token vem de `INTERNAL_API_SECRET`; não substitui HMAC. As rotas
+internas ficam fora do OpenAPI público. Os clientes preservam correlação e headers
+de trace e usam timeouts finitos de 10 s ao Core e 30 s ao Tracking por padrão.
+Falhas de transporte ou resposta interna inválida geram problem detail 503
+`SERVICE_UNAVAILABLE`; autenticação interna inválida gera 401
+`INTERNAL_AUTHENTICATION_FAILED`, sem divulgar o token.
+
+A identidade do comando é derivada de modo determinístico do UUID do inbox.
+Após autenticação e commit do bruto, a normalização salva o comando imutável em
+uma transação local antes de chamar o Core. Uma retomada usa esse comando e o
+`received_at` original. O recibo Core vincula UUID, Carrier/event ID e SHA-256
+de todos os campos canônicos, incluindo o hash dos bytes brutos e a ordenação.
+O resultado inclui o instante original da decisão. A reserva de unicidade e
+todos os efeitos são confirmados juntos; nenhuma reserva incompleta é confirmada.
+Rejeição por Shipment ausente também tem recibo e não muda caso a Shipment seja
+criada posteriormente. Timeline/finalização usam exclusivamente o resultado original.
+
+`scripts/prepare_demo_v11.py` prepara pela API pública um Order confirmado e duas
+Shipments pendentes com referências e dados sintéticos fixos. Repetição preserva
+registros compatíveis; conflitos não são sobrescritos. UUIDs e horários pertencem
+à aplicação. Esse comando permite demonstração funcional, sem substituir o seed
+determinístico de benchmark nem prometer preparação atômica entre bancos.
+
+Foram validados contratos/API/UI, dois processos TCP com simulador externo,
+PostgreSQL por proprietário, duplicatas com contenção real, rollback dos efeitos
+Core, perda de resposta seguida de evento posterior e retomada, e falha na
+finalização Tracking. O teste de encaminhamento verifica que nenhum checkout SQL
+atravessa HTTP. A matriz adversa restante e a prontidão experimental pertencem ao II.

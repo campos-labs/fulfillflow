@@ -50,11 +50,6 @@ class NotificationModel(Base):
         nullable=False,
     )
     tracking_event_id: Mapped[UUID] = mapped_column(
-        ForeignKey(
-            "tracking_events.id",
-            ondelete="RESTRICT",
-            name="fk_notifications_tracking_event_id_tracking_events",
-        ),
         nullable=False,
     )
     channel: Mapped[str] = mapped_column(String(16), nullable=False)

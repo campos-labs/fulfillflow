@@ -15,6 +15,8 @@ from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from tests.distributed_state import event_state
+from tests.service_pair import create_app
 from tests.support import (
     ContentionProbe,
     FixedClock,
@@ -25,7 +27,6 @@ from tests.support import (
 import fulfillflow.tracking.service as tracking_service_module
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.main import create_app
 from fulfillflow.orders.public import Order, OrderStatus
 from fulfillflow.orders.repository import OrderRepository
 from fulfillflow.shipments.public import Shipment
@@ -318,6 +319,7 @@ async def test_contention_cleanup_exposes_timeout_with_original_error() -> None:
 async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundary(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -337,7 +339,7 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                 base_url="http://second.test",
             ) as second_client,
         ):
-            order_id, shipment_ids = await _create_order_with_shipments(
+            _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-IDENTICAL",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -368,28 +370,12 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                     ),
                 )
             )
-            async with postgres_database.session() as session:
-                state = (
-                    await session.execute(
-                        text(
-                            "SELECT i.id, i.raw_body, i.payload_sha256, i.parsed_payload, "
-                            "i.status AS inbox_status, s.status AS shipment_status, "
-                            "o.status AS order_status, "
-                            "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
-                            "(SELECT count(*) FROM notifications) AS notification_count "
-                            "FROM carrier_event_inbox i "
-                            "JOIN shipments s ON s.id = :shipment_id "
-                            "JOIN orders o ON o.id = :order_id "
-                            "WHERE i.external_event_id = :event_id"
-                        ),
-                        {
-                            "shipment_id": shipment_id,
-                            "order_id": order_id,
-                            "event_id": event_id,
-                        },
-                    )
-                ).one()
+            state = await event_state(
+                postgres_database,
+                postgres_tracking_database,
+                shipment_id=shipment_id,
+                event_id=event_id,
+            )
 
     assert {first.status_code, second.status_code} == {200}
     assert {first.json()["result"], second.json()["result"]} == {
@@ -415,6 +401,7 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
 async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_record(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -435,7 +422,7 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
                 base_url="http://loser.test",
             ) as losing_client,
         ):
-            order_id, shipment_ids = await _create_order_with_shipments(
+            _order_id, shipment_ids = await _create_order_with_shipments(
                 winning_client,
                 reference="ORDER-CONCURRENT-PAYLOAD-CONFLICT",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -466,27 +453,12 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
                     ),
                 )
             )
-            async with postgres_database.session() as session:
-                state = (
-                    await session.execute(
-                        text(
-                            "SELECT i.raw_body, i.payload_sha256, i.parsed_payload, "
-                            "i.status AS inbox_status, s.status AS shipment_status, "
-                            "o.status AS order_status, "
-                            "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
-                            "FROM carrier_event_inbox i "
-                            "JOIN shipments s ON s.id = :shipment_id "
-                            "JOIN orders o ON o.id = :order_id "
-                            "WHERE i.external_event_id = :event_id"
-                        ),
-                        {
-                            "shipment_id": shipment_id,
-                            "order_id": order_id,
-                            "event_id": event_id,
-                        },
-                    )
-                ).one()
+            state = await event_state(
+                postgres_database,
+                postgres_tracking_database,
+                shipment_id=shipment_id,
+                event_id=event_id,
+            )
 
     assert winner.status_code == 200
     assert winner.json()["result"] == "APPLIED"
@@ -502,9 +474,10 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
     assert state.order_status == "CONFIRMED"
 
 
-async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_once(
+async def test_two_concurrent_resumptions_finalize_received_inbox_without_reapplying_core(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -532,7 +505,7 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
                 base_url="http://second.test",
             ) as second_client,
         ):
-            order_id, shipment_ids = await _create_order_with_shipments(
+            _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-RESUME",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -551,27 +524,12 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
                 event_id=event_id,
                 raw_body=raw_body,
             )
-            async with postgres_database.session() as session:
-                rolled_back = (
-                    await session.execute(
-                        text(
-                            "SELECT i.status AS inbox_status, i.raw_body, "
-                            "i.payload_sha256, i.parsed_payload, "
-                            "s.status AS shipment_status, o.status AS order_status, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
-                            "(SELECT count(*) FROM notifications) AS notification_count "
-                            "FROM carrier_event_inbox i "
-                            "JOIN shipments s ON s.id = :shipment_id "
-                            "JOIN orders o ON o.id = :order_id "
-                            "WHERE i.external_event_id = :event_id"
-                        ),
-                        {
-                            "shipment_id": shipment_id,
-                            "order_id": order_id,
-                            "event_id": event_id,
-                        },
-                    )
-                ).one()
+            rolled_back = await event_state(
+                postgres_database,
+                postgres_tracking_database,
+                shipment_id=shipment_id,
+                event_id=event_id,
+            )
 
             monkeypatch.setattr(
                 TrackingRepository,
@@ -602,38 +560,22 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
                     ),
                 )
             )
-            async with postgres_database.session() as session:
-                final = (
-                    await session.execute(
-                        text(
-                            "SELECT i.status AS inbox_status, i.raw_body, "
-                            "i.payload_sha256, i.parsed_payload, "
-                            "s.status AS shipment_status, o.status AS order_status, "
-                            "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count, "
-                            "(SELECT count(*) FROM notifications) AS notification_count "
-                            "FROM carrier_event_inbox i "
-                            "JOIN shipments s ON s.id = :shipment_id "
-                            "JOIN orders o ON o.id = :order_id "
-                            "WHERE i.external_event_id = :event_id"
-                        ),
-                        {
-                            "shipment_id": shipment_id,
-                            "order_id": order_id,
-                            "event_id": event_id,
-                        },
-                    )
-                ).one()
+            final = await event_state(
+                postgres_database,
+                postgres_tracking_database,
+                shipment_id=shipment_id,
+                event_id=event_id,
+            )
 
     _assert_problem(failed, status_code=503, code="DATABASE_UNAVAILABLE")
     assert rolled_back.inbox_status == "RECEIVED"
     assert bytes(rolled_back.raw_body) == raw_body
     assert rolled_back.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
-    assert rolled_back.parsed_payload is None
+    assert rolled_back.parsed_payload["eventId"] == event_id
     assert rolled_back.tracking_count == 0
-    assert rolled_back.notification_count == 0
-    assert rolled_back.shipment_status == "PENDING"
-    assert rolled_back.order_status == "CONFIRMED"
+    assert rolled_back.notification_count == rolled_back.receipt_count == 1
+    assert rolled_back.shipment_status == "DELIVERED"
+    assert rolled_back.order_status == "FULFILLED"
     assert first.status_code == second.status_code == 200
     assert first.json()["result"] == "APPLIED"
     assert second.json()["result"] == "DUPLICATE"
@@ -747,6 +689,7 @@ async def test_two_concurrent_resumptions_of_received_inbox_apply_transaction_b_
 async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
     first_event_id: str,
@@ -792,7 +735,7 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                 base_url="http://second.test",
             ) as second_client,
         ):
-            _order_id, shipment_ids = await _create_order_with_shipments(
+            __order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference=f"ORDER-{tracking_code}",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -840,6 +783,7 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                         {"shipment_id": shipment_id},
                     )
                 ).one()
+            async with postgres_tracking_database.session() as session:
                 events = (
                     await session.execute(
                         text(
@@ -854,6 +798,7 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                         {"first": first_event_id, "second": second_event_id},
                     )
                 ).all()
+            async with postgres_database.session() as session:
                 notification_count = await session.scalar(
                     text("SELECT count(*) FROM notifications WHERE shipment_id = :shipment_id"),
                     {"shipment_id": shipment_id},
@@ -892,9 +837,10 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
         assert expected_second_result == "APPLIED"
 
 
-async def test_final_deliveries_for_two_shipments_follow_global_lock_order(
+async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_local(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1055,6 +1001,7 @@ async def test_final_deliveries_for_two_shipments_follow_global_lock_order(
                         },
                     )
                 ).all()
+            async with postgres_tracking_database.session() as session:
                 inbox_events = (
                     await session.execute(
                         text(
@@ -1078,8 +1025,13 @@ async def test_final_deliveries_for_two_shipments_follow_global_lock_order(
     first_pid = probe.first_pid.result()
     second_pid = probe.second_pid.result()
     assert first_pid != second_pid
-    assert lock_steps[first_pid] == ["inbox", "shipment", "order-attempt", "order"]
-    assert lock_steps[second_pid] == ["inbox", "shipment", "order-attempt", "order"]
+    assert lock_steps[first_pid] == ["shipment", "order-attempt", "order"]
+    assert lock_steps[second_pid] == ["shipment", "order-attempt", "order"]
+    tracking_steps = [
+        steps for pid, steps in lock_steps.items() if pid not in {first_pid, second_pid}
+    ]
+    assert sum(len(steps) for steps in tracking_steps) == 4
+    assert all(set(steps) == {"inbox"} for steps in tracking_steps)
     assert fulfillment_writes == [order_id]
     assert order_status == "FULFILLED"
     assert len(shipment_statuses) == 2
@@ -1092,6 +1044,7 @@ async def test_final_deliveries_for_two_shipments_follow_global_lock_order(
 async def test_concurrent_repetition_of_permanent_rejection_is_stable(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1111,7 +1064,7 @@ async def test_concurrent_repetition_of_permanent_rejection_is_stable(
                 base_url="http://second.test",
             ) as second_client,
         ):
-            order_id, shipment_ids = await _create_order_with_shipments(
+            _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-REJECTION",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -1142,27 +1095,12 @@ async def test_concurrent_repetition_of_permanent_rejection_is_stable(
                     ),
                 )
             )
-            async with postgres_database.session() as session:
-                state = (
-                    await session.execute(
-                        text(
-                            "SELECT i.status AS inbox_status, i.error_code, i.error_detail, "
-                            "i.raw_body, i.payload_sha256, i.parsed_payload, "
-                            "s.status AS shipment_status, o.status AS order_status, "
-                            "(SELECT count(*) FROM carrier_event_inbox) AS inbox_count, "
-                            "(SELECT count(*) FROM tracking_events) AS tracking_count "
-                            "FROM carrier_event_inbox i "
-                            "JOIN shipments s ON s.id = :shipment_id "
-                            "JOIN orders o ON o.id = :order_id "
-                            "WHERE i.external_event_id = :event_id"
-                        ),
-                        {
-                            "shipment_id": shipment_id,
-                            "order_id": order_id,
-                            "event_id": event_id,
-                        },
-                    )
-                ).one()
+            state = await event_state(
+                postgres_database,
+                postgres_tracking_database,
+                shipment_id=shipment_id,
+                event_id=event_id,
+            )
 
     first_problem = _assert_problem(
         first,
@@ -1191,6 +1129,7 @@ async def test_concurrent_repetition_of_permanent_rejection_is_stable(
 async def test_committed_rejection_short_circuits_concurrent_repetitions(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1211,7 +1150,7 @@ async def test_committed_rejection_short_circuits_concurrent_repetitions(
                 base_url="http://second.test",
             ) as second_client,
         ):
-            order_id, shipment_ids = await _create_order_with_shipments(
+            _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-COMMITTED-REJECTION-SHORT-CIRCUIT",
                 shipments=(("carrier-alpha", tracking_code),),
@@ -1219,37 +1158,12 @@ async def test_committed_rejection_short_circuits_concurrent_repetitions(
             shipment_id = shipment_ids[0]
 
             async def rejection_state() -> dict[str, Any]:
-                async with postgres_database.session() as session:
-                    row = (
-                        await session.execute(
-                            text(
-                                "SELECT i.id AS inbox_id, i.status AS inbox_status, "
-                                "i.raw_body, i.payload_sha256, i.parsed_payload, "
-                                "i.error_code, i.error_detail, i.received_at, "
-                                "i.processed_at, i.request_id, "
-                                "s.status AS shipment_status, s.status_occurred_at, "
-                                "s.status_event_received_at, s.status_external_event_id, "
-                                "s.shipped_at, s.delivered_at, "
-                                "s.updated_at AS shipment_updated_at, "
-                                "o.status AS order_status, o.updated_at AS order_updated_at, "
-                                "(SELECT count(*) FROM carrier_event_inbox counted_i "
-                                "WHERE counted_i.carrier_id = i.carrier_id "
-                                "AND counted_i.external_event_id = i.external_event_id) "
-                                "AS inbox_count, "
-                                "(SELECT count(*) FROM tracking_events counted_t "
-                                "WHERE counted_t.inbox_event_id = i.id) AS tracking_count "
-                                "FROM carrier_event_inbox i "
-                                "JOIN shipments s ON s.id = :shipment_id "
-                                "JOIN orders o ON o.id = :order_id "
-                                "WHERE i.external_event_id = :event_id"
-                            ),
-                            {
-                                "shipment_id": shipment_id,
-                                "order_id": order_id,
-                                "event_id": event_id,
-                            },
-                        )
-                    ).one()
+                row = await event_state(
+                    postgres_database,
+                    postgres_tracking_database,
+                    shipment_id=shipment_id,
+                    event_id=event_id,
+                )
                 return dict(row._mapping)
 
             initial_response = await _post_event(
@@ -1343,6 +1257,7 @@ async def test_committed_rejection_short_circuits_concurrent_repetitions(
 async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1406,7 +1321,7 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
                 ),
                 timeout=10,
             )
-            async with postgres_database.session() as session:
+            async with postgres_tracking_database.session() as session:
                 inboxes = (
                     await session.execute(
                         text(
@@ -1419,6 +1334,7 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
                         {"event_id": event_id},
                     )
                 ).all()
+            async with postgres_database.session() as session:
                 shipment_states = (
                     await session.execute(
                         text("SELECT id, status FROM shipments WHERE id IN (:alpha_id, :beta_id)"),

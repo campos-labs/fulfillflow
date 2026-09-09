@@ -704,9 +704,9 @@ async def _verify_application_readiness(settings: Settings) -> None:
 def test_migrations_are_isolated_reversible_and_enforced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = os.environ.get("TEST_DATABASE_URL")
+    database_url = os.environ.get("TEST_LEGACY_DATABASE_URL")
     if database_url is None:
-        pytest.skip("TEST_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
+        pytest.skip("TEST_LEGACY_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
 
     monkeypatch.setenv("DATABASE_URL", database_url)
     config = Config("alembic.ini")
@@ -803,9 +803,9 @@ def test_migrations_are_isolated_reversible_and_enforced(
 def test_0003_preserves_preexisting_carriers_shipments_and_roundtrips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = os.environ.get("TEST_DATABASE_URL")
+    database_url = os.environ.get("TEST_LEGACY_DATABASE_URL")
     if database_url is None:
-        pytest.skip("TEST_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
+        pytest.skip("TEST_LEGACY_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
 
     monkeypatch.setenv("DATABASE_URL", database_url)
     config = Config("alembic.ini")
@@ -893,9 +893,9 @@ def test_0003_rejects_incompatible_reference_data_transactionally(
     carrier: dict[str, Any],
     error_pattern: str,
 ) -> None:
-    database_url = os.environ.get("TEST_DATABASE_URL")
+    database_url = os.environ.get("TEST_LEGACY_DATABASE_URL")
     if database_url is None:
-        pytest.skip("TEST_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
+        pytest.skip("TEST_LEGACY_DATABASE_URL must point to a dedicated PostgreSQL 18 database")
 
     monkeypatch.setenv("DATABASE_URL", database_url)
     config = Config("alembic.ini")

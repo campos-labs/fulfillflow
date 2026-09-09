@@ -7,6 +7,7 @@ from fulfillflow.shipments.domain import (
     ShipmentStatus,
     ShipmentTransition,
 )
+from fulfillflow.shipments.receipt_repository import ShipmentReceipts
 from fulfillflow.shipments.service import (
     AppliedShipmentTransition,
     CreateShipmentCommand,
@@ -25,6 +26,7 @@ __all__ = [
     "Shipment",
     "ShipmentApplicationResult",
     "ShipmentNotFoundError",
+    "ShipmentReceipts",
     "ShipmentService",
     "ShipmentStatus",
     "ShipmentSummary",

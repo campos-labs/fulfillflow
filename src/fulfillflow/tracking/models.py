@@ -17,11 +17,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from fulfillflow.db.base import Base
+from fulfillflow.tracking.base import TrackingBase
 from fulfillflow.tracking.domain import JsonValue
 
 
-class CarrierEventInboxModel(Base):
+class CarrierEventInboxModel(TrackingBase):
     """Forensic record of one authenticated carrier payload."""
 
     __tablename__ = "carrier_event_inbox"
@@ -51,11 +51,6 @@ class CarrierEventInboxModel(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     carrier_id: Mapped[UUID] = mapped_column(
-        ForeignKey(
-            "carriers.id",
-            ondelete="RESTRICT",
-            name="fk_carrier_event_inbox_carrier_id_carriers",
-        ),
         nullable=False,
     )
     external_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -71,6 +66,7 @@ class CarrierEventInboxModel(Base):
         nullable=True,
     )
     request_id: Mapped[UUID] = mapped_column(nullable=False)
+    command: Mapped[dict[str, JsonValue] | None] = mapped_column(JSONB, nullable=True)
 
 
 Index(
@@ -80,7 +76,7 @@ Index(
 )
 
 
-class TrackingEventModel(Base):
+class TrackingEventModel(TrackingBase):
     """Append-only normalized timeline event for one Shipment."""
 
     __tablename__ = "tracking_events"
@@ -126,19 +122,9 @@ class TrackingEventModel(Base):
         nullable=False,
     )
     shipment_id: Mapped[UUID] = mapped_column(
-        ForeignKey(
-            "shipments.id",
-            ondelete="RESTRICT",
-            name="fk_tracking_events_shipment_id_shipments",
-        ),
         nullable=False,
     )
     carrier_id: Mapped[UUID] = mapped_column(
-        ForeignKey(
-            "carriers.id",
-            ondelete="RESTRICT",
-            name="fk_tracking_events_carrier_id_carriers",
-        ),
         nullable=False,
     )
     external_status: Mapped[str] = mapped_column(String(120), nullable=False)

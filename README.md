@@ -1,18 +1,21 @@
 # FulfillFlow
 
-Incremento executável do FulfillFlow v1.0.0 com FastAPI, PostgreSQL 18
-assíncrono, Alembic e os módulos de negócio Orders, Shipments, Carriers,
-Tracking e Notifications. Estão incluídas as máquinas de estados, persistência
-modular, APIs JSON, paginação, filtros, request ID e erros
-`application/problem+json`.
+Incremento I da v1.1: Core + Tracking, FastAPI e PostgreSQL 18 assíncrono,
+com bancos, credenciais e migrações separados. Core mantém Orders, Shipments,
+Notifications e cadastro de Carriers. Tracking autentica e normaliza os webhooks
+Alpha/Beta e mantém inbox e timeline. A entrada pública e a UI continuam no Core.
 
-Este incremento inclui os Carriers simulados Alpha e Beta, allowlist estática de
-adapters, autenticação HMAC sobre os bytes originais, inbox auditável, timeline
-canônica e registro persistente de Notifications simuladas para transições
-aplicadas durante o processamento síncrono. A interface operacional é renderizada
-no servidor e permite demonstrar esse fluxo completo. A Fase A da preparação de
-benchmark adiciona seeds sintéticos determinísticos e o harness reproduzível;
-processamento assíncrono e a execução de uma baseline oficial permanecem fora.
+O processamento continua síncrono. Um recibo idempotente no Core preserva o
+resultado original e impede efeitos duplicados após perda de resposta. A
+reentrega idêntica conclui o inbox pendente. Entre commits, o estado no Core pode
+estar atualizado antes da timeline; não há atomicidade global nem recuperação
+automática sem reentrega. Falhas de comunicação retornam 503, erros inesperados
+500, preservando o inbox recebido para retomada.
+
+A v1.0.0 publicada permanece na tag original. A comparação experimental da v1.1,
+a adaptação do loadgen e a preparação física do dataset congelado permanecem no
+incremento II de [RELEASE_PLAN.md](RELEASE_PLAN.md). Este checkout não está pronto
+para campanhas v1.1; workload, protocolo e imagem congelada não foram substituídos.
 
 O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
 
@@ -24,9 +27,17 @@ O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 docker compose up --build --wait
 ```
 
-O Compose aguarda o banco ficar saudável, executa `alembic upgrade head` no
-serviço one-shot `migrate` e só então inicia `app`. A API é publicada apenas em
-`127.0.0.1:8000` por padrão.
+O projeto padrão `fulfillflow-v11` cria um volume próprio, sem reutilizar o volume
+do monólito. PostgreSQL inicializa `fulfillflow_core` e `fulfillflow_tracking`, com
+roles distintas sem CONNECT ao banco do outro serviço. `migrate-core` e
+`migrate-tracking` aplicam seus respectivos heads antes de `core` e `tracking`
+iniciarem. Somente Core publica `127.0.0.1:8000`; Tracking e PostgreSQL ficam na
+rede interna. Cada aplicação usa um worker, 1 CPU, 768 MiB e pool de 5 conexões
+sem overflow. PostgreSQL recebe 2 CPUs e 2560 MiB.
+
+As migrações v1.1 destinam-se a bancos novos: não migram dados da v1.0 em uso.
+Os scripts Alembic históricos permanecem preservados. Não aponte os novos
+serviços para volumes ou bancos históricos.
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8000/health/live
@@ -67,8 +78,12 @@ caracteres.
 
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
 isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua todos
-os placeholders. Mantenha `POSTGRES_PASSWORD` e a senha codificada em
-`DATABASE_URL` coerentes.
+os placeholders. Mantenha `CORE_DB_PASSWORD`/`CORE_DATABASE_URL` e
+`TRACKING_DB_PASSWORD`/`TRACKING_DATABASE_URL` coerentes. `POSTGRES_PASSWORD`
+pertence apenas à administração inicial. Alterar o `.env` não altera senhas de
+roles já criadas. `INTERNAL_API_SECRET` autentica as chamadas internas; HMAC fica
+somente no Tracking e `SESSION_SECRET` somente no Core. Timeouts HTTP padrão:
+10 s para chamadas ao Core e 30 s para encaminhamento ao Tracking.
 
 ## Interface operacional
 
@@ -159,21 +174,60 @@ Para encerrar e remover o volume local deste projeto:
 docker compose down --volumes
 ```
 
-## Execução sem container da aplicação
+## Preparação funcional e execução por processos
 
-É necessário Python 3.13 gerenciado pelo `uv`, um PostgreSQL 18 acessível e um
-`.env` preenchido. Para um banco no host, altere o hostname de `DATABASE_URL` de
-`db` para `127.0.0.1`.
+Com o Compose saudável, este comando cria um Order confirmado e duas Shipments
+pendentes, Alpha `V11ALPHA0001` e Beta `V11BETA0001`, pela API pública:
 
 ```powershell
 uv sync --frozen
-uv run alembic upgrade head
-uv run alembic current --check-heads
-uv run alembic check
-uv run fastapi dev src/fulfillflow/main.py
+uv run python scripts/prepare_demo_v11.py --base-url http://127.0.0.1:8000
 ```
 
-## Seeds sintéticos e benchmark
+Referências e dados sintéticos são fixos; UUIDs e timestamps são atribuídos pela
+aplicação. Repetir preserva os mesmos registros, inclusive após eventos, e uma
+divergência nos dados esperados falha sem sobrescrevê-los. Uma preparação parcial
+pode ser retomada; ela não é uma transação entre bancos nem o seed do benchmark.
+Use o simulador acima com cada tracking code para preencher timeline e concluir
+o Order após entregar ambas as Shipments.
+
+Para executar aplicações no host, provisione os dois bancos PostgreSQL 18 com as
+roles segregadas do script `infrastructure/init-databases.sh`. Em dois terminais
+PowerShell, configure os secrets próprios, o token interno compartilhado e as URLs:
+
+```powershell
+# Terminal Core; DATABASE_URL aponta exclusivamente ao banco Core no host.
+$env:SERVICE_ROLE = "core"
+$env:DATABASE_URL = "postgresql+psycopg://<core-role>:<password>@127.0.0.1:5432/fulfillflow_core"
+$env:APP_PORT = "8000"
+$env:TRACKING_BASE_URL = "http://127.0.0.1:8001"
+uv run alembic -c alembic_core.ini upgrade head
+uv run alembic -c alembic_core.ini current --check-heads
+uv run alembic -c alembic_core.ini check
+uv run python -m fulfillflow
+```
+
+```powershell
+# Terminal Tracking; HMAC configurado aqui, além do mesmo INTERNAL_API_SECRET.
+$env:SERVICE_ROLE = "tracking"
+$env:DATABASE_URL = "postgresql+psycopg://<tracking-role>:<password>@127.0.0.1:5432/fulfillflow_tracking"
+$env:APP_PORT = "8001"
+$env:CORE_BASE_URL = "http://127.0.0.1:8000"
+uv run alembic -c alembic_tracking.ini upgrade head
+uv run alembic -c alembic_tracking.ini current --check-heads
+uv run alembic -c alembic_tracking.ini check
+uv run python -m fulfillflow.tracking
+```
+
+## Seeds sintéticos e benchmark histórico v1.0
+
+Os comandos desta seção pertencem à topologia monolítica da tag `v1.0.0`.
+`seed_demo.py`, o loader físico e o harness não preparam os bancos v1.1.
+Os testes de regressão continuam verificando os hashes lógicos e estruturais
+congelados em um terceiro banco isolado. A relocação do import de normalização
+no gerador não altera o dataset. Compatibilidade de manifest/topologia, identidades
+da versão candidata e eventual necessidade de imagem do loadgen serão decididas
+no incremento II; não executar a campanha a partir deste checkout.
 
 Os seeds são fail-closed e aceitam somente PostgreSQL 18 via `postgresql+psycopg`.
 Eles exigem `APP_ENV` explícito, schema no head do Alembic e confirmação literal do
@@ -221,9 +275,21 @@ measurement de 300 segundos ou campanha completa.
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
 não dependem de banco. Testes de repository/service, APIs persistentes, UI e E2E
-usam somente um PostgreSQL 18 dedicado informado por `TEST_DATABASE_URL`; sem
-essa variável, eles são explicitamente ignorados. O E2E sobe a aplicação em uma
-porta TCP local e executa o script externo contra o webhook público.
+usam PostgreSQL 18 real. Configure os três bancos isolados abaixo; fixtures
+ausentes são explicitamente ignoradas e não constituem validação completa.
+O E2E sobe Core e Tracking em portas TCP distintas e chama o webhook público
+por processo externo. Os testes limpam apenas os bancos dedicados informados.
+
+```powershell
+docker compose -p fulfillflow-v11-tests -f compose.test.yaml up -d --wait
+$env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core"
+$env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
+$env:TEST_LEGACY_DATABASE_URL = "postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy"
+```
+
+O teste estrutural histórico cria e remove seu próprio container Docker, sem
+Locust ou campanha. Após os gates, remova somente a infraestrutura dedicada:
+`docker compose -p fulfillflow-v11-tests -f compose.test.yaml down --volumes`.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
@@ -239,7 +305,12 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A revisão `0001_bootstrap` estabelece o baseline, `0002_orders_shipments` cria
+A v1.1 usa `1101_core` (cadastro, Orders, Shipments, Notifications e recibos)
+e `1101_tracking` (inbox e timeline), com metadados e graphs Alembic separados.
+Os testes verificam upgrade/check/downgrade/upgrade de ambos, ausência de FKs
+entre proprietários e rejeição de conexão com a credencial do outro serviço.
+
+No histórico v1.0, a revisão `0001_bootstrap` estabelece o baseline, `0002_orders_shipments` cria
 Orders, Shipments e o registro de Carriers, e `0003_carriers_tracking` instala os
 registros determinísticos Alpha/Beta e cria `carrier_event_inbox` e
 `tracking_events`. A revisão `0004_notifications` cria o registro persistente das

@@ -74,6 +74,7 @@ class TrackingRepository:
         if model is None:
             raise LookupError(f"Carrier inbox {inbox.id} disappeared during its transaction")
         model.parsed_payload = inbox.parsed_payload
+        model.command = inbox.command
         model.status = inbox.status.value
         model.error_code = inbox.error_code
         model.error_detail = inbox.error_detail
@@ -184,6 +185,7 @@ def _inbox_to_model(inbox: CarrierEventInbox) -> CarrierEventInboxModel:
         error_detail=inbox.error_detail,
         processed_at=inbox.processed_at,
         request_id=inbox.request_id,
+        command=inbox.command,
     )
 
 
@@ -201,6 +203,7 @@ def _inbox_to_entity(model: CarrierEventInboxModel) -> CarrierEventInbox:
         error_detail=model.error_detail,
         processed_at=model.processed_at,
         request_id=model.request_id,
+        command=model.command,
     )
 
 

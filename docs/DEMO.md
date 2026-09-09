@@ -1,10 +1,10 @@
-# Demonstração funcional do FulfillFlow v1.0.0
+# Demonstração funcional do FulfillFlow v1.1 — incremento I
 
 Este roteiro apresenta a jornada principal do FulfillFlow em um ambiente local e
 controlado: criação de um `Order`, criação de uma `Shipment`, recebimento de
 eventos de uma transportadora simulada e consulta dos efeitos pela interface.
 
-A interface é um painel operacional interno. A v1.0.0 não possui cadastro ou
+A interface é um painel operacional interno. A aplicação não possui cadastro ou
 login de usuários e não deve ser exposta diretamente à internet.
 
 ## O que será demonstrado
@@ -23,7 +23,7 @@ transportadora ou conta de e-mail real é utilizada.
 
 ## Pré-requisitos
 
-- checkout da release v1.0.0;
+- checkout da branch v1.1 validada;
 - Docker Engine com Docker Compose;
 - Python 3.13 e `uv` para executar o simulador externo;
 - PowerShell;
@@ -38,17 +38,21 @@ Na sessão do PowerShell usada para iniciar o Compose e o simulador, defina:
 ```powershell
 $env:APP_ENV = "local"
 $env:APP_PORT = "8000"
-$env:POSTGRES_DB = "fulfillflow"
-$env:POSTGRES_USER = "fulfillflow"
-$env:POSTGRES_PASSWORD = "fulfillflow-demo-db-password-2026"
-$env:DATABASE_URL = "postgresql+psycopg://fulfillflow:fulfillflow-demo-db-password-2026@db:5432/fulfillflow"
+$env:POSTGRES_PASSWORD = "fulfillflow-demo-admin-password-2026"
+$env:CORE_DB_PASSWORD = "fulfillflow-demo-core-password-2026"
+$env:TRACKING_DB_PASSWORD = "fulfillflow-demo-tracking-password-2026"
+$env:CORE_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:fulfillflow-demo-core-password-2026@db:5432/fulfillflow_core"
+$env:TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:fulfillflow-demo-tracking-password-2026@db:5432/fulfillflow_tracking"
+$env:INTERNAL_API_SECRET = "fulfillflow-demo-internal-2026-local-only-72be"
 $env:SESSION_SECRET = "fulfillflow-demo-session-2026-local-only-7f91"
 $env:CARRIER_ALPHA_WEBHOOK_SECRET = "fulfillflow-demo-alpha-2026-local-only-a84e"
 $env:CARRIER_BETA_WEBHOOK_SECRET = "fulfillflow-demo-beta-2026-local-only-b73c"
 ```
 
-`POSTGRES_PASSWORD` e a senha de `DATABASE_URL` precisam ser iguais. Os secrets
-Alpha e Beta precisam ser distintos.
+Cada senha de role deve coincidir com seu DSN. Use um volume v1.1 novo; não
+reutilize o banco da v1.0. Os secrets Alpha e Beta precisam ser distintos e ficam
+no Tracking. Core recebe somente o secret de sessão e o token interno comum.
+As telas e os webhooks continuam acessíveis pela porta pública do Core.
 
 ## 2. Iniciar a aplicação
 
@@ -185,13 +189,13 @@ Detalhes de transações, locks e idempotência permanecem documentados em
 
 ## Capturas da demonstração
 
-As imagens abaixo foram obtidas da aplicação real FulfillFlow v1.0.0 em ambiente
+As imagens abaixo foram obtidas da aplicação real FulfillFlow v1.1 — incremento I em ambiente
 local controlado. Todos os dados apresentados são sintéticos.
 
 Não use geração de imagens e não exponha secrets, assinaturas, DSN ou variáveis
 de ambiente.
 
-![Dashboard operacional do FulfillFlow v1.0.0](assets/demo/dashboard.png)
+![Dashboard operacional do FulfillFlow v1.1 — incremento I](assets/demo/dashboard.png)
 
 Dashboard com os estados operacionais e os eventos recentes.
 

@@ -34,7 +34,7 @@ class DatabaseSettings(BaseSettings):
     )
 
     database_url: SecretStr
-    db_pool_size: int = Field(default=10, ge=1)
+    db_pool_size: int = Field(default=5, ge=1)
     db_max_overflow: int = Field(default=0, ge=0)
     db_pool_timeout_seconds: float = Field(default=5, gt=0)
     db_statement_timeout_ms: int = Field(default=5000, gt=0)
@@ -72,9 +72,15 @@ class Settings(DatabaseSettings):
     log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
     log_format: Literal["json", "console"] = "json"
 
-    session_secret: SecretStr
-    carrier_alpha_webhook_secret: SecretStr
-    carrier_beta_webhook_secret: SecretStr
+    service_role: Literal["core", "tracking"] = "core"
+    internal_api_secret: SecretStr
+    core_base_url: AnyHttpUrl = AnyHttpUrl("http://core:8000")
+    tracking_base_url: AnyHttpUrl = AnyHttpUrl("http://tracking:8000")
+    service_http_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    forwarding_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    session_secret: SecretStr = SecretStr("")
+    carrier_alpha_webhook_secret: SecretStr = SecretStr("")
+    carrier_beta_webhook_secret: SecretStr = SecretStr("")
     webhook_signature_tolerance_seconds: int = Field(default=300, gt=0)
     max_webhook_body_bytes: int = Field(default=65536, gt=0, le=65536)
 
@@ -111,19 +117,25 @@ class Settings(DatabaseSettings):
         alpha_secret = self.carrier_alpha_webhook_secret.get_secret_value()
         beta_secret = self.carrier_beta_webhook_secret.get_secret_value()
 
-        if alpha_secret == beta_secret:
+        if self.service_role == "tracking" and (not alpha_secret or not beta_secret):
+            raise ValueError("Tracking requires both carrier webhook secrets")
+        if (alpha_secret or beta_secret) and alpha_secret == beta_secret:
             raise ValueError("carrier webhook secrets must be distinct")
 
         if self.app_env != "test":
-            secrets = {
-                "SESSION_SECRET": self.session_secret.get_secret_value(),
-                "CARRIER_ALPHA_WEBHOOK_SECRET": alpha_secret,
-                "CARRIER_BETA_WEBHOOK_SECRET": beta_secret,
-            }
+            secrets = {"INTERNAL_API_SECRET": self.internal_api_secret.get_secret_value()}
+            if self.service_role == "core":
+                secrets["SESSION_SECRET"] = self.session_secret.get_secret_value()
+            else:
+                secrets["CARRIER_ALPHA_WEBHOOK_SECRET"] = alpha_secret
+                secrets["CARRIER_BETA_WEBHOOK_SECRET"] = beta_secret
             trivial = [name for name, value in secrets.items() if _is_trivial_secret(value)]
             if trivial:
                 names = ", ".join(trivial)
                 raise ValueError(f"non-test secrets must be non-trivial: {names}")
+
+        if not self.internal_api_secret.get_secret_value():
+            raise ValueError("INTERNAL_API_SECRET must not be empty")
 
         if self.otel_enabled and self.otel_exporter_otlp_endpoint is None:
             raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED=true")

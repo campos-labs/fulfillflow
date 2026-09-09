@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
+from tests.service_pair import create_app
 from tests.support import FixedClock
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.main import create_app
 from fulfillflow.tracking.public import calculate_signature
 
 pytestmark = pytest.mark.integration

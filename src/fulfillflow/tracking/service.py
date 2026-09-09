@@ -1,4 +1,4 @@
-"""Synchronous authenticated Carrier-event processing coordinator."""
+"""Synchronous Tracking coordination across three durable local boundaries."""
 
 from __future__ import annotations
 
@@ -8,33 +8,32 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import NoReturn, cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fulfillflow.carriers.public import (
-    CarrierPayloadProjection,
-    CarriersPublic,
-    CarrierView,
+from fulfillflow.contracts.core import (
+    AppliedEventResult,
+    ApplyEventCommand,
+    CarrierRead,
+    RejectedEventResult,
+)
+from fulfillflow.contracts.tracking import CarrierPayloadProjection
+from fulfillflow.shared import Clock, Page, new_uuid
+from fulfillflow.tracking.adapters import (
     UnknownExternalStatusError,
     normalize_carrier_event,
     project_known_carrier_payload,
 )
-from fulfillflow.notifications.public import NotificationsPublic
-from fulfillflow.shared import Clock, Page, new_uuid
-from fulfillflow.shipments.public import (
-    ShipmentApplicationResult as PublicShipmentApplicationResult,
-)
-from fulfillflow.shipments.public import ShipmentNotFoundError, ShipmentsPublic
-from fulfillflow.shipments.public import ShipmentStatus as PublicShipmentStatus
 from fulfillflow.tracking.authentication import (
     InvalidWebhookSignatureError,
     StaleWebhookTimestampError,
     WebhookAuthentication,
     authenticate_webhook,
 )
+from fulfillflow.tracking.core_client import CoreClient
 from fulfillflow.tracking.domain import (
     CarrierEventInbox,
     InboxStatus,
@@ -43,55 +42,11 @@ from fulfillflow.tracking.domain import (
     ShipmentStatus,
     TrackingEvent,
 )
+from fulfillflow.tracking.errors import TrackingProblemError
 from fulfillflow.tracking.repository import InboxFilters, TrackingRepository
-from fulfillflow.tracking.schemas import (
-    CarrierEventFilters,
-    WebhookResult,
-)
+from fulfillflow.tracking.schemas import CarrierEventFilters, WebhookResult
 
-
-class TrackingProblemError(Exception):
-    """Known sanitized error translated to an RFC 9457 response."""
-
-    def __init__(
-        self,
-        *,
-        status_code: int,
-        code: str,
-        title: str,
-        detail: str,
-        reject_inbox: bool = False,
-    ) -> None:
-        self.status_code = status_code
-        self.code = code
-        self.title = title
-        self.detail = detail
-        self.reject_inbox = reject_inbox
-        super().__init__(detail)
-
-
-class PayloadTooLargeError(TrackingProblemError):
-    """Raised before authentication when the request exceeds its byte limit."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            status_code=413,
-            code="PAYLOAD_TOO_LARGE",
-            title="Webhook payload too large",
-            detail="The webhook body exceeds the configured byte limit.",
-        )
-
-
-class UnsupportedWebhookMediaTypeError(TrackingProblemError):
-    """Raised before authentication for a non-JSON content type."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            status_code=415,
-            code="UNSUPPORTED_MEDIA_TYPE",
-            title="Unsupported media type",
-            detail="Carrier webhooks require Content-Type application/json.",
-        )
+_EVENT_NAMESPACE = UUID("e56e170b-727a-5aa0-a172-6d6c8f176728")
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,15 +75,13 @@ class CarrierEventView:
 
 
 class TrackingService:
-    """Own the independent reception and atomic business transactions."""
+    """Own local inbox transactions; release all SQL resources before HTTP."""
 
-    def __init__(self, session: AsyncSession, clock: Clock) -> None:
+    def __init__(self, session: AsyncSession, clock: Clock, core: CoreClient) -> None:
         self._session = session
         self._clock = clock
         self._repository = TrackingRepository(session)
-        self._carriers = CarriersPublic(session)
-        self._shipments = ShipmentsPublic(session)
-        self._notifications = NotificationsPublic(session, clock)
+        self._core = core
 
     async def authenticate_and_process(
         self,
@@ -140,7 +93,6 @@ class TrackingService:
         tolerance_seconds: int,
         request_id: UUID,
     ) -> WebhookOutcome:
-        """Authenticate raw bytes, commit the inbox, then process synchronously."""
         received_at = self._clock.now()
         try:
             authenticate_webhook(
@@ -164,9 +116,11 @@ class TrackingService:
                 title="Stale webhook timestamp",
                 detail="Webhook timestamp is outside the accepted window.",
             ) from exc
-
-        carrier, inbox = await self._receive_authenticated(
-            carrier_code.strip().lower(),
+        carrier = await self._core.find_carrier(carrier_code.strip().lower(), active_only=True)
+        if carrier is None:
+            raise RuntimeError("Active Carrier lookup returned no registry record")
+        inbox = await self._receive_authenticated(
+            carrier,
             authentication.event_id,
             raw_body,
             received_at=received_at,
@@ -175,37 +129,22 @@ class TrackingService:
         return await self._process_inbox(carrier, inbox, request_id=request_id)
 
     async def timeline(
-        self,
-        shipment_id: UUID,
-        *,
-        page: int,
-        page_size: int,
+        self, shipment_id: UUID, *, page: int, page_size: int
     ) -> Page[TrackingEvent]:
-        """Return an existing Shipment's canonical timeline."""
+        await self._core.require_shipment(shipment_id)
         async with self._session.begin():
-            if await self._shipments.find(shipment_id) is None:
-                raise ShipmentNotFoundError(shipment_id)
-            return await self._repository.timeline(
-                shipment_id,
-                page=page,
-                page_size=page_size,
-            )
+            return await self._repository.timeline(shipment_id, page=page, page_size=page_size)
 
     async def list_inbox(
-        self,
-        filters: CarrierEventFilters,
-        *,
-        page: int,
-        page_size: int,
+        self, filters: CarrierEventFilters, *, page: int, page_size: int
     ) -> Page[CarrierEventView]:
-        """List sanitized authenticated inbox records."""
+        carrier_id = None
+        if filters.carrier_code is not None:
+            carrier = await self._core.find_carrier(filters.carrier_code.strip().lower())
+            if carrier is None:
+                return Page([], page, page_size, 0)
+            carrier_id = carrier.id
         async with self._session.begin():
-            carrier_id: UUID | None = None
-            if filters.carrier_code is not None:
-                carrier = await self._carriers.find(filters.carrier_code.strip().lower())
-                if carrier is None:
-                    return Page([], page, page_size, 0)
-                carrier_id = carrier.id
             result = await self._repository.list_inbox(
                 InboxFilters(
                     carrier_id=carrier_id,
@@ -217,46 +156,51 @@ class TrackingService:
                 page=page,
                 page_size=page_size,
             )
-            return await self._inbox_page_to_views(result)
+            event_ids = {}
+            for inbox in result.items:
+                event = await self._repository.get_tracking_event_by_inbox(inbox.id)
+                event_ids[inbox.id] = event.id if event is not None else None
+        carriers = await self._core.carriers_by_ids({item.carrier_id for item in result.items})
+        return Page(
+            [
+                CarrierEventView(item, carriers[item.carrier_id].code, event_ids[item.id], None)
+                for item in result.items
+            ],
+            result.page,
+            result.page_size,
+            result.total,
+        )
 
     async def get_inbox(self, inbox_event_id: UUID) -> CarrierEventView:
-        """Return sanitized operational detail for one inbox row."""
         async with self._session.begin():
             inbox = await self._repository.get_inbox(inbox_event_id)
             if inbox is None:
                 raise CarrierEventNotFoundError(inbox_event_id)
-            carriers = await self._carriers.views_by_ids({inbox.carrier_id})
-            carrier = carriers[inbox.carrier_id]
             event = await self._repository.get_tracking_event_by_inbox(inbox.id)
-            return CarrierEventView(
-                inbox,
-                carrier.code,
-                event.id if event is not None else None,
-                (
-                    project_known_carrier_payload(
-                        carrier.adapter_key,
-                        inbox.parsed_payload,
-                    )
-                    if inbox.parsed_payload is not None
-                    else None
-                ),
-            )
+        carriers = await self._core.carriers_by_ids({inbox.carrier_id})
+        carrier = carriers[inbox.carrier_id]
+        return CarrierEventView(
+            inbox,
+            carrier.code,
+            event.id if event is not None else None,
+            project_known_carrier_payload(carrier.adapter_key, inbox.parsed_payload)
+            if inbox.parsed_payload is not None
+            else None,
+        )
 
     async def _receive_authenticated(
         self,
-        carrier_code: str,
+        carrier: CarrierRead,
         external_event_id: str,
         raw_body: bytes,
         *,
         received_at: datetime,
         request_id: UUID,
-    ) -> tuple[CarrierView, CarrierEventInbox]:
-        """Transaction A: preserve authenticated bytes under DB idempotency."""
+    ) -> CarrierEventInbox:
+        """Commit raw reception independently; UUID deterministically fixes command identity."""
         payload_sha256 = hashlib.sha256(raw_body).hexdigest()
-        carrier: CarrierView
         try:
             async with self._session.begin():
-                carrier = await self._carriers.require_active(carrier_code)
                 inbox = CarrierEventInbox(
                     id=new_uuid(),
                     carrier_id=carrier.id,
@@ -272,36 +216,26 @@ class TrackingService:
                     request_id=request_id,
                 )
                 await self._repository.add_inbox(inbox)
-            return carrier, inbox
+            return inbox
         except IntegrityError as integrity_error:
             async with self._session.begin():
-                carrier = await self._carriers.require_active(carrier_code)
                 original = await self._repository.get_inbox_by_carrier_event(
-                    carrier.id,
-                    external_event_id,
+                    carrier.id, external_event_id
                 )
             if original is None:
                 raise
-            if not hmac.compare_digest(
-                original.payload_sha256.encode("ascii"),
-                payload_sha256.encode("ascii"),
-            ):
+            if not hmac.compare_digest(original.payload_sha256, payload_sha256):
                 raise TrackingProblemError(
                     status_code=409,
                     code="EVENT_ID_PAYLOAD_CONFLICT",
                     title="Carrier event payload conflict",
                     detail="The Carrier event ID was already used with different bytes.",
                 ) from integrity_error
-            return carrier, original
+            return original
 
     async def _process_inbox(
-        self,
-        carrier: CarrierView,
-        inbox: CarrierEventInbox,
-        *,
-        request_id: UUID,
+        self, carrier: CarrierRead, inbox: CarrierEventInbox, *, request_id: UUID
     ) -> WebhookOutcome:
-        """Transaction B: normalize, apply Shipment state and finalize atomically."""
         parsed_payload: JsonValue = None
         try:
             async with self._session.begin():
@@ -312,103 +246,74 @@ class TrackingService:
                     return await self._duplicate_outcome(locked, request_id)
                 if locked.status is InboxStatus.REJECTED:
                     raise _recorded_rejection(locked)
-
-                parsed_payload = _decode_json(locked.raw_body)
-                locked.parsed_payload = parsed_payload
-                try:
-                    canonical = normalize_carrier_event(carrier.adapter_key, parsed_payload)
-                except UnknownExternalStatusError as exc:
-                    raise _permanent_problem(
-                        "UNKNOWN_EXTERNAL_STATUS",
-                        "Unknown external status",
-                        "The Carrier payload contains an unknown status.",
-                    ) from exc
-                except ValidationError as exc:
-                    raise _permanent_problem(
-                        "VALIDATION_ERROR",
-                        "Invalid Carrier payload",
-                        "The Carrier payload does not match its external schema.",
-                    ) from exc
-
-                if canonical.external_event_id != locked.external_event_id:
-                    raise _permanent_problem(
-                        "EVENT_ID_MISMATCH",
-                        "Carrier event ID mismatch",
-                        "The signed event ID does not match the payload event ID.",
-                    )
-
-                shipment = await self._shipments.lock_for_tracking(
-                    carrier.id,
-                    canonical.tracking_code,
-                )
-                if shipment is None:
-                    raise _permanent_problem(
-                        "SHIPMENT_NOT_FOUND_FOR_TRACKING",
-                        "Shipment not found for tracking",
-                        "No Shipment matches the Carrier and tracking code.",
-                    )
-
-                transition = self._shipments.evaluate_tracking_status_locked(
-                    shipment,
-                    PublicShipmentStatus(canonical.canonical_status.value),
-                    occurred_at=canonical.occurred_at,
-                    received_at=locked.received_at,
-                    external_event_id=canonical.external_event_id,
-                )
-                event = TrackingEvent(
-                    id=new_uuid(),
-                    inbox_event_id=locked.id,
-                    shipment_id=shipment.id,
-                    carrier_id=carrier.id,
-                    external_status=canonical.external_status,
-                    canonical_status=ShipmentStatus(canonical.canonical_status.value),
-                    description=canonical.description,
-                    location=canonical.location,
-                    occurred_at=canonical.occurred_at,
-                    received_at=locked.received_at,
-                    application_result=ShipmentApplicationResult(transition.result.value),
-                    previous_shipment_status=ShipmentStatus(transition.previous_status.value),
-                    resulting_shipment_status=ShipmentStatus(transition.resulting_status.value),
-                    created_at=self._clock.now(),
-                )
-                await self._repository.add_tracking_event(event)
-                recipient = await self._shipments.persist_tracking_status_locked(
-                    shipment,
-                    transition,
-                )
-                if transition.result is PublicShipmentApplicationResult.APPLIED:
-                    if recipient is None:
-                        raise RuntimeError(
-                            "Applied Shipment transition has no notification recipient"
-                        )
-                    await self._notifications.record_applied_transition(
-                        shipment_id=shipment.id,
-                        tracking_event_id=event.id,
-                        recipient=recipient,
-                        resulting_status=transition.resulting_status.value,
-                    )
-                await self._shipments.complete_order_if_eligible_locked(
-                    shipment,
-                    transition,
-                    occurred_at=locked.received_at,
-                )
-                locked.mark_processed(self._clock.now())
-                await self._repository.save_inbox(locked)
-                return _outcome_from_event(
-                    locked,
-                    event,
-                    result=WebhookResult(event.application_result.value),
-                    original_result=None,
-                    request_id=request_id,
-                )
-        except TrackingProblemError as exc:
-            if exc.reject_inbox:
+                if locked.command is None:
+                    parsed_payload = _decode_json(locked.raw_body)
+                    locked.parsed_payload = parsed_payload
+                    command = _normalize_command(carrier, locked)
+                    locked.command = command.model_dump(mode="json")
+                    await self._repository.save_inbox(locked)
+                else:
+                    command = ApplyEventCommand.model_validate(locked.command)
+            # No transaction, connection or inbox lock crosses this HTTP boundary.
+            result = await self._core.apply(command)
+            if isinstance(result, RejectedEventResult):
+                error = _permanent_problem(result.code, result.title, result.detail)
                 await self._reject_inbox(
                     inbox.id,
-                    parsed_payload=parsed_payload,
-                    error=exc,
+                    parsed_payload=locked.parsed_payload,
+                    error=error,
+                    processed_at=result.decided_at,
                 )
+                raise _recorded_rejection_from_error(error)
+            return await self._finalize(inbox.id, command, result, request_id=request_id)
+        except TrackingProblemError as exc:
+            if exc.reject_inbox:
+                await self._reject_inbox(inbox.id, parsed_payload=parsed_payload, error=exc)
             raise
+
+    async def _finalize(
+        self,
+        inbox_id: UUID,
+        command: ApplyEventCommand,
+        result: AppliedEventResult,
+        *,
+        request_id: UUID,
+    ) -> WebhookOutcome:
+        """A concurrent finalizer may win; it cannot overwrite the original timeline."""
+        async with self._session.begin():
+            inbox = await self._repository.get_inbox(inbox_id, for_update=True)
+            if inbox is None:
+                raise RuntimeError("Carrier inbox disappeared before finalization")
+            if inbox.status is InboxStatus.PROCESSED:
+                return await self._duplicate_outcome(inbox, request_id)
+            if inbox.status is InboxStatus.REJECTED:
+                raise _recorded_rejection(inbox)
+            event = TrackingEvent(
+                id=command.event_id,
+                inbox_event_id=inbox.id,
+                shipment_id=result.shipment_id,
+                carrier_id=command.carrier_id,
+                external_status=command.external_status,
+                canonical_status=ShipmentStatus(command.canonical_status),
+                description=command.description,
+                location=command.location,
+                occurred_at=command.occurred_at,
+                received_at=command.received_at,
+                application_result=result.result,
+                previous_shipment_status=result.previous_status,
+                resulting_shipment_status=result.current_status,
+                created_at=result.decided_at,
+            )
+            await self._repository.add_tracking_event(event)
+            inbox.mark_processed(self._clock.now())
+            await self._repository.save_inbox(inbox)
+            return _outcome_from_event(
+                inbox,
+                event,
+                result=WebhookResult(event.application_result.value),
+                original_result=None,
+                request_id=request_id,
+            )
 
     async def _reject_inbox(
         self,
@@ -416,8 +321,8 @@ class TrackingService:
         *,
         parsed_payload: JsonValue,
         error: TrackingProblemError,
+        processed_at: datetime | None = None,
     ) -> None:
-        """Persist one permanent rejection after Transaction B rolls back."""
         async with self._session.begin():
             inbox = await self._repository.get_inbox(inbox_event_id, for_update=True)
             if inbox is None:
@@ -427,15 +332,13 @@ class TrackingService:
             inbox.mark_rejected(
                 code=error.code,
                 detail=error.detail,
-                processed_at=self._clock.now(),
+                processed_at=processed_at or self._clock.now(),
                 parsed_payload=parsed_payload,
             )
             await self._repository.save_inbox(inbox)
 
     async def _duplicate_outcome(
-        self,
-        inbox: CarrierEventInbox,
-        request_id: UUID,
+        self, inbox: CarrierEventInbox, request_id: UUID
     ) -> WebhookOutcome:
         event = await self._repository.get_tracking_event_by_inbox(inbox.id)
         if event is None:
@@ -448,23 +351,43 @@ class TrackingService:
             request_id=request_id,
         )
 
-    async def _inbox_page_to_views(
-        self,
-        page: Page[CarrierEventInbox],
-    ) -> Page[CarrierEventView]:
-        codes = await self._carriers.codes_by_ids({item.carrier_id for item in page.items})
-        views: list[CarrierEventView] = []
-        for inbox in page.items:
-            event = await self._repository.get_tracking_event_by_inbox(inbox.id)
-            views.append(
-                CarrierEventView(
-                    inbox,
-                    codes[inbox.carrier_id],
-                    event.id if event is not None else None,
-                    None,
-                )
-            )
-        return Page(views, page.page, page.page_size, page.total)
+
+def _normalize_command(carrier: CarrierRead, inbox: CarrierEventInbox) -> ApplyEventCommand:
+    try:
+        canonical = normalize_carrier_event(carrier.adapter_key, inbox.parsed_payload)
+    except UnknownExternalStatusError as exc:
+        raise _permanent_problem(
+            "UNKNOWN_EXTERNAL_STATUS",
+            "Unknown external status",
+            "The Carrier payload contains an unknown status.",
+        ) from exc
+    except ValidationError as exc:
+        raise _permanent_problem(
+            "VALIDATION_ERROR",
+            "Invalid Carrier payload",
+            "The Carrier payload does not match its external schema.",
+        ) from exc
+    if canonical.external_event_id != inbox.external_event_id:
+        raise _permanent_problem(
+            "EVENT_ID_MISMATCH",
+            "Carrier event ID mismatch",
+            "The signed event ID does not match the payload event ID.",
+        )
+    return ApplyEventCommand.model_validate(
+        dict(
+            canonical.model_dump(),
+            event_id=uuid5(_EVENT_NAMESPACE, str(inbox.id)),
+            carrier_id=inbox.carrier_id,
+            payload_sha256=inbox.payload_sha256,
+            received_at=inbox.received_at,
+        )
+    )
+
+
+def _recorded_rejection_from_error(error: TrackingProblemError) -> TrackingProblemError:
+    return TrackingProblemError(
+        status_code=error.status_code, code=error.code, title=error.title, detail=error.detail
+    )
 
 
 class CarrierEventNotFoundError(LookupError):
@@ -541,13 +464,3 @@ _REJECTION_TITLES = {
     "UNKNOWN_EXTERNAL_STATUS": "Unknown external status",
     "SHIPMENT_NOT_FOUND_FOR_TRACKING": "Shipment not found for tracking",
 }
-
-
-def _assert_public_result_coverage() -> None:
-    """Keep the two public persisted result enums intentionally synchronized."""
-    assert {item.value for item in PublicShipmentApplicationResult} == {
-        item.value for item in ShipmentApplicationResult
-    }
-
-
-_assert_public_result_coverage()

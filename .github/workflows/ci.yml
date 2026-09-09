@@ -12,26 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
-      TEST_DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-ci-db-2026@127.0.0.1:5432/fulfillflow_test
+      DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
+      TEST_DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
+      TEST_TRACKING_DATABASE_URL: postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking
+      TEST_LEGACY_DATABASE_URL: postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy
+      INTERNAL_API_SECRET: 9d8e5b6f749941feaf4c88390a3a94b2d80ab13c0a04496babd54cc878f611eb
       SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e
       CARRIER_ALPHA_WEBHOOK_SECRET: 18374b93133e4996980ef121a823921618481057613d4d119732569639ec7fc8
       CARRIER_BETA_WEBHOOK_SECRET: 1e30d7e5116e4ae39f61d6bd52896149bcabe2b6e21c4cd2a5105366ce4c2795
-    services:
-      postgres:
-        image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
-        env:
-          POSTGRES_DB: fulfillflow_test
-          POSTGRES_USER: fulfillflow
-          POSTGRES_PASSWORD: fulfillflow-ci-db-2026
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready --username=fulfillflow --dbname=fulfillflow_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,17 +46,21 @@ jobs:
       - name: Import contracts
         run: uv run lint-imports
 
+      - name: Start isolated owner and legacy databases
+        run: docker compose -p fulfillflow-ci-tests -f compose.test.yaml up -d --wait --wait-timeout 120
+
       - name: Unit, API, and simulator tests
         run: uv run pytest tests/unit tests/api -q
 
-      - name: Upgrade an empty PostgreSQL database
-        run: uv run alembic upgrade head
-
-      - name: Verify Alembic head
-        run: uv run alembic current --check-heads
-
-      - name: Verify metadata has no migration drift
-        run: uv run alembic check
+      - name: Verify both owner migration graphs
+        run: |
+          uv run alembic -c alembic_core.ini upgrade head
+          uv run alembic -c alembic_core.ini current --check-heads
+          uv run alembic -c alembic_core.ini check
+          export DATABASE_URL="$TEST_TRACKING_DATABASE_URL"
+          uv run alembic -c alembic_tracking.ini upgrade head
+          uv run alembic -c alembic_tracking.ini current --check-heads
+          uv run alembic -c alembic_tracking.ini check
 
       - name: Structural DatabaseProbe Docker integration
         run: uv run pytest tests/integration/test_benchmark_schema_contract.py -q
@@ -116,7 +108,7 @@ jobs:
         run: docker compose -f compose.benchmark.yaml config --quiet
 
       - name: Build runtime image
-        run: docker compose build app
+        run: docker compose build core tracking
 
       - name: Build and smoke loadgen image
         run: |
@@ -125,7 +117,6 @@ jobs:
 
       - name: Smoke test Compose stack
         env:
-          DATABASE_URL: postgresql+psycopg://fulfillflow:fulfillflow-compose-ci-2026@db:5432/fulfillflow
           POSTGRES_PASSWORD: fulfillflow-compose-ci-2026
         run: |
           docker compose up --detach --no-build --wait --wait-timeout 120
@@ -137,7 +128,11 @@ jobs:
           curl --fail --silent --show-error --dump-header /tmp/bootstrap.headers --output /tmp/bootstrap.css http://127.0.0.1:8000/static/vendor/bootstrap-5.3.8.min.css
           grep --ignore-case --quiet '^content-type: text/css' /tmp/bootstrap.headers
           grep --fixed-strings --quiet 'v5.3.8' /tmp/bootstrap.css
-          docker compose exec -T app sh -c '[ "$(id -u)" -ne 0 ]'
+          docker compose exec -T core sh -c '[ "$(id -u)" -ne 0 ]'
+
+          docker compose exec -T tracking sh -c '[ "$(id -u)" -ne 0 ]'
+          uv run python scripts/prepare_demo_v11.py
+          uv run python scripts/prepare_demo_v11.py
 
       - name: Show Compose logs on failure
         if: failure()
@@ -145,4 +140,6 @@ jobs:
 
       - name: Remove Compose smoke resources
         if: always()
-        run: docker compose down --volumes
+        run: |
+          docker compose down --volumes
+          docker compose -p fulfillflow-ci-tests -f compose.test.yaml down --volumes

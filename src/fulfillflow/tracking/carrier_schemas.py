@@ -143,14 +143,3 @@ class CanonicalCarrierEvent(_CanonicalSchema):
     def normalize_tracking_code(cls, value: object) -> object:
         """Defend the canonical contract even when built outside an adapter."""
         return value.strip().upper() if isinstance(value, str) else value
-
-
-class CarrierPayloadProjection(_CanonicalSchema):
-    """Known validated external fields safe for operational API detail."""
-
-    external_event_id: ExternalEventId
-    tracking_code: TrackingCode
-    external_status: ExternalStatus
-    occurred_at: AwareDatetime
-    description: Description | None
-    location: Location | None
