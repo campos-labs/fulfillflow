@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from benchmarks.campaign import CampaignManifest, load_campaign
 from benchmarks.collectors import DatabaseProbe, DockerProbe, ExternalCommandError, run_capture
 from benchmarks.collectors_v11 import SplitDatabaseProbe
 from benchmarks.database_contract import STRUCTURAL_SCHEMA_QUERIES, structural_schema_identity
+from benchmarks.operational_errors import diagnostics, error_report, write_report
 from benchmarks.prepare_database import _validate_database_url
 from benchmarks.seed_v11 import OWNER_SCHEMA_TABLES, Owner
 
@@ -163,8 +165,23 @@ def restore(
         report = json.loads(verified)
         report["preparation_seconds"] = elapsed
         readiness.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        run_capture(down, 30)
+    except BaseException as exc:
+        evidence = os.environ.get("FULFILLFLOW_PREPARATION_EVIDENCE")
+        if evidence:
+            try:
+                write_report(Path(evidence) / "error.json", error_report(exc))
+                diagnostics(compose, Path(evidence) / "before-cleanup")
+            except Exception:
+                # Do not remove the only diagnostics if their export failed.
+                raise exc from exc.__cause__
+        try:
+            run_capture(down, 30)
+        except Exception as cleanup_error:
+            if evidence:
+                try:
+                    write_report(Path(evidence) / "cleanup-error.json", error_report(cleanup_error))
+                except OSError:
+                    pass  # The original preparation error remains the primary failure.
         raise
 
 
@@ -252,7 +269,41 @@ def audit_loadgen(candidate: str) -> dict[str, object]:
     }
 
 
-def materialize(project: str, destination: Path) -> None:
+def reuse_loadgen_audit(candidate: str, report_path: Path) -> dict[str, object]:
+    """Reuse the completed immutable-image audit; check only the current campaign module."""
+    sums = json.loads((report_path.parent / "SHA256SUMS.json").read_text(encoding="utf-8-sig"))
+    if sums.get(report_path.name) != hashlib.sha256(report_path.read_bytes()).hexdigest():
+        raise ValueError("stored loadgen audit checksum differs")
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    if (
+        report.get("parent") != FROZEN_LOADGEN
+        or report.get("candidate") != candidate
+        or report.get("changed_files") != ["campaign.py"]
+        or report.get("packages_unchanged") is not True
+    ):
+        raise ValueError("stored audit does not identify this approved derived image")
+    observed = run_capture(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "python",
+            candidate,
+            "-c",
+            "import hashlib; from pathlib import Path; "
+            "print(hashlib.sha256(Path('/work/benchmarks/campaign.py').read_bytes()).hexdigest())",
+        ],
+        30,
+    ).stdout.strip()
+    if observed != hashlib.sha256((ROOT / "benchmarks/campaign.py").read_bytes()).hexdigest():
+        raise ValueError("audited loadgen campaign module differs from the current source")
+    return report
+
+
+def materialize(project: str, destination: Path, audit_report: Path | None = None) -> None:
     """Record real identities and unchanged workload parameters in candidate manifests."""
     compose = compose_prefix(project)
     if run_capture(["git", "status", "--porcelain", "--untracked-files=no"], 10).stdout.strip():
@@ -281,7 +332,11 @@ def materialize(project: str, destination: Path) -> None:
                 "org.opencontainers.image.revision"
             ) != sha:
                 raise ValueError("candidate application image must identify the committed source")
-    compatibility = audit_loadgen(images["loadgen"])
+    compatibility = (
+        reuse_loadgen_audit(images["loadgen"], audit_report)
+        if audit_report is not None
+        else audit_loadgen(images["loadgen"])
+    )
     probe = SplitDatabaseProbe(ids["postgres"])
     databases = {}
     targets: tuple[tuple[Owner, DatabaseProbe], ...] = (
@@ -336,7 +391,7 @@ def materialize(project: str, destination: Path) -> None:
         baseline["pool"] = {"core": pool, "tracking": pool}
         baseline["cohorts"]["dataset_manifest"] = os.path.relpath(
             ROOT / "benchmarks/datasets/benchmark-v1.0.json", destination
-        )
+        ).replace("\\", "/")
         manifest = CampaignManifest.model_validate(baseline)
         target = destination / f"{manifest.name}.json"
         target.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -381,13 +436,14 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--with-loadgen", action="store_true")
+    parser.add_argument("--audit-report", type=Path)
     args = parser.parse_args()
     if args.action == "build-loadgen":
         print(build_loadgen())
     elif args.action == "manifest":
         if args.destination is None:
             parser.error("--destination is required")
-        materialize(args.project, args.destination)
+        materialize(args.project, args.destination, args.audit_report)
     else:
         restore(
             args.project,
@@ -400,4 +456,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except BaseException as exc:
+        if isinstance(exc, SystemExit):
+            raise
+        report = error_report(exc)
+        evidence = os.environ.get("FULFILLFLOW_PREPARATION_EVIDENCE")
+        if evidence and not (Path(evidence) / "error.json").exists():
+            write_report(Path(evidence) / "error.json", report)
+        print(json.dumps(report), file=sys.stderr)
+        exit_code = 130 if isinstance(exc, KeyboardInterrupt) else 2
+    raise SystemExit(exit_code)

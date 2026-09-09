@@ -19,6 +19,9 @@ congelada, com alteração autorizada somente do módulo de manifest. Workload,
 dependências e dataset permanecem iguais. O [pacote de revisão](benchmarks/V11_REVIEW.md)
 descreve comandos e limites; carga, congelamento experimental e release pertencem
 ao incremento III e ainda exigem autorização.
+No chat 11, a entrada `scripts/Invoke-V11Pilot.ps1` foi preparada para uma única
+tentativa não oficial mixed/4 com preflight bloqueante e preservação de diagnósticos.
+O pacote descreve o modo `-PlanOnly` sem carga e o comando futuro; nenhum piloto foi executado.
 
 O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
 

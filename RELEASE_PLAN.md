@@ -64,7 +64,7 @@ Preservar o ambiente aprovado nos manifests, inclusive versões e tolerância de
 
 Preservar locustfile, artefato/seed determinística e conteúdo lógico do dataset congelados; não exigir que o loader físico monolítico permaneça idêntico. Adaptar somente a preparação, distribuição dos mesmos dados lógicos e verificações exigidas pelos dois bancos. O gerador atual (`benchmarks/dataset.py`) importa normalização de Carriers e contratos de Shipments/Notifications: a extração exige conferir esses acoplamentos, sem duplicar regras nem mudar os dados. Se for necessária mudança em artefato congelado, apresentar conflito concreto antes de prosseguir.
 
-O loadgen carrega `benchmarks/campaign.py`, cujo schema atual fixa `release="v1.0.0"` e os componentes app/postgres/loadgen. A compatibilidade com a identificação e topologia v1.1 deve ser resolvida e validada no incremento II, não presumida. Não alterar a imagem do loadgen sem necessidade explícita e revisão da comparabilidade.
+Compatibilidade do loadgen resolvida e validada no incremento II: o parent congelado aceita somente v1.0/app; a imagem derivada autorizada substitui apenas `benchmarks/campaign.py` e aceita manifest v2 com release/topologia Core e Tracking explícitas. A auditoria comprovou preservação de locustfile, dataset e dependências. Parent e candidata têm identidades distintas registradas no pacote; a diferença de imagem/validação é declarada na comparação. Não alterar novamente imagem ou protocolo sem proposta específica.
 
 Coletar Core e Tracking separadamente e agregados, incluindo o custo de comunicação e recibos. Reconciliar HTTP, Locust e efeitos nos dois bancos; preservar exportação final após drain e completude da telemetria. Dados auxiliares novos, como recibos, devem ser identificados sem alterar silenciosamente o estado lógico inicial.
 
@@ -150,4 +150,7 @@ Registro histórico do primeiro incremento; a situação atual está abaixo.
 - Verificações executáveis: testes funcionais/integração, gates estáticos, CI, restauração
   repetida e smoke de telemetria ociosa. O relatório final do chat informa resultados e commits.
 - III não iniciado. Não houve carga, calibração, measurement, merge, tag ou release.
-  Próxima ação: revisar o pacote antes do chat 11 e autorizar separadamente qualquer execução experimental.
+  Chat 11: entrada operacional PowerShell preparada para preflight bloqueante e uma única
+  tentativa piloto mixed/4, q=430, não oficial. Transporte e falhas validados por simulações
+  sem carga; detalhes em `benchmarks/V11_REVIEW.md`. Próxima ação no chat 12: conferir o
+  pacote/host e autorizar separadamente a execução. Nenhuma tentativa foi iniciada no chat 11.

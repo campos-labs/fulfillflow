@@ -787,7 +787,9 @@ def run_capture(
             f"external command could not complete: {_safe_command_name(command)}"
         ) from exc
     if completed.returncode != 0:
-        raise ExternalCommandError(f"external command failed: {_safe_command_name(command)}")
+        raise ExternalCommandError(
+            f"external command failed: {_safe_command_name(command)}"
+        ) from subprocess.CalledProcessError(completed.returncode, command, stderr=completed.stderr)
     return completed
 
 

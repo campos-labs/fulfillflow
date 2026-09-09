@@ -40,8 +40,9 @@ Schema/head físicos são específicos por proprietário; o hash lógico segue o
 `prepare_v11 restore` recria somente um projeto reclamado quando seus containers e volumes
 estavam ausentes. O marcador de propriedade fica em `benchmarks/results/preparation`.
 Projeto preexistente sem marcador é recusado, assim como projetos locais/v1.0. A confirmação
-literal limita o alvo. A prontidão anterior é invalidada antes da restauração; falhas removem
-apenas os recursos desse projeto. O relatório `.ready.json` é escrito somente ao final,
+literal limita o alvo. A prontidão anterior é invalidada antes da restauração; na entrada
+operacional, falhas preservam erro e diagnósticos antes de remover apenas recursos próprios.
+Falha de exportação mantém os recursos para revisão. O relatório `.ready.json` é escrito somente ao final,
 com hashes, contagens e duração. O budget total continua 120 s, sem extensão silenciosa.
 
 ## Comandos PowerShell de preparação (sem carga)
@@ -64,13 +65,17 @@ docker build --target runtime --label "org.opencontainers.image.revision=$revisi
 docker tag fulfillflow-core:v11-candidate fulfillflow-tracking:v11-candidate
 uv run python -m benchmarks.prepare_v11 build-loadgen
 uv run python -m benchmarks.prepare_v11 restore --project fulfillflow-benchmark-v11 --confirm-project fulfillflow-benchmark-v11 --with-loadgen
-uv run python -m benchmarks.prepare_v11 manifest --project fulfillflow-benchmark-v11 --destination benchmarks/results/v11-review
+uv run python -m benchmarks.prepare_v11 manifest --project fulfillflow-benchmark-v11 --destination benchmarks/results/v11-review --audit-report benchmarks/results/v11-review-02e98a9/loadgen-compatibility.json
 ```
 
 O container loadgen fica ocioso; o init apenas importa Locust. Nenhum comando acima invoca
 o workload. `manifest` exige fonte limpo, labels das imagens correspondentes ao HEAD,
 audit do loadgen, schemas reais, dataset íntegro e recursos/configurações observados.
 O destino deve ser novo. Um erro deixa `.incomplete.json`, e nunca libera execução.
+`--audit-report` reutiliza a auditoria concluída de imagens imutáveis: confere checksum,
+parent/candidata e somente o hash do `campaign.py` atual dentro da imagem. Não repete a
+comparação inteira de arquivos/distribuições. A evidência histórica `validation.json`
+continua vinculada ao commit nela registrado; não representa automaticamente um novo HEAD.
 Os três manifests candidatos são derivados dos oficiais v1.0, com o mesmo host esperado,
 perfis, cargas, coortes, pesos, tempos e parâmetros comparativos. Eles não atualizam
 expectativas do host para acomodar divergências. O HostProbe completo continua obrigatório
@@ -87,7 +92,50 @@ Para uma campanha **somente após autorização em III**, o runner existente ace
 v2. O `--base-url` visto pelo loadgen é `http://core:8000`. O argv de preparação é o comando
 `prepare_v11 restore` acima, com `--with-loadgen` e `--manifest` apontando ao manifest do perfil.
 Reutilizar esse argv em `--prepare-command-json` e a confirmação literal da campanha;
-usar sempre um destino novo. Não há comando automático de carga neste pacote.
+usar sempre um destino novo. A entrada operacional abaixo monta esses argumentos, sem
+alterar os gates do runner. Preparar o pacote não autoriza executar essa entrada sem `-PlanOnly`.
+
+## Entrada operacional do piloto — chat 11, execução pendente
+
+`scripts/Invoke-V11Pilot.ps1` exige PowerShell 7 e a `.venv` sincronizada pelo lock. Resolve
+caminhos relativos ao diretório do chamador; transmite JSON UTF-8 via stdin ao módulo
+`benchmarks.pilot_v11`, sem `Invoke-Expression`, shell intermediário ou escape manual de argv.
+Carrega o arquivo de ambiente sintético e restaura o ambiente do chamador ao terminar.
+Use o caminho do pacote materializado no HEAD revisado, indicado no relatório final do chat.
+
+```powershell
+pwsh -NoProfile -File .\scripts\Invoke-V11Pilot.ps1 `
+  -Candidate .\benchmarks\results\v11-chat11-review\v11-candidate-mixed.json `
+  -Audit .\benchmarks\results\v11-chat11-review\loadgen-compatibility.json `
+  -Destination .\benchmarks\results\v11-pilot-mixed-4-q430-attempt-01 `
+  -PlanOnly
+```
+
+`-PlanOnly` valida a derivação e exibe o JSON/argv; não consulta o host, cria infraestrutura
+ou executa carga. Sua aprovação **não** equivale à aprovação do preflight real. Após
+autorização específica no chat 12, remover apenas `-PlanOnly` executa uma única tentativa.
+O destino deve estar ausente. A entrada deriva mixed/4, q=430, uma repetição não oficial;
+pesos, coortes, spawn rate, budgets, deadlines, estabilização, warm-up, measurement e
+critérios de validade permanecem congelados. Não há repetição automática nem promoção a oficial.
+
+O preflight bloqueia fonte sujo, branch/SHA divergentes, candidato com checksum incorreto,
+imagens/revisões ausentes, auditoria incompatível, projeto preexistente e divergências do
+host/energia. Todas as expectativas de host são preservadas, mesmo no piloto não oficial.
+Os digests do manifest são usados na preparação, sem depender de tags mutáveis. O runner
+repete seus gates de Docker, bancos, estado inicial e host antes de iniciar warm-up.
+
+Evidências por tentativa: `pilot-manifest.json`, `preparation-argv.json`, `preflight.json`,
+`result.json`, `run/` (inclusive `.partial` em falha), `preparation/error.json` quando houver,
+`diagnostics/` e `checksums.sha256`. Os diagnósticos incluem logs sanitizados e cópia dos
+artefatos do loadgen, mesmo quando uma fase falha antes da exportação normal. Não apagar
+tentativa inválida. Falha de exportação impede cleanup e exige revisão dos recursos próprios.
+Erros de cleanup são secundários ao erro original. Saídas: 0 para conclusão válida;
+2 para recusa/falha operacional; 130 para interrupção tratada. Interrupção forçada do
+processo/host pode impedir o relatório final; preservar destino e recursos antes de retomada.
+
+Estimativa de uma tentativa: piso de **11 min** (300+60+300 s), mais preparação, drain,
+checagens e exportações. Reservar **15–20 min**, além de correções do host antes do preflight;
+isso não amplia nenhum timeout. Uma recusa inicial encerra antes da carga.
 
 ## Budgets, telemetria e conciliação
 
