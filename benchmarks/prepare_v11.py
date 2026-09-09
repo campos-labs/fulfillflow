@@ -353,7 +353,8 @@ def materialize(project: str, destination: Path) -> None:
                 ids["loadgen"],
                 "python",
                 "-c",
-                "import sys; from pathlib import Path; from benchmarks.campaign import load_campaign; "
+                "import sys; from pathlib import Path; "
+                "from benchmarks.campaign import load_campaign; "
                 "b=load_campaign(Path(sys.argv[1])); "
                 "assert b.manifest.release == 'v1.1.0' and b.manifest.git_sha == sys.argv[2]",
                 installed,
