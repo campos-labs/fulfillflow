@@ -1,5 +1,6 @@
 """Authentication and finite HTTP transport shared by service boundaries."""
 
+import asyncio
 import hmac
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
@@ -73,10 +74,17 @@ class ServiceClient:
             ]
         )
         try:
-            return await self._client.request(
-                method, path, content=content, headers=outgoing, params=params
+            # HTTPX limits individual I/O operations; bound the whole hop as well.
+            budget = (
+                self._settings.service_http_timeout_seconds
+                if self._settings.service_role == "tracking"
+                else self._settings.forwarding_timeout_seconds
             )
-        except httpx.HTTPError as exc:
+            async with asyncio.timeout(budget):
+                return await self._client.request(
+                    method, path, content=content, headers=outgoing, params=params
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
             raise RemoteServiceUnavailableError from exc
 
     async def read[T: BaseModel](

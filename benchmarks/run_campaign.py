@@ -29,6 +29,7 @@ from benchmarks.campaign import (
     CampaignBundle,
     CohortSlot,
     LoadLevel,
+    SplitDatabases,
     balanced_active_slots,
     canonical_payload_bytes,
     carrier_payload,
@@ -49,6 +50,7 @@ from benchmarks.collectors import (
     validate_resource_samples,
     write_database_counts,
 )
+from benchmarks.collectors_v11 import SplitDatabaseProbe, aggregate_resources
 from benchmarks.database_contract import (
     DatabaseDigests,
     DatabaseIdentityError,
@@ -87,6 +89,7 @@ class LogicalDatabaseIdentity:
     dataset: DatabaseDigests
     carriers: DatabaseDigests
     structural_schema: StructuralSchemaVerification | None = None
+    owner_schemas: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +220,11 @@ def _execute(
                     observed.postgres_database,
                     timeout_seconds=bundle.manifest.timeouts.command_seconds,
                 )
+                if bundle.manifest.release == "v1.1.0":
+                    database = SplitDatabaseProbe(
+                        observed.container_ids["postgres"],
+                        timeout_seconds=bundle.manifest.timeouts.command_seconds,
+                    )
                 initial, initial_identity = _verify_initial_state(bundle, database)
                 runtime_manifest = _install_runtime_manifest(
                     bundle,
@@ -263,6 +271,8 @@ def _execute(
                     partial_directory,
                 )
                 final = database.snapshot("post_measurement")
+                if isinstance(database, SplitDatabaseProbe):
+                    _write_json(partial_directory / "reconciliation.json", database.reconcile())
                 _verify_measurement(partial_directory, after_warmup, final)
                 write_database_counts(
                     partial_directory / "database_counts.csv", [initial, after_warmup, final]
@@ -291,6 +301,14 @@ def _execute(
                     ),
                 )
                 _require_repetition_artifacts(partial_directory)
+                if isinstance(database, SplitDatabaseProbe):
+                    for artifact in (
+                        "reconciliation.json",
+                        "resources.application.csv",
+                        "warmup/resources.application.csv",
+                    ):
+                        if not (partial_directory / artifact).is_file():
+                            raise CampaignExecutionError("v1.1 owner evidence is incomplete")
                 (partial_directory / ".incomplete.json").unlink()
                 _write_checksums(partial_directory)
                 partial_directory.rename(final_directory)
@@ -418,6 +436,12 @@ def _run_phase(
     _remove_runtime_markers(destination)
     _promote_final_statistics(destination)
     validate_resource_samples(destination / "resources.csv", observed.container_ids)
+    if isinstance(database, SplitDatabaseProbe):
+        aggregate_resources(
+            destination / "resources.csv",
+            destination / "resources.application.csv",
+            observed.container_ids,
+        )
     return PhaseExecution(phase, started_at, datetime.now(UTC), returncode)
 
 
@@ -594,6 +618,13 @@ def _verify_initial_state(
     database: DatabaseProbe,
 ) -> tuple[DatabaseSnapshot, LogicalDatabaseIdentity]:
     database_contract = bundle.manifest.database
+    owner_schemas = None
+    if isinstance(database_contract, SplitDatabases):
+        if not isinstance(database, SplitDatabaseProbe):
+            raise CampaignExecutionError("v1.1 requires both owner probes")
+        owner_schemas = database.verify_schemas(database_contract)
+        database.reconcile(initial=True)
+        database_contract = database_contract.core
     expected_heads = tuple(sorted(database_contract.alembic_heads))
     observed_heads = tuple(sorted(database.alembic_heads()))
     if observed_heads != expected_heads:
@@ -652,6 +683,7 @@ def _verify_initial_state(
         dataset_identity,
         carrier_identity,
         structural_schema=structural_verification,
+        owner_schemas=owner_schemas,
     )
 
 
@@ -662,6 +694,13 @@ def _verify_warmup(
     initial: DatabaseSnapshot,
     after: DatabaseSnapshot,
 ) -> LogicalDatabaseIdentity:
+    if isinstance(database, SplitDatabaseProbe):
+        database.reconcile()
+        if (
+            after.auxiliary_counts["core_receipts"] - initial.auxiliary_counts["core_receipts"]
+            != load.users * bundle.manifest.warmup_quota_per_shipment
+        ):
+            raise CampaignExecutionError("warm-up receipt delta differs from fixed quota")
     active = balanced_active_slots(bundle.warmup, load.users)
     quota = bundle.manifest.warmup_quota_per_shipment
     expected_events = _expected_warmup_events(bundle, load, active)
@@ -781,6 +820,12 @@ def _verify_measurement(
         raise CampaignExecutionError(
             "measurement HTTP/APPLIED and database persistence deltas are inconsistent"
         )
+    if (
+        after.auxiliary_counts
+        and after.auxiliary_counts["core_receipts"] - before.auxiliary_counts["core_receipts"]
+        != applied
+    ):
+        raise CampaignExecutionError("measurement receipts differ from HTTP effects")
     if any(key != "APPLIED" and value > 0 for key, value in http.items()):
         raise CampaignExecutionError("measurement contains a non-APPLIED webhook outcome")
 

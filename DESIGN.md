@@ -1651,14 +1651,15 @@ Uma implementação está em conformidade quando satisfaz simultaneamente:
 
 Ambiguidade de implementação não autoriza ampliar o escopo. Quando duas alternativas atenderem igualmente ao documento, deve prevalecer a de menor complexidade operacional e menor acoplamento, preservando os contratos observáveis.
 
-## 30. Arquitetura v1.1 — incremento I implementado; comparação pendente
+## 30. Arquitetura v1.1 — extração e preparação; comparação pendente
 
 A v1.1 extrai deliberadamente somente Tracking, para avaliar autonomia, comunicação,
 consistência e custos. A extração não depende de a baseline provar necessidade de
 distribuição: os dados v1.0 não isolam Tracking como causa exclusiva de contenção e
 não sustentam promessa de ganho de desempenho. O incremento I entrega a extração
-funcional descrita em §30.1–30.4. A preparação experimental de §30.5 continua
-pendente; não há campanha v1.1 executada nem prontidão declarada do benchmark.
+funcional descrita em §30.1–30.4. O incremento II implementa a preparação experimental
+de §30.5 para revisão. Não há campanha v1.1 executada; congelamento e validação sob
+carga continuam dependendo do incremento III e de autorização própria.
 
 ### 30.1 Substituições delimitadas do contrato v1.0
 
@@ -1795,16 +1796,39 @@ distribuí-los pelos dois bancos, declarando recibos auxiliares sem alterar o es
 lógico inicial. Só há prontidão quando ambos os bancos foram verificados; falha
 parcial bloqueia o ensaio, sem promessa de commit SQL global na preparação.
 
-**Pendência do incremento II:** o loadgen congelado importa `benchmarks/campaign.py`,
-cujo modelo aceita somente `release="v1.0.0"` e papéis app/postgres/loadgen. Sua
-compatibilidade com o schema de manifest e a topologia v1.1 ainda não está resolvida.
-Este DESIGN não escolhe uma solução nem autoriza alterar imagem, locustfile ou
-protocolo. Demonstrar e revisar a compatibilidade antes de declarar prontidão
-experimental; não falsificar identidades nem reconstruir o loadgen silenciosamente.
+**Decisão autorizada no incremento II:** o parent congelado importa
+`benchmarks/campaign.py`, que aceita somente v1.0 e app/postgres/loadgen. O workload
+não depende desses papéis nem consulta SQL. Após apresentação do diff, foi autorizada
+uma imagem derivada do parent exato, alterando somente `campaign.py` para aceitar
+manifest v2 com release, recursos, imagens, pools e schemas explícitos Core/Tracking.
+A imagem derivada tem identidade própria. O audit exige igualdade de todas as
+distribuições instaladas e de todos os demais arquivos de benchmark, incluindo
+locustfile/dataset. Não há mudança de dependências, protocolo HTTP ou parâmetros
+de carga. O manifest v1 preserva a validação histórica. Essa diferença de imagem
+e validação é declarada; não se atribui identidade v1.0 à candidata.
 Os imports de normalização de `benchmarks/dataset.py` e `dataset_validation.py`
 foram relocados para Tracking no incremento I; os testes dos hashes lógicos
-congelados continuam passando. A distribuição física e os demais acoplamentos do
-loader continuam pendentes, sem duplicação de regras ou alteração dos artefatos.
+congelados continuam passando. O loader v1.1 distribui as mesmas linhas por proprietário.
+Inboxes históricos finalizados têm `command=NULL`; a preparação deixa zero recibos
+Core. Reentrega desses históricos usa a timeline original. Comandos e recibos novos
+pertencem às requisições v1.1, sem fabricação de efeitos ou mudança do estado inicial.
+Preparação parcial bloqueia prontidão; ambos os bancos são relidos após os commits.
+
+O Compose experimental fixa deadlines totais por chamada de 6 s Tracking→Core e
+8 s Core→Tracking, dentro dos 10 s externos de request/drain. O limite total usa
+cancelamento assíncrono além dos timeouts de I/O do HTTPX. Pool/SQL continuam
+5 s/5000 ms. Defaults funcionais 10/30 s permanecem fora do benchmark. Timeout não
+prova rollback nem cancelamento remoto; uma falha invalida a repetição e pode
+requerer reentrega para recuperação. Não ampliar os deadlines externos.
+
+Os probes leem cada banco com seu proprietário; a conciliação acontece no harness,
+fora da janela medida. Recibo, comando, resultado, evento e notificação devem concordar.
+Custos de recibos são contados separadamente do dataset inicial. Recursos e conexões
+Core/Tracking são coletados por serviço e somados por ciclo; CPU/memória do PostgreSQL
+compartilhado não são atribuíveis exclusivamente a um proprietário. A restauração
+recria apenas um projeto isolado cuja propriedade foi registrada quando estava ausente.
+O pacote e os comandos estão em `benchmarks/V11_REVIEW.md`; os manifests candidatos
+são materializados com HEAD/imagens/schemas reais e conservam as expectativas do host.
 
 A instrumentação deve observar Core/Tracking separados e agregados, reconciliar
 Locust/HTTP/efeitos nos dois bancos e preservar completude e checksums. Mantém-se a

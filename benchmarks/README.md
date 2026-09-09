@@ -6,6 +6,12 @@ See [the portable baseline publication](baselines/v1.0/README.md) for reports, i
 artifact hashes, offline reconstruction and the distinction between measured and release commits.
 Raw results and private diagnostics are archived locally, not included in Git.
 
+The v1.1 owner-aware preparation, candidate image audit, manifests, reconciliation,
+resource aggregation and review commands are documented in [V11_REVIEW.md](V11_REVIEW.md).
+The sections below retain the historical v1.0 contracts; v1.1 uses explicit schema-v2
+owner identities while preserving the workload and logical dataset. No v1.1 campaign
+has been run as part of increment II.
+
 ## Frozen logical datasets
 
 Both datasets use seed `20260828`, base instant `2026-08-28T00:00:00Z`, deterministic UUIDs with

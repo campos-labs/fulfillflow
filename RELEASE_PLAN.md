@@ -1,6 +1,6 @@
 # FulfillFlow — Release Plan
 
-Atualizado em 2026-09-09. Plano de execução da v1.1; incremento I implementado localmente, II e III pendentes.
+Atualizado em 2026-09-09. Incremento I enviado com CI aprovada; incremento II implementado para revisão. III não iniciado.
 
 ## 1. Referência e objetivo
 
@@ -72,7 +72,7 @@ Coletar Core e Tracking separadamente e agregados, incluindo o custo de comunica
 
 ### I — Extração funcional integrada
 
-**Estado: concluído localmente.** Core e Tracking executam com bancos/roles e
+**Estado: concluído e enviado na branch autorizada, com CI aprovada.** Core e Tracking executam com bancos/roles e
 migrações segregados; API/UI encaminham os contratos públicos e a preparação
 funcional pela API está disponível em `scripts/prepare_demo_v11.py`.
 
@@ -86,14 +86,13 @@ Aceite: aplicação utilizável pelos contratos públicos, bancos segregados, ev
 
 ### II — Consistência e prontidão experimental
 
-**Estado: pendente; não iniciado como incremento.** Os testes de I já comprovam
-contenção real no recibo/inbox/Shipment/Order, recuperação de resposta perdida
-inclusive após evento posterior, rollback local Core, falha de finalização
-Tracking, isolamento de credenciais e liberação de SQL antes de HTTP. Restam a
-matriz sistemática de indisponibilidade/interrupção em cada fronteira de commit,
-perda da resposta de rejeição e reentregas concorrentes combinadas com essas falhas.
-Também permanecem integralmente pendentes loadgen/manifest v1.1, identidades da
-versão candidata, loader/restauração dos dois bancos, telemetria e reconciliação.
+**Estado: implementado para revisão, sem execução experimental.** Os testes válidos de I foram
+reutilizados. II acrescenta interrupções antes/depois de cada commit, perda de resposta
+de rejeição, indisponibilidade dos peers e concorrência combinada com falhas. O harness
+prepara e verifica os dois bancos, registra suas identidades e conta recibos, coleta
+recursos separados/agregados e concilia efeitos. O diff do loadgen foi apresentado e
+autorizado: imagem derivada com somente `campaign.py` alterado, sem mudar workload,
+dataset ou dependências. O pacote é `benchmarks/V11_REVIEW.md`. Nenhuma carga foi iniciada.
 
 - Completar testes reais de concorrência, rejeições, falhas em cada fronteira de commit, respostas perdidas, reentrega e ordenação.
 - Validar ausência de acessos cruzados aos bancos e de recursos SQL retidos durante HTTP.
@@ -130,9 +129,25 @@ A v1.1 termina com Core + Tracking, contratos estáveis, consistência explicita
 
 ## Situação ao concluir o incremento I
 
+Registro histórico do primeiro incremento; a situação atual está abaixo.
+
 - v1.0 publicada e main integrada, com referências locais/remotas conferidas nesta auditoria.
 - Branch local `codex/v1.1-tracking`, com implementação, testes e documentação do incremento I.
 - I: concluído. II: pendente. III: pendente de implementação e autorização de execução.
 - Gates locais: pytest completo com cobertura acima de 80%, testes estruturais históricos sem alteração de hashes, Ruff/format, Mypy, Import Linter, Alembic dos dois proprietários e build/smoke Docker com Alpha/Beta. CI adaptada, sem execução remota nesta tarefa.
 - Somente os imports necessários do gerador foram relocados; workload, protocolo, manifests publicados, imagem congelada do loadgen e evidências v1.0 preservados.
 - Preparação funcional não equivale a prontidão de benchmark. Não houve push, merge, tag, release ou campanha.
+
+## Situação do incremento II
+
+- Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
+- Implementados matriz adversa adicional, loader/restauração segregados, identidades v1.1,
+  deadlines internos compatíveis, telemetria separada/agregada, conciliação e geração de manifests candidatos.
+- Adaptação da imagem do loadgen revisada e autorizada: parent preservado e somente
+  `campaign.py` substituído. Dataset, locustfile, dependências e evidências v1.0 preservados.
+- Pacote de revisão: `benchmarks/V11_REVIEW.md`. Manifests e relatórios observados ficam
+  em destino novo sob `benchmarks/results`, com checksums, sem fingir congelamento experimental.
+- Verificações executáveis: testes funcionais/integração, gates estáticos, CI, restauração
+  repetida e smoke de telemetria ociosa. O relatório final do chat informa resultados e commits.
+- III não iniciado. Não houve carga, calibração, measurement, merge, tag ou release.
+  Próxima ação: revisar o pacote antes do chat 11 e autorizar separadamente qualquer execução experimental.

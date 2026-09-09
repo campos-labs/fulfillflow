@@ -342,6 +342,8 @@ _STRUCTURAL_SORT_KEYS = {
 
 def canonical_structural_schema_document(
     sections: Mapping[str, Sequence[Mapping[str, object]]],
+    *,
+    expected_table_names: tuple[str, ...] = STRUCTURAL_SCHEMA_TABLES,
 ) -> dict[str, object]:
     """Canonicalize the stable release-specific PostgreSQL schema identity."""
     if set(sections) != set(STRUCTURAL_SCHEMA_SECTIONS):
@@ -363,7 +365,7 @@ def canonical_structural_schema_document(
         canonical_sections[section] = rows
         document[section] = rows
 
-    expected_tables = {("public", table) for table in STRUCTURAL_SCHEMA_TABLES}
+    expected_tables = {("public", table) for table in expected_table_names}
     observed_tables = {
         (str(row["schema"]), str(row["name"])) for row in canonical_sections["tables"]
     }
@@ -387,11 +389,19 @@ def canonical_structural_schema_bytes(
 
 def structural_schema_identity(
     sections: Mapping[str, Sequence[Mapping[str, object]]],
+    *,
+    expected_table_names: tuple[str, ...] = STRUCTURAL_SCHEMA_TABLES,
 ) -> StructuralSchemaIdentity:
     """Hash tables, columns, constraints, and indexes without environment-specific state."""
     return StructuralSchemaIdentity(
         contract_version=STRUCTURAL_SCHEMA_CONTRACT_VERSION,
-        sha256=hashlib.sha256(canonical_structural_schema_bytes(sections)).hexdigest(),
+        sha256=hashlib.sha256(
+            _canonical_json_bytes(
+                canonical_structural_schema_document(
+                    sections, expected_table_names=expected_table_names
+                )
+            )
+        ).hexdigest(),
     )
 
 

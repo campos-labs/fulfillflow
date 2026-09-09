@@ -1,6 +1,6 @@
 # FulfillFlow
 
-Incremento I da v1.1: Core + Tracking, FastAPI e PostgreSQL 18 assíncrono,
+Incrementos I e II da v1.1: Core + Tracking, FastAPI e PostgreSQL 18 assíncrono,
 com bancos, credenciais e migrações separados. Core mantém Orders, Shipments,
 Notifications e cadastro de Carriers. Tracking autentica e normaliza os webhooks
 Alpha/Beta e mantém inbox e timeline. A entrada pública e a UI continuam no Core.
@@ -12,10 +12,13 @@ estar atualizado antes da timeline; não há atomicidade global nem recuperaçã
 automática sem reentrega. Falhas de comunicação retornam 503, erros inesperados
 500, preservando o inbox recebido para retomada.
 
-A v1.0.0 publicada permanece na tag original. A comparação experimental da v1.1,
-a adaptação do loadgen e a preparação física do dataset congelado permanecem no
-incremento II de [RELEASE_PLAN.md](RELEASE_PLAN.md). Este checkout não está pronto
-para campanhas v1.1; workload, protocolo e imagem congelada não foram substituídos.
+A v1.0.0 publicada permanece na tag original. O incremento II prepara a comparação:
+loader dos dois bancos, manifests com identidades observadas, telemetria por serviço
+e agregada e conciliação de recibos/efeitos. O loadgen candidato deriva da imagem
+congelada, com alteração autorizada somente do módulo de manifest. Workload,
+dependências e dataset permanecem iguais. O [pacote de revisão](benchmarks/V11_REVIEW.md)
+descreve comandos e limites; carga, congelamento experimental e release pertencem
+ao incremento III e ainda exigem autorização.
 
 O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
 
@@ -222,12 +225,12 @@ uv run python -m fulfillflow.tracking
 ## Seeds sintéticos e benchmark histórico v1.0
 
 Os comandos desta seção pertencem à topologia monolítica da tag `v1.0.0`.
-`seed_demo.py`, o loader físico e o harness não preparam os bancos v1.1.
+`seed_demo.py` e o loader físico histórico não preparam os bancos v1.1.
 Os testes de regressão continuam verificando os hashes lógicos e estruturais
 congelados em um terceiro banco isolado. A relocação do import de normalização
-no gerador não altera o dataset. Compatibilidade de manifest/topologia, identidades
-da versão candidata e eventual necessidade de imagem do loadgen serão decididas
-no incremento II; não executar a campanha a partir deste checkout.
+no gerador não altera o dataset. Para v1.1, use `benchmarks.seed_v11` e
+`benchmarks.prepare_v11`, conforme [V11_REVIEW.md](benchmarks/V11_REVIEW.md).
+Campanhas continuam dependendo de autorização específica do incremento III.
 
 Os seeds são fail-closed e aceitam somente PostgreSQL 18 via `postgresql+psycopg`.
 Eles exigem `APP_ENV` explícito, schema no head do Alembic e confirmação literal do

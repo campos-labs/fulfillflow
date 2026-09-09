@@ -16,6 +16,7 @@ jobs:
       TEST_DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
       TEST_TRACKING_DATABASE_URL: postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking
       TEST_LEGACY_DATABASE_URL: postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy
+      TEST_V11_POSTGRES_CONTAINER: fulfillflow-ci-tests-db-1
       INTERNAL_API_SECRET: 9d8e5b6f749941feaf4c88390a3a94b2d80ab13c0a04496babd54cc878f611eb
       SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e
       CARRIER_ALPHA_WEBHOOK_SECRET: 18374b93133e4996980ef121a823921618481057613d4d119732569639ec7fc8
@@ -113,7 +114,10 @@ jobs:
       - name: Build and smoke loadgen image
         run: |
           docker build --target loadgen --tag fulfillflow-loadgen:ci .
-          docker run --rm --entrypoint python fulfillflow-loadgen:ci -m locust --version
+          docker run --rm --entrypoint python fulfillflow-loadgen:ci -c "import locust; from benchmarks.campaign import load_campaign; from pathlib import Path; load_campaign(Path('benchmarks/fixtures/smoke-campaign.json'))"
+
+      - name: Validate owner benchmark Compose
+        run: docker compose --env-file .env.benchmark-v11.example -f compose.benchmark-v11.yaml config --quiet
 
       - name: Smoke test Compose stack
         env:

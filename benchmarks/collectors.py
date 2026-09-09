@@ -12,14 +12,15 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from benchmarks.campaign import CampaignBundle
+from benchmarks.campaign import CampaignBundle, SplitPools
 from benchmarks.database_contract import (
     BUSINESS_TABLES,
     STRUCTURAL_SCHEMA_QUERIES,
@@ -62,6 +63,7 @@ class DatabaseSnapshot:
     counts: dict[str, int]
     inbox_statuses: dict[str, int]
     tracking_results: dict[str, int]
+    auxiliary_counts: dict[str, int] = field(default_factory=dict)
 
     def metrics(self) -> dict[str, int]:
         values = {f"table.{key}": value for key, value in self.counts.items()}
@@ -69,6 +71,7 @@ class DatabaseSnapshot:
         values.update(
             {f"tracking_result.{key}": value for key, value in self.tracking_results.items()}
         )
+        values.update({f"auxiliary.{key}": value for key, value in self.auxiliary_counts.items()})
         return dict(sorted(values.items()))
 
 
@@ -120,17 +123,20 @@ class DockerProbe:
         manifest = self.bundle.manifest
         service_contract = manifest.environment.services
         service_names = {
-            "app": service_contract.app,
             "postgres": service_contract.postgres,
             "loadgen": service_contract.loadgen,
         }
+        split = manifest.release == "v1.1.0"
+        if split:
+            service_names.update(core="core", tracking="tracking")
+        else:
+            service_names["app"] = "app"
         container_ids = {
             name: self._container_id(service) for name, service in service_names.items()
         }
         inspections = {
             name: self._inspect_container(identifier) for name, identifier in container_ids.items()
         }
-        app_env = _environment_map(inspections["app"])
         postgres_env = _environment_map(inspections["postgres"])
         postgres_user = _required_nonsecret_environment(postgres_env, "POSTGRES_USER")
         postgres_database = _required_nonsecret_environment(postgres_env, "POSTGRES_DB")
@@ -179,34 +185,88 @@ class DockerProbe:
                 observed_memory,
             )
 
-        command = [
-            *(_string_list(inspections["app"].get("Config", {}).get("Entrypoint"))),
-            *(_string_list(inspections["app"].get("Config", {}).get("Cmd"))),
-        ]
-        observed_workers = _option_value(command, "--workers")
-        _add_check(checks, "app.workers", str(manifest.workers), observed_workers)
-        expected_app_env = {
-            "DB_POOL_SIZE": str(manifest.pool.size),
-            "DB_MAX_OVERFLOW": str(manifest.pool.max_overflow),
-            "DB_STATEMENT_TIMEOUT_MS": str(manifest.pool.statement_timeout_ms),
-            "LOG_LEVEL": manifest.telemetry.log_level,
-            "LOG_FORMAT": manifest.telemetry.log_format,
-            "OTEL_ENABLED": str(manifest.telemetry.tracing_enabled).lower(),
-        }
-        for key, expected in expected_app_env.items():
-            _add_check(checks, f"app.environment.{key}", expected, app_env.get(key))
-        _add_numeric_check(
-            checks,
-            "app.environment.DB_POOL_TIMEOUT_SECONDS",
-            manifest.pool.timeout_seconds,
-            app_env.get("DB_POOL_TIMEOUT_SECONDS"),
-        )
-        _add_numeric_check(
-            checks,
-            "app.environment.OTEL_TRACES_SAMPLER_ARG",
-            manifest.telemetry.tracing_sampling,
-            app_env.get("OTEL_TRACES_SAMPLER_ARG"),
-        )
+        for role in ("core", "tracking") if split else ("app",):
+            app_env = _environment_map(inspections[role])
+            pool = (
+                getattr(manifest.pool, role)
+                if isinstance(manifest.pool, SplitPools)
+                else manifest.pool
+            )
+            command = [
+                *_string_list(inspections[role].get("Config", {}).get("Entrypoint")),
+                *_string_list(inspections[role].get("Config", {}).get("Cmd")),
+            ]
+            _add_check(
+                checks,
+                f"{role}.workers",
+                str(manifest.workers),
+                _option_value(command, "--workers"),
+            )
+            expected_app_env = {
+                "DB_POOL_SIZE": str(pool.size),
+                "DB_MAX_OVERFLOW": str(pool.max_overflow),
+                "DB_STATEMENT_TIMEOUT_MS": str(pool.statement_timeout_ms),
+                "LOG_LEVEL": manifest.telemetry.log_level,
+                "LOG_FORMAT": manifest.telemetry.log_format,
+                "OTEL_ENABLED": str(manifest.telemetry.tracing_enabled).lower(),
+            }
+            if split:
+                expected_app_env.update(
+                    SERVICE_ROLE=role,
+                    OTEL_SERVICE_NAME=f"fulfillflow-{role}",
+                    METRICS_ENABLED="false",
+                )
+                database_url = urlsplit(app_env.get("DATABASE_URL", ""))
+                _add_check(checks, f"{role}.database.host", "db", database_url.hostname)
+                _add_check(
+                    checks, f"{role}.database.owner", f"fulfillflow_{role}", database_url.username
+                )
+                _add_check(
+                    checks, f"{role}.database.name", f"/fulfillflow_{role}", database_url.path
+                )
+                _add_check(
+                    checks, f"{role}.database.driver", "postgresql+psycopg", database_url.scheme
+                )
+                assert manifest.internal_timeouts is not None
+                for key, value in (
+                    ("SERVICE_HTTP_TIMEOUT_SECONDS", manifest.internal_timeouts.core_seconds),
+                    ("FORWARDING_TIMEOUT_SECONDS", manifest.internal_timeouts.tracking_seconds),
+                ):
+                    _add_numeric_check(checks, f"{role}.environment.{key}", value, app_env.get(key))
+            for key, expected in expected_app_env.items():
+                _add_check(checks, f"{role}.environment.{key}", expected, app_env.get(key))
+            _add_numeric_check(
+                checks,
+                f"{role}.environment.DB_POOL_TIMEOUT_SECONDS",
+                pool.timeout_seconds,
+                app_env.get("DB_POOL_TIMEOUT_SECONDS"),
+            )
+            _add_numeric_check(
+                checks,
+                f"{role}.environment.OTEL_TRACES_SAMPLER_ARG",
+                manifest.telemetry.tracing_sampling,
+                app_env.get("OTEL_TRACES_SAMPLER_ARG"),
+            )
+        if split:
+            _add_check(
+                checks,
+                "application.total_cpu",
+                2.0,
+                sum(
+                    float(inspections[role].get("HostConfig", {}).get("NanoCpus", 0))
+                    / 1_000_000_000
+                    for role in ("core", "tracking")
+                ),
+            )
+            _add_check(
+                checks,
+                "application.total_memory",
+                1536 * 1024 * 1024,
+                sum(
+                    int(inspections[role].get("HostConfig", {}).get("Memory", 0))
+                    for role in ("core", "tracking")
+                ),
+            )
 
         database = DatabaseProbe(
             container_ids["postgres"],
@@ -306,6 +366,9 @@ class DatabaseProbe:
                 "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
             )
         )
+
+    def connection_counts(self) -> dict[str, int]:
+        return {"postgres": self.active_connections()}
 
     def alembic_heads(self) -> tuple[str, ...]:
         """Read the exact installed Alembic heads without trusting a preparation command."""
@@ -597,7 +660,7 @@ class ResourceSampler:
                 next_sample = time.monotonic()
                 while True:
                     timestamp = datetime.now(UTC).isoformat()
-                    active_connections = self.database.active_connections()
+                    active_connections = self.database.connection_counts()
                     current = self._snapshot(endpoint)
                     for service, identifier in sorted(self.container_ids.items()):
                         stats = _resource_delta(previous[identifier], current[identifier])
@@ -609,7 +672,7 @@ class ResourceSampler:
                                 stats[0],
                                 stats[1],
                                 stats[2],
-                                active_connections if service == "postgres" else "",
+                                active_connections.get(service, ""),
                             )
                         )
                     stream.flush()
@@ -689,7 +752,7 @@ def validate_resource_samples(path: Path, container_ids: Mapping[str, str]) -> N
                 if int(row["memory_usage_bytes"]) < 0 or int(row["memory_limit_bytes"]) <= 0:
                     raise ValueError
                 connections = row["postgres_active_connections"]
-                if service == "postgres":
+                if service in {"postgres", "core", "tracking"}:
                     if int(connections) < 0:
                         raise ValueError
                 elif connections != "":

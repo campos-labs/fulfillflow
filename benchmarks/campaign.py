@@ -116,7 +116,9 @@ class TelemetryContract(StrictModel):
 
 
 class ComposeServices(StrictModel):
-    app: Literal["app"] = "app"
+    app: Literal["app"] | None = "app"
+    core: Literal["core"] | None = None
+    tracking: Literal["tracking"] | None = None
     postgres: Literal["db"] = "db"
     loadgen: Literal["loadgen"] = "loadgen"
 
@@ -208,13 +210,44 @@ class HostContract(StrictModel):
         return self
 
 
+class SplitResources(StrictModel):
+    core: ResourceLimit
+    tracking: ResourceLimit
+    postgres: ResourceLimit
+    loadgen: ResourceLimit
+
+
+class SplitImages(StrictModel):
+    core: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    tracking: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    postgres: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    loadgen: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class SplitPools(StrictModel):
+    core: PoolParameters
+    tracking: PoolParameters
+
+
+class SplitDatabases(StrictModel):
+    core: DatabaseContract
+    tracking: DatabaseContract
+
+
+class InternalTimeouts(StrictModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    core_seconds: PositiveFloat
+    tracking_seconds: PositiveFloat
+
+
 class CampaignManifest(StrictModel):
     """Complete protocol; host-specific values are mandatory only in an actual file."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
     official: bool
-    release: Literal["v1.0.0"]
+    release: Literal["v1.0.0", "v1.1.0"]
     git_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     profile: Literal["timeline", "ingestion", "mixed"]
     loads: tuple[LoadLevel, ...] = Field(min_length=1)
@@ -228,19 +261,65 @@ class CampaignManifest(StrictModel):
     warmup_occurred_at_base: datetime
     measurement_occurred_at_base: datetime
     weights: RequestWeights
-    resources: ResourceLimits
-    pool: PoolParameters
-    images: ImageDigests
+    resources: ResourceLimits | SplitResources
+    pool: PoolParameters | SplitPools
+    images: ImageDigests | SplitImages
     cohorts: CohortReferences
     telemetry: TelemetryContract
     environment: EnvironmentContract
     host: HostContract
-    database: DatabaseContract
+    database: DatabaseContract | SplitDatabases
     timeouts: TimeoutContract
     collection_interval_seconds: PositiveFloat
+    internal_timeouts: InternalTimeouts | None = None
 
     @model_validator(mode="after")
     def validate_protocol(self) -> Self:
+        split = self.release == "v1.1.0"
+        services = self.environment.services
+        if split:
+            if self.schema_version != 2 or not (
+                isinstance(self.resources, SplitResources)
+                and isinstance(self.images, SplitImages)
+                and isinstance(self.pool, SplitPools)
+                and isinstance(self.database, SplitDatabases)
+                and services.app is None
+                and services.core == "core"
+                and services.tracking == "tracking"
+                and self.internal_timeouts is not None
+            ):
+                raise ValueError("v1.1 requires explicit split topology and schema version 2")
+            if not (
+                self.internal_timeouts.core_seconds
+                < self.internal_timeouts.tracking_seconds
+                < self.timeouts.request_seconds
+                <= self.timeouts.drain_seconds
+            ):
+                raise ValueError("internal timeouts must fit inside public request/drain deadlines")
+            for owner in ("core", "tracking"):
+                resource = getattr(self.resources, owner)
+                pool = getattr(self.pool, owner)
+                if resource.model_dump() != {
+                    "cpus": "1.0",
+                    "memory": "768m",
+                } or pool.model_dump() != {
+                    "size": 5,
+                    "max_overflow": 0,
+                    "timeout_seconds": 5.0,
+                    "statement_timeout_ms": 5000,
+                }:
+                    raise ValueError("v1.1 owner budgets must preserve the approved aggregate")
+        elif self.schema_version != 1 or not (
+            isinstance(self.resources, ResourceLimits)
+            and isinstance(self.images, ImageDigests)
+            and isinstance(self.pool, PoolParameters)
+            and isinstance(self.database, DatabaseContract)
+            and services.app == "app"
+            and services.core is None
+            and services.tracking is None
+            and self.internal_timeouts is None
+        ):
+            raise ValueError("v1.0 requires its original topology and schema version 1")
         if self.official and self.repetitions != OFFICIAL_REPETITIONS:
             raise ValueError("an official campaign must contain exactly five repetitions")
         if self.official and self.stabilization_seconds <= 0:
