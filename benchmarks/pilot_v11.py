@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from benchmarks import run_campaign as runner
 from benchmarks.campaign import CampaignManifest, load_campaign
@@ -15,7 +16,7 @@ from benchmarks.operational_errors import diagnostics, error_report, write_repor
 from benchmarks.prepare_v11 import COMPOSE, ROOT, compose_prefix, reuse_loadgen_audit
 
 
-def pilot_document(candidate: Path, destination: Path) -> dict:
+def pilot_document(candidate: Path, destination: Path) -> dict[str, Any]:
     source = load_campaign(candidate)
     document = source.manifest.model_dump(mode="json")
     baseline = CampaignManifest.model_validate_json(
@@ -77,7 +78,7 @@ def preparation_argv(project: str, manifest: Path) -> list[str]:
     ]
 
 
-def preflight(candidate: Path, audit: Path, document: dict) -> dict:
+def preflight(candidate: Path, audit: Path, document: dict[str, Any]) -> dict[str, object]:
     provenance = runner._git_provenance(ROOT)
     if (
         provenance.branch != "codex/v1.1-tracking"

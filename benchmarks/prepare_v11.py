@@ -274,7 +274,7 @@ def reuse_loadgen_audit(candidate: str, report_path: Path) -> dict[str, object]:
     sums = json.loads((report_path.parent / "SHA256SUMS.json").read_text(encoding="utf-8-sig"))
     if sums.get(report_path.name) != hashlib.sha256(report_path.read_bytes()).hexdigest():
         raise ValueError("stored loadgen audit checksum differs")
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report: dict[str, object] = json.loads(report_path.read_text(encoding="utf-8-sig"))
     if (
         report.get("parent") != FROZEN_LOADGEN
         or report.get("candidate") != candidate

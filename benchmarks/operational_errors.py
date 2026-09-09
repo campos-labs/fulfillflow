@@ -8,6 +8,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from benchmarks.collectors import EnvironmentMismatchError
+
 
 def sanitize(value: str) -> str:
     for key, secret in os.environ.items():
@@ -41,7 +43,7 @@ def error_report(error: BaseException) -> dict[str, object]:
             item["stderr"] = sanitize(stderr)
         else:
             item["message"] = sanitize(str(current))
-        if type(current).__name__ == "EnvironmentMismatchError":
+        if isinstance(current, EnvironmentMismatchError):
             item["checks"] = json.loads(sanitize(json.dumps(current.report)))
         chain.append(item)
         current = current.__cause__ or (
