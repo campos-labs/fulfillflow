@@ -21,7 +21,11 @@ V10_REVISION = "ae15e0a2da465f4aec3d9c699655441ad1947265"
 PROJECT = "fulfillflow-benchmark"
 DATABASE = "fulfillflow_benchmark"
 WINDOWS_BUILD = "26200.9445"
-WORKTREE_NAME = "v10-controls-win9445-source"
+# The first bootstrap stopped before Docker or either control because its frozen
+# dependency setup needed a network download.  Keep that checkout as evidence and
+# use a separately named, still-new checkout for the explicitly retried launcher.
+WORKTREE_NAME = "v10-controls-win9445-source-02"
+BOOTSTRAP_NAME = "v10-controls-win9445-bootstrap-02"
 ATTEMPT_NAMES = (
     "v10-control-mixed-4-win9445-attempt-01",
     "v10-control-mixed-4-win9445-attempt-02",
@@ -50,7 +54,8 @@ def _validate_locations(checkout: Path, attempts: Sequence[Path]) -> None:
         raise ControlError("control destinations differ from the reviewed two-attempt plan")
     if len({checkout, *attempts}) != len(attempts) + 1:
         raise ControlError("checkout and attempt destinations must be distinct")
-    if any(path.exists() for path in (checkout, *attempts)):
+    bootstrap = RESULTS / BOOTSTRAP_NAME
+    if bootstrap.exists() or any(path.exists() for path in (checkout, *attempts)):
         raise ControlError("all destinations must be new; no automatic retry or overwrite")
 
 
@@ -285,25 +290,52 @@ def _verify_source(source: Path, *, allow_candidates: bool = False) -> None:
 
 
 def _materialize_checkout(checkout: Path, launcher: Mapping[str, Any]) -> Path:
-    _run(["git", "worktree", "add", "--detach", str(checkout), V10_REVISION], cwd=ROOT, timeout=60)
+    bootstrap = RESULTS / BOOTSTRAP_NAME
+    bootstrap.mkdir(parents=False, exist_ok=False)
+    stage = "worktree-add"
     try:
+        write_report(bootstrap / "launcher.json", {"revision": V10_REVISION, "launcher": launcher})
+        _run(
+            ["git", "worktree", "add", "--detach", str(checkout), V10_REVISION],
+            cwd=ROOT,
+            timeout=60,
+            evidence=bootstrap / "worktree-add.txt",
+        )
         uv = shutil.which("uv")
         if uv is None:
             raise ControlError("uv is unavailable for the isolated frozen environment")
-        evidence = checkout / "benchmarks" / "results" / "v10-controls-win9445-bootstrap.txt"
-        _run([uv, "sync", "--frozen", "--all-groups"], cwd=checkout, timeout=180, evidence=evidence)
+        stage = "environment-sync"
+        _run(
+            [uv, "sync", "--frozen", "--no-dev", "--group", "benchmark", "--offline"],
+            cwd=checkout,
+            timeout=180,
+            evidence=bootstrap / "sync.txt",
+        )
+        stage = "source-verification"
         _verify_source(checkout)
         write_report(
-            checkout / "benchmarks" / "results" / "v10-controls-win9445-launcher.json",
-            {"revision": V10_REVISION, "launcher": launcher, "uv": str(Path(uv).resolve())},
+            bootstrap / "ready.json",
+            {
+                "revision": V10_REVISION,
+                "launcher": launcher,
+                "uv": str(Path(uv).resolve()),
+                "sync": ["--frozen", "--no-dev", "--group", "benchmark", "--offline"],
+            },
         )
         return checkout
     except BaseException as exc:
         write_report(
-            checkout / "benchmarks" / "results" / "v10-controls-win9445-bootstrap-error.json",
-            error_report(exc),
+            bootstrap / "error.json",
+            {"stage": stage, "error": error_report(exc)},
         )
-        raise
+        relative = (
+            bootstrap.relative_to(ROOT).as_posix()
+            if bootstrap.is_relative_to(ROOT)
+            else str(bootstrap)
+        )
+        raise ControlError(
+            f"isolated v1.0 bootstrap failed at {stage}; see {relative}/error.json"
+        ) from None
 
 
 def _write_candidates(source: Path, attempts: Sequence[Path]) -> list[Path]:

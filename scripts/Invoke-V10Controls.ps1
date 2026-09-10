@@ -13,7 +13,7 @@ try {
         throw 'The running PowerShell executable path is unavailable.'
     }
     $options = @{
-        checkout = Join-Path $repository 'benchmarks/results/v10-controls-win9445-source'
+        checkout = Join-Path $repository 'benchmarks/results/v10-controls-win9445-source-02'
         attempts = @(
             (Join-Path $repository 'benchmarks/results/v10-control-mixed-4-win9445-attempt-01'),
             (Join-Path $repository 'benchmarks/results/v10-control-mixed-4-win9445-attempt-02')
@@ -40,6 +40,11 @@ try {
     $child.WaitForExit()
     $exitCode = $child.ExitCode
     $child.Dispose()
+    if ($exitCode -ne 0) {
+        [Console]::Error.WriteLine(
+            "The v1.0 control launcher stopped with exit code $exitCode; it did not retry automatically."
+        )
+    }
 } catch {
     [Console]::Error.WriteLine('The v1.0 control launcher failed before a control could start.')
     $exitCode = 2

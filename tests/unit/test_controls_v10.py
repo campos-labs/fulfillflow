@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 from benchmarks import controls_v10 as controls
@@ -64,6 +65,70 @@ def test_plan_only_rejects_existing_destinations_without_creating_anything(tmp_p
     checkout.mkdir()
     with pytest.raises(controls.ControlError):
         controls._plan(checkout, attempts, {"executable": "pwsh.exe"})
+
+
+def test_plan_only_rejects_an_existing_bootstrap_destination(tmp_path, monkeypatch):
+    results = tmp_path / "results"
+    results.mkdir()
+    monkeypatch.setattr(controls, "RESULTS", results)
+    monkeypatch.setattr(controls, "_git", lambda *_args: "")
+    (results / controls.BOOTSTRAP_NAME).mkdir()
+
+    with pytest.raises(controls.ControlError):
+        controls._plan(
+            results / controls.WORKTREE_NAME,
+            tuple(results / name for name in controls.ATTEMPT_NAMES),
+            {"executable": "pwsh.exe"},
+        )
+
+
+def test_materialize_bootstraps_runtime_and_benchmark_offline_outside_source(tmp_path, monkeypatch):
+    results = tmp_path / "results"
+    results.mkdir()
+    checkout = results / controls.WORKTREE_NAME
+    calls: list[tuple[list[str], Path, Path | None]] = []
+
+    def run(argv, *, cwd, evidence=None, **_kwargs):
+        calls.append((list(argv), cwd, evidence))
+        return CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(controls, "RESULTS", results)
+    monkeypatch.setattr(controls, "_run", run)
+    monkeypatch.setattr(controls, "_verify_source", lambda _source: None)
+    monkeypatch.setattr(controls.shutil, "which", lambda _name: str(tmp_path / "uv.exe"))
+
+    assert controls._materialize_checkout(checkout, {"executable": "pwsh.exe"}) == checkout
+
+    bootstrap = results / controls.BOOTSTRAP_NAME
+    assert (bootstrap / "launcher.json").is_file()
+    assert (bootstrap / "ready.json").is_file()
+    assert calls[1][0][1:] == ["sync", "--frozen", "--no-dev", "--group", "benchmark", "--offline"]
+    assert all(evidence is None or evidence.parent == bootstrap for _, _, evidence in calls)
+    assert all(
+        evidence is None or not evidence.is_relative_to(checkout) for _, _, evidence in calls
+    )
+
+
+def test_materialize_preserves_a_stage_specific_bootstrap_error(tmp_path, monkeypatch):
+    results = tmp_path / "results"
+    results.mkdir()
+    checkout = results / controls.WORKTREE_NAME
+
+    def run(argv, **_kwargs):
+        if argv[0] == "git":
+            return CompletedProcess(argv, 0, "", "")
+        raise controls.ControlError("required external command failed")
+
+    monkeypatch.setattr(controls, "RESULTS", results)
+    monkeypatch.setattr(controls, "_run", run)
+    monkeypatch.setattr(controls.shutil, "which", lambda _name: str(tmp_path / "uv.exe"))
+
+    with pytest.raises(controls.ControlError, match="environment-sync"):
+        controls._materialize_checkout(checkout, {"executable": "pwsh.exe"})
+
+    report = json.loads((results / controls.BOOTSTRAP_NAME / "error.json").read_text())
+    assert report["stage"] == "environment-sync"
+    assert report["error"]["errors"][0]["message"] == "required external command failed"
 
 
 def test_execution_stops_after_the_first_failed_control(tmp_path, monkeypatch):
