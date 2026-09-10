@@ -4,9 +4,9 @@ Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 m
 q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
 conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
 `results/v11-pilot-win9445-analysis/metrics-summary.json`.
-A campanha oficial do incremento III permanece pendente. A revisão atual confere os dois
-controles exploratórios v1.0 executados pelo usuário e prepara os dois pares AB/BA
-posteriormente autorizados, sem iniciar nova carga. A baseline publicada em 26200.9278,
+A campanha oficial do incremento III permanece pendente. O primeiro bloco ABBA foi
+interrompido; a ferramenta revisada prepara um novo ABBA e uma referência contemporânea,
+sem executar carga pelo agente. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
 ## Compatibilidade do loadgen
@@ -27,6 +27,99 @@ arquivos em `/work/benchmarks` e versões de todas as distribuições instaladas
 permanecem idênticos. A nova imagem tem SHA próprio, registrado nos manifests e no audit.
 Essa diferença de empacotamento/validação é declarada na comparação; não constitui uma
 nova baseline medida nem elimina a necessidade da validação prévia autorizada em III.
+
+## Ferramenta revisada e preparação sem carga
+
+Após o bloco ABBA ter sido iniciado manualmente, somente A1 v1.0 foi executado.
+Ele é inválido: a coleta obrigatória terminou após 78 ciclos e o runner não
+realizou a conciliação final. B1, B2 e A2 não começaram. A causa específica da
+exceção foi perdida pelo coletor congelado; o exit code 2 não a identifica.
+O diagnóstico posterior ocioso concluiu 300 ciclos sem reproduzir a falha.
+Isso não valida A1 nem comprova estabilidade sob carga.
+
+A revisão autorizada mantém as aplicações congeladas e corrige diagnóstico,
+supervisão e proveniência do runner de host. A identidade desse runner fica
+separada da aplicação via `--application-source`; fórmulas, consultas, cadência,
+workload e gates permanecem preservados. A prontidão de cada novo pacote é
+comprovada por seu `ready.json`, checksums e identidade do runner. `-PlanOnly`
+não comprova prontidão. Não repetir os comandos dos controles antigos nem
+contar essa revisão como nova execução de carga.
+
+Logs estruturados, Prometheus e OpenTelemetry previstos no DESIGN continuam
+pendências de implementação herdadas. A decisão atual preserva a política
+efetiva das imagens para a comparação; não declara conformidade integral de
+observabilidade nem altera retroativamente os requisitos ou a publicação v1.0.
+
+### Entradas atuais e aceites
+
+O launcher atual é `scripts/Invoke-ReviewedControls.ps1`. Ele exige PowerShell 7,
+usa caminhos absolutos a partir de seu próprio diretório e preserva stdout/stderr
+e o código do filho. O executável verificado neste host é:
+`C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
+
+| Série | Preparação sem carga | Pacote sob `results` | Execução posterior |
+| --- | --- | --- | --- |
+| Novo ABBA | `-Series abba -PrepareOnly` | `reviewed-abba-win9445-review-01` | Quatro tentativas novas mixed/4 |
+| Matriz atual | `-Series official -PrepareOnly` | `reviewed-official-win9445-review-01` | Doze blocos de cinco, após revisão do novo ABBA |
+
+Acrescentar `-PlanOnly` no lugar de `-PrepareOnly` somente mostra a seleção.
+A preparação ABBA verifica as duas fontes/imagens, os parsers congelados, a política
+efetiva de logs, o estado inicial e o coletor revisado por 300 s ociosos em cada
+topologia. Não inicia Locust. A matriz reutiliza as fontes verificadas e verifica
+os doze candidatos. Dependências são instaladas somente pelo lock e cache local;
+ausência de cache bloqueia, sem atualizar versões ou baixar imagens.
+
+Os fontes novos são `comparison-win9445-{v10,v11}-source-01`, nos SHAs medidos
+`ae15e0a…7265` e `948cefd…faf2`. O runner de host tem SHA, lock e hashes próprios.
+Os projetos isolados são `fulfillflow-task08-prepare-e2e-reviewed01` e
+`fulfillflow-ii-reviewed-win9445`, com portas 18037/18038. Projetos existentes são
+recusados antes de registrar propriedade. Os containers ociosos da preparação são
+removidos somente após exportação de diagnósticos bem-sucedida.
+
+Comando manual do novo ABBA, somente quando seu pacote estiver pronto:
+
+```powershell
+& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-ReviewedControls.ps1' -Series abba
+```
+
+Piso de 44 minutos de fases. Os destinos começam por `reviewed-abba-mixed-4-win9445-01-`
+e terminam em `a1-v10`, `b1-v11`, `b2-v11`, `a2-v10`; o diário é
+`reviewed-abba-win9445-execution-01`. Qualquer destino existente bloqueia repetição.
+Falha para a sequência e preserva recursos, runtime parcial, diagnóstico primário
+e eventuais falhas secundárias. O motivo e o caminho são mostrados no terminal.
+
+A revisão usa `100*(B/A-1)` para req/s e `p95(B)-p95(A)` por par. Somente quatro
+válidas com contrastes concordantes permitem avançar à revisão da matriz; isso
+não prova equivalência estatística ou causalidade exclusiva. Os dois controles
+antigos e o piloto não são membros do bloco novo.
+
+A matriz tem 30 execuções novas por versão no build 26200.9445; preserva q430,
+workload/dataset, 300/60/300 s, coleta de 1 s e os budgets por componente/total.
+Ordem fixa: mixed/4 A→B; mixed/12 B→A; timeline/4 A→B; timeline/12 B→A;
+ingestion/4 A→B; ingestion/12 B→A, cinco repetições por bloco. A=v1.0, B=v1.1.
+O piso das fases é de 11 horas, além da preparação. A alternância não randomiza
+a execução nem elimina efeito de ordem dentro da célula. A entrada oficial exige
+novo ABBA completo, evidências íntegras e contrastes concordantes; nenhum comando
+inicia a matriz como continuação automática do ABBA. Falha não repete válidas.
+
+A auditoria funcional reutiliza testes PostgreSQL de HMAC, bytes, idempotência,
+locks, falhas de commit, reentrega e ausência de SQL durante HTTP, além do E2E.
+Não foi demonstrada regressão funcional que exija mudar a imagem do piloto.
+
+| Invariante de §30 | Implementação inspecionada sob `src/fulfillflow` | Evidência executável sob `tests` |
+| --- | --- | --- |
+| Autenticar antes de interpretar; preservar bytes | `tracking/authentication.py`, `tracking/service.py` | `api/test_tracking.py` (pré-autenticação, Alpha/Beta e bytes), `api/test_service_contracts.py` (autenticação interna) |
+| Identidade persistida do comando e recibo idempotente | `tracking/service.py`, `core/events.py` | `api/test_service_contracts.py` (resposta perdida, recibos concorrentes, conflitos) |
+| Commits locais e recuperação por reentrega | `tracking/service.py`, `core/events.py` | `api/test_commit_boundaries.py` (interrupções em cada fronteira e peers indisponíveis) |
+| Ordenação total e locks Shipment antes de Order | `core/events.py`, `shipments/service.py` | `api/test_tracking_concurrency.py` (eventos distintos, entregas finais e retomadas concorrentes) |
+| Nenhum recurso SQL retido durante HTTP | `tracking/service.py`, `tracking/core_client.py`, `core/tracking_client.py` | `api/test_service_contracts.py::test_no_sql_checkout_crosses_http_and_correlation_survives_forwarding` |
+| Bancos e acesso por proprietário; jornada completa | `tracking/base.py`, migrations por serviço e contratos públicos | `integration/test_service_databases.py`, `e2e/test_external_simulator_journey.py` |
+
+Há registro de arquivo local da baseline, mas não confirmação documental de cópia
+independente. Essa pendência de preservação permanece explícita.
+
+As seções operacionais abaixo preservam o histórico das preparações anteriores;
+seus comandos de execução encerrados não são instruções para uma nova tentativa.
 
 ## Política efetiva de logs — revisão sem carga
 
@@ -274,7 +367,7 @@ partição de recursos ou logs. O piloto ocorreu em outro horário e não forma 
 com estes controles. Os dados não sustentam atribuir toda a diferença ao Windows ou à
 arquitetura, nem alterar a aplicação ou observabilidade para aproximar métricas.
 
-#### Próxima etapa experimental — preparação dos dois pares autorizada
+#### Registro histórico do primeiro bloco ABBA — encerrado
 
 Antes de ampliar para a matriz oficial, foi autorizada a preparação para verificar repetibilidade da diferença
 com **dois blocos pareados exploratórios**, quatro novas execuções não oficiais mixed/4:

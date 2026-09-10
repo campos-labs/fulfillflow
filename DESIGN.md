@@ -1872,6 +1872,18 @@ encerramento/exportação e artefatos incompletos. Não há repetição automát
 interpolação, tolerância nova ou promoção de evidência parcial a resultado válido.
 Esse tratamento de falhas é uma mudança declarada da ferramenta de medição.
 
+Decisão subsequente autorizada para a referência contemporânea: preparar no Windows
+`26200.9445` trinta execuções novas por versão, preservando as imagens medidas e
+usando o mesmo runner de host revisado. A baseline publicada continua histórica.
+Primeiro, um novo ABBA mixed/4 substitui operacionalmente o bloco anterior inválido,
+sem apagar suas evidências. A matriz posterior contém cinco repetições por versão
+e célula, em blocos: mixed/4 A→B; mixed/12 B→A; timeline/4 A→B; timeline/12 B→A;
+ingestion/4 A→B; ingestion/12 B→A (A=v1.0, B=v1.1). Essa ordem não é randomizada
+nem exclui efeito de ordem. Pilotos, controles e tentativas inválidas não integram
+a matriz. Execução manual e revisão dos resultados permanecem etapas separadas.
+Preserva-se a política efetiva de logs das imagens; as lacunas de implementação
+de logging estruturado, métricas e tracing de §19 permanecem explícitas.
+
 ### 30.6 Estado funcional do incremento I
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`

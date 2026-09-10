@@ -19,12 +19,19 @@ congelada, com alteração autorizada somente do módulo de manifest. Workload,
 dependências e dataset permanecem iguais. O [pacote de revisão](benchmarks/V11_REVIEW.md)
 descreve comandos e limites; carga, congelamento experimental e release pertencem
 ao incremento III e ainda exigem autorização.
-No chat 11, a entrada `scripts/Invoke-V11Pilot.ps1` foi preparada para uma única
-tentativa não oficial mixed/4 com preflight bloqueante e preservação de diagnósticos.
-O pacote descreve o modo `-PlanOnly` sem carga e o comando futuro; nenhum piloto foi executado.
-Uma decisão posterior autoriza preparar um candidato exclusivamente não oficial no
-Windows `26200.9445`, com divergência da baseline registrada e sem adaptar expectativas
-automaticamente. O comando e a pendência metodológica oficial estão no mesmo pacote.
+O piloto não oficial mixed/4 foi executado no Windows `26200.9445`: 108,04 req/s,
+p95 82 ms, sem erros e com conciliação. Dois controles v1.0 posteriores também foram
+válidos. O bloco ABBA seguinte parou na primeira tentativa por falha da coleta,
+sem produzir uma comparação válida. A baseline histórica usa `26200.9278`.
+A revisão atual preserva as aplicações e prepara um runner de host comum, novo
+ABBA e referência contemporânea de 30 execuções por versão. A preparação é sem
+carga; comandos históricos concluídos não devem ser repetidos. Estado, limites e
+entrada `scripts/Invoke-ReviewedControls.ps1` estão no pacote de revisão.
+
+A política efetiva de logs das imagens é preservada. Os settings de logging não
+configuram o logger da aplicação; access logs Uvicorn continuam INFO em texto.
+Logging estruturado, métricas Prometheus e tracing previstos no DESIGN permanecem
+pendências explícitas, sem declaração de conformidade integral de observabilidade.
 
 O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
 
@@ -255,8 +262,9 @@ ficam em `benchmarks/datasets`. O documento contém metadata, coortes e todas as
 linhas usadas pelo seed; a campanha autentica o arquivo e o sidecar antes de
 expor qualquer slot ao loadgen. A documentação do contrato, das duas fases
 Locust, dos coletores externos e dos artefatos está em `benchmarks/README.md`.
-O único manifest de campanha versionado é uma fixture sintética não oficial;
-não existe manifest `v1-baseline` nem resultado oficial.
+Os manifests oficiais históricos e a consolidação das 30 repetições v1.0 estão
+publicados em `benchmarks/campaigns` e `benchmarks/baselines/v1.0`. A fixture
+sintética abaixo serve apenas à validação de contratos e não representa a baseline.
 
 ```powershell
 uv sync --frozen --all-groups

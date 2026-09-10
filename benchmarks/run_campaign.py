@@ -1257,7 +1257,12 @@ def runner_provenance(repository_root: Path, *, require_clean: bool = True) -> d
     provenance = _git_provenance(repository_root)
     if require_clean and not (provenance.worktree_clean and provenance.staged_clean):
         raise CampaignExecutionError("reviewed host runner must have a clean tracked source")
-    paths = [*sorted((repository_root / "benchmarks").glob("*.py")), repository_root / "uv.lock"]
+    paths = [
+        *sorted((repository_root / "benchmarks").glob("*.py")),
+        *sorted((repository_root / "src").rglob("*.py")),
+        repository_root / "uv.lock",
+        repository_root / "pyproject.toml",
+    ]
     return {
         "schema_version": 1,
         "git": asdict(provenance),

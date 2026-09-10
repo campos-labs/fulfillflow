@@ -9,8 +9,10 @@ Raw results and private diagnostics are archived locally, not included in Git.
 The v1.1 owner-aware preparation, candidate image audit, manifests, reconciliation,
 resource aggregation and review commands are documented in [V11_REVIEW.md](V11_REVIEW.md).
 The sections below retain the historical v1.0 contracts; v1.1 uses explicit schema-v2
-owner identities while preserving the workload and logical dataset. No v1.1 campaign
-has been run as part of increment II.
+owner identities while preserving the workload and logical dataset. A later non-official
+pilot and two v1.0 controls are valid; the first ABBA stopped on mandatory resource
+collection failure. The official v1.1 matrix has not run. The reviewed host runner and
+new current-host preparation are documented in the same review package.
 
 ## Frozen logical datasets
 

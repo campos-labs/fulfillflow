@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from benchmarks.campaign import CampaignBundle, SplitPools
@@ -615,6 +615,7 @@ class ResourceSampler:
         *,
         command_runner: CommandRunner | None = None,
         command_timeout_seconds: float = 30,
+        phase: Literal["warmup", "measurement", "idle"] | None = None,
     ) -> None:
         self.output_path = output_path
         self.container_ids = dict(container_ids)
@@ -622,6 +623,7 @@ class ResourceSampler:
         self.interval_seconds = interval_seconds
         self.command_runner = command_runner or run_capture
         self.command_timeout_seconds = command_timeout_seconds
+        self.phase = phase or ("warmup" if output_path.parent.name == "warmup" else "measurement")
         self.error: str | None = None
         self.failure: dict[str, Any] | None = None
         self.failed = threading.Event()
@@ -705,9 +707,7 @@ class ResourceSampler:
             self.error = "mandatory resource sampling failed"
             self._exception = exc
             self.failure = failure(exc, stage, started)
-            self.failure["phase"] = (
-                "warmup" if self.output_path.parent.name == "warmup" else "measurement"
-            )
+            self.failure["phase"] = self.phase
             if stage == "delta":
                 self.failure["previous"] = counters(previous.get(identifier))
                 self.failure["current"] = counters(current.get(identifier))

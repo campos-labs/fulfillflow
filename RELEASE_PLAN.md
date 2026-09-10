@@ -1,6 +1,8 @@
 # FulfillFlow — Release Plan
 
-Atualizado em 2026-09-09. Incremento I enviado com CI aprovada; incremento II implementado para revisão. III não iniciado.
+Incrementos I e II concluídos; comparação oficial e release v1.1 pendentes.
+Piloto e dois controles válidos preservados. O primeiro ABBA foi interrompido;
+a ferramenta de coleta e a preparação da referência contemporânea estão em revisão.
 
 ## 1. Referência e objetivo
 
@@ -86,13 +88,14 @@ Aceite: aplicação utilizável pelos contratos públicos, bancos segregados, ev
 
 ### II — Consistência e prontidão experimental
 
-**Estado: implementado para revisão, sem execução experimental.** Os testes válidos de I foram
+**Estado: implementação concluída; prontidão operacional sob revisão.** Os testes válidos de I foram
 reutilizados. II acrescenta interrupções antes/depois de cada commit, perda de resposta
 de rejeição, indisponibilidade dos peers e concorrência combinada com falhas. O harness
 prepara e verifica os dois bancos, registra suas identidades e conta recibos, coleta
 recursos separados/agregados e concilia efeitos. O diff do loadgen foi apresentado e
 autorizado: imagem derivada com somente `campaign.py` alterado, sem mudar workload,
-dataset ou dependências. O pacote é `benchmarks/V11_REVIEW.md`. Nenhuma carga foi iniciada.
+dataset ou dependências. O pacote é `benchmarks/V11_REVIEW.md`. Piloto e controles
+posteriores não substituem a matriz oficial; sua situação está registrada abaixo.
 
 - Completar testes reais de concorrência, rejeições, falhas em cada fronteira de commit, respostas perdidas, reentrega e ordenação.
 - Validar ausência de acessos cruzados aos bancos e de recursos SQL retidos durante HTTP.
@@ -153,8 +156,9 @@ equivalência nem valida seis células. Análise derivada em
 `benchmarks/results/v10-controls-win9445-analysis-01/metrics-summary.json`.
 `benchmarks/V11_REVIEW.md` registra a comparação descritiva e a preparação autorizada de
 dois pares AB/BA (quatro execuções novas), com fontes e imagens congelados por versão,
-destinos novos e regras de leitura prévias. Sua execução manual permanece pendente;
-a preparação verifica os bancos isolados sem carga. DESIGN §30.5 delimita a extensão.
+destinos novos e regras de leitura prévias. A execução manual começou, mas A1 v1.0
+foi invalidado por coleta incompleta; B1/B2/A2 não começaram. O diagnóstico ocioso
+posterior não reproduziu a falha nem estabeleceu sua causa. DESIGN §30.5 delimita a extensão.
 Nenhuma nova carga foi executada na análise e nenhum resultado histórico foi alterado.
 
 - Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
@@ -169,3 +173,22 @@ Nenhuma nova carga foi executada na análise e nenhum resultado histórico foi a
 - A matriz oficial do incremento III não foi executada; o piloto não a substitui.
   A entrada PowerShell original foi preparada sem carga no chat 11; a execução posterior
   e a revisão atual estão distinguidas no pacote. Não houve merge, tag ou release v1.1.
+
+## Correção auditada e referência contemporânea
+
+Foi autorizada a correção do coletor/runner, com diagnóstico sanitizado e supervisão
+limitada a 250 ms, preservando consultas, cálculos, cadência e gates. A identidade da
+aplicação é validada em checkout separado; a ferramenta de host tem proveniência própria.
+As imagens e evidências medidas permanecem intactas. A política efetiva de observabilidade
+é preservada; suas lacunas de implementação continuam explícitas e não foram corrigidas
+por reescrita dos requisitos históricos.
+
+Preparar novo ABBA mixed/4 e, depois, uma referência no Windows `26200.9445` com 30
+execuções novas por versão. Cada célula possui dois blocos de cinco: mixed/4 v1.0→v1.1;
+mixed/12 v1.1→v1.0; timeline/4 v1.0→v1.1; timeline/12 v1.1→v1.0;
+ingestion/4 v1.0→v1.1; ingestion/12 v1.1→v1.0. A ordem é fixa, não randomizada;
+permanece possível efeito de ordem dentro da célula. A referência publicada é histórica.
+
+Os pacotes são preparados sem carga; execução será manual após prontidão comprovada.
+Qualquer falha interrompe a sequência, preservando válidas e inválidas sem repetição
+automática. Preparação, resultados válidos e encerramento de release são estados distintos.

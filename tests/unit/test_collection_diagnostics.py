@@ -154,12 +154,17 @@ def test_runner_provenance_identifies_code_and_lock(tmp_path, monkeypatch):
     source = tmp_path / "benchmarks/collectors.py"
     source.write_text("first")
     (tmp_path / "uv.lock").write_text("locked")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/library.py").write_text("VALUE = 1\n")
     monkeypatch.setattr(
         run_campaign,
         "_git_provenance",
         lambda _: run_campaign.GitProvenance("a" * 40, "codex/test", True, True),
     )
     first = run_campaign.runner_provenance(tmp_path)
+    assert "src/library.py" in first["components"]
+    assert "pyproject.toml" in first["components"]
     source.write_text("second")
     second = run_campaign.runner_provenance(tmp_path)
     assert first["components"] != second["components"]
