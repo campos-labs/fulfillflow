@@ -37,6 +37,8 @@ from benchmarks.campaign import (
     deterministic_event_id,
     load_campaign,
 )
+from benchmarks.collection_diagnostics import failure as collection_failure
+from benchmarks.collection_diagnostics import write_failure
 from benchmarks.collectors import (
     DatabaseProbe,
     DatabaseSnapshot,
@@ -126,6 +128,7 @@ def main() -> int:
     parser.add_argument("--confirm-campaign")
     parser.add_argument("--base-url")
     parser.add_argument("--results-directory", type=Path)
+    parser.add_argument("--application-source", type=Path)
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
@@ -151,6 +154,7 @@ def main() -> int:
             args.base_url,
             args.results_directory,
             prepare_command,
+            application_source=args.application_source,
         )
     except KeyboardInterrupt:
         return 130
@@ -165,8 +169,18 @@ def _execute(
     base_url: str,
     results_directory: Path,
     prepare_command: list[str],
+    *,
+    application_source: Path | None = None,
 ) -> int:
-    repository_root = Path(__file__).resolve().parents[1]
+    runner_root = Path(__file__).resolve().parents[1]
+    repository_root = application_source.resolve() if application_source else runner_root
+    if application_source is not None:
+        top = run_capture(
+            ["git", "-C", str(repository_root), "rev-parse", "--show-toplevel"],
+            _GIT_TIMEOUT_SECONDS,
+        ).stdout.strip()
+        if Path(top).resolve() != repository_root:
+            raise CampaignExecutionError("application source must be an exact checkout root")
     validate_semantic_document(bundle.dataset_document)
     provenance = _git_provenance(repository_root)
     release = _project_release(repository_root)
@@ -176,6 +190,11 @@ def _execute(
         raise CampaignExecutionError(
             "official campaign refuses a dirty tracked worktree or staging"
         )
+    host_runner = None
+    if application_source is not None:
+        if not (provenance.worktree_clean and provenance.staged_clean):
+            raise CampaignExecutionError("separate application source must be clean")
+        host_runner = runner_provenance(runner_root, require_clean=True)
     _validate_prepare_command(prepare_command)
     results_directory.mkdir(parents=True, exist_ok=False)
     campaign_marker = results_directory / ".incomplete.json"
@@ -198,7 +217,14 @@ def _execute(
                 results_directory / "metadata.json", {"valid": False, "host_identity": exc.report}
             )
             raise
-        _write_json(results_directory / "metadata.json", {"host_identity": host_identity})
+        _write_json(
+            results_directory / "metadata.json",
+            {
+                "host_identity": host_identity,
+                "host_runner": host_runner,
+                "application_git": asdict(provenance),
+            },
+        )
         for load in bundle.manifest.loads:
             for repetition in range(1, bundle.manifest.repetitions + 1):
                 final_directory = results_directory / f"{load.name}-r{repetition:02d}"
@@ -237,6 +263,7 @@ def _execute(
                     "valid": False,
                     "host_identity": host_identity,
                     "stabilization": stabilization,
+                    "host_runner": host_runner,
                 }
                 try:
                     host_state = host.dynamic(observed.container_ids)
@@ -298,6 +325,7 @@ def _execute(
                         stabilization,
                         host_identity,
                         host_state,
+                        host_runner=host_runner,
                     ),
                 )
                 _require_repetition_artifacts(partial_directory)
@@ -322,6 +350,11 @@ def _execute(
             campaign_marker,
             {"campaign": bundle.manifest.name, "complete": False, "interrupted": True},
         )
+        raise
+    except BaseException:
+        for partial in results_directory.glob("*.partial"):
+            _write_checksums(partial)
+        _write_checksums(results_directory)
         raise
 
 
@@ -389,6 +422,10 @@ def _run_phase(
     sampler: ResourceSampler | None = None
     destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
     started_at: datetime | None = None
+    primary: BaseException | None = None
+    secondary: list[dict[str, object]] = []
+    supervision_started = time.monotonic()
+    returncode = -1
     try:
         _wait_for_container_file(
             container_id,
@@ -410,14 +447,55 @@ def _run_phase(
             if phase == "warmup"
             else bundle.manifest.timeouts.measurement_process_seconds
         )
-        returncode = process.wait(timeout)
-    except BaseException:
-        _terminate_container_phase(container_id, pid_file, bundle.manifest.timeouts.command_seconds)
-        raise
+        returncode = process.wait(timeout, sampler=sampler)
+        if returncode != 0:
+            raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
+    except BaseException as exc:
+        primary = exc
+        try:
+            _terminate_container_phase(
+                container_id, pid_file, bundle.manifest.timeouts.command_seconds
+            )
+        except BaseException as cleanup_error:
+            secondary.append(collection_failure(cleanup_error, "output", supervision_started))
     finally:
-        process.ensure_stopped()
+        try:
+            process.ensure_stopped()
+        except BaseException as cleanup_error:
+            if primary is None:
+                primary = cleanup_error
+            else:
+                secondary.append(collection_failure(cleanup_error, "output", supervision_started))
         if sampler is not None:
-            sampler.stop()
+            try:
+                sampler.stop()
+            except BaseException as sampler_error:
+                if primary is None:
+                    primary = sampler_error
+                else:
+                    secondary.append(
+                        collection_failure(sampler_error, "snapshot", supervision_started)
+                    )
+    if primary is not None:
+        report = collection_failure(primary, "snapshot", supervision_started)
+        report.update(phase=phase, complete=False, secondary_errors=secondary)
+        if sampler is not None:
+            report["collector"] = sampler.failure
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+            diagnostic = destination / "failed-runtime"
+            diagnostic.mkdir(exist_ok=False)
+            run_capture(
+                ["docker", "cp", f"{container_id}:{container_directory}/.", str(diagnostic)],
+                bundle.manifest.timeouts.command_seconds,
+            )
+        except BaseException as export_error:
+            report["export_error"] = collection_failure(export_error, "output", supervision_started)
+        try:
+            write_failure(destination / "phase-error.json", report)
+        except OSError:
+            primary.add_note("phase diagnostic could not be written; preserve owned containers")
+        raise primary
     if started_at is None:
         raise CampaignExecutionError(f"{phase} did not publish its real start marker")
     if returncode != 0:
@@ -540,7 +618,20 @@ class ManagedProcess:
         except OSError as exc:
             raise CampaignExecutionError("external process could not start") from exc
 
-    def wait(self, timeout_seconds: float) -> int:
+    def wait(self, timeout_seconds: float, *, sampler: ResourceSampler | None = None) -> int:
+        if sampler is not None:
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                if sampler.failed.is_set():
+                    raise ExternalCommandError("mandatory resource sampling failed")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.terminate()
+                    raise CampaignExecutionError("external process exceeded its frozen timeout")
+                try:
+                    return self.process.wait(timeout=min(0.25, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
         try:
             return self.process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
@@ -879,6 +970,8 @@ def _metadata(
     stabilization: dict[str, object],
     host_identity: dict[str, dict[str, object]],
     host_state: dict[str, dict[str, object]],
+    *,
+    host_runner: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "campaign": bundle.manifest.name,
@@ -889,6 +982,7 @@ def _metadata(
         "load": load.model_dump(mode="json"),
         "repetition": repetition,
         "git": asdict(provenance),
+        "host_runner": host_runner,
         "manifest_sha256": _file_sha256(manifest_path),
         "dataset_sha256": bundle.dataset_sha256,
         "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
@@ -1156,6 +1250,24 @@ def _read_result_counts(path: Path) -> dict[str, int]:
         return {str(item["result"]): int(item["count"]) for item in rows}
     except (KeyError, TypeError, ValueError) as exc:
         raise CampaignExecutionError("operational result CSV is invalid") from exc
+
+
+def runner_provenance(repository_root: Path, *, require_clean: bool = True) -> dict[str, object]:
+    """Identify the host tool independently of the frozen measured application."""
+    provenance = _git_provenance(repository_root)
+    if require_clean and not (provenance.worktree_clean and provenance.staged_clean):
+        raise CampaignExecutionError("reviewed host runner must have a clean tracked source")
+    paths = [*sorted((repository_root / "benchmarks").glob("*.py")), repository_root / "uv.lock"]
+    return {
+        "schema_version": 1,
+        "git": asdict(provenance),
+        "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
+        "components": {
+            path.relative_to(repository_root).as_posix(): _file_sha256(path) for path in paths
+        },
+        "supervision_interval_seconds": 0.25,
+        "collection_policy": "original-deltas-no-retry-failure-diagnostics-v1",
+    }
 
 
 def _git_provenance(repository_root: Path) -> GitProvenance:

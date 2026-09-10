@@ -1855,6 +1855,23 @@ supervisão de erros/timeouts pelo runner (§23.4). Relatar custos, dispersão e
 ganho de throughput não é critério de aceite. Cargas, congelamento e release exigem
 autorização própria; os incrementos e seus aceites estão em `RELEASE_PLAN.md`.
 
+Antes do encerramento experimental, aplicar a revisão autorizada da ferramenta de
+medição: o runner de host pode receber `--application-source` para um checkout
+congelado separado. Release/SHA, Compose e preparação continuam vinculados à
+aplicação; SHA, lock e hashes dos módulos do runner são registrados separadamente.
+O runner revisado é comum aos dois lados, sem modificar imagens ou checkouts
+históricos, sem substituir módulos silenciosamente e sem reduzir validadores.
+O modo sem a opção conserva a validação de fonte local. Não apresentar a revisão
+do coletor como se fosse o executável da baseline histórica.
+
+A coleta mantém cálculos, consultas, intervalo e deadlines congelados. A revisão
+preserva diagnóstico sanitizado da falha original no coletor e no helper Docker;
+a supervisão verifica falha/conclusão com esperas de até 250 ms, sem probes extras.
+Falha obrigatória interrompe a tentativa, preservando erro primário, erros de
+encerramento/exportação e artefatos incompletos. Não há repetição automática,
+interpolação, tolerância nova ou promoção de evidência parcial a resultado válido.
+Esse tratamento de falhas é uma mudança declarada da ferramenta de medição.
+
 ### 30.6 Estado funcional do incremento I
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`

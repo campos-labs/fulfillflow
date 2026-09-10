@@ -105,4 +105,6 @@ def test_snapshot_sanitizes_external_failure(
     assert resource_snapshot.main() == 2
     output = capsys.readouterr()
     assert not output.out
-    assert output.err == "local Docker resource snapshot failed\n"
+    assert output.err.startswith("local Docker resource snapshot failed\nRESOURCE_FAILURE_JSON=")
+    assert '"type": "OSError"' in output.err
+    assert "synthetic-private-token" not in output.err

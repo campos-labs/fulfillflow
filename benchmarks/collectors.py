@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from benchmarks.campaign import CampaignBundle, SplitPools
+from benchmarks.collection_diagnostics import counters, failure, write_failure
 from benchmarks.database_contract import (
     BUSINESS_TABLES,
     STRUCTURAL_SCHEMA_QUERIES,
@@ -622,6 +623,9 @@ class ResourceSampler:
         self.command_runner = command_runner or run_capture
         self.command_timeout_seconds = command_timeout_seconds
         self.error: str | None = None
+        self.failure: dict[str, Any] | None = None
+        self.failed = threading.Event()
+        self._exception: Exception | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="benchmark-resource-sampler")
 
@@ -634,11 +638,16 @@ class ResourceSampler:
         if self._thread.is_alive():
             raise ExternalCommandError("resource sampler did not terminate")
         if self.error is not None:
-            raise ExternalCommandError(self.error)
+            raise ExternalCommandError(self.error) from self._exception
 
     def _run(self) -> None:
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        stage = "output"
+        started = time.monotonic()
+        previous: dict[str, dict[str, Any]] = {}
+        current: dict[str, dict[str, Any]] = {}
+        identifier = ""
         try:
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
             with self.output_path.open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.writer(stream, lineterminator="\n")
                 writer.writerow(
@@ -652,18 +661,24 @@ class ResourceSampler:
                         "postgres_active_connections",
                     )
                 )
+                stage = "endpoint"
                 endpoint = self.command_runner(
                     ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
                     self.command_timeout_seconds,
                 ).stdout.strip()
+                stage = "snapshot"
                 previous = self._snapshot(endpoint)
                 next_sample = time.monotonic()
                 while True:
                     timestamp = datetime.now(UTC).isoformat()
+                    stage = "connections"
                     active_connections = self.database.connection_counts()
+                    stage = "snapshot"
                     current = self._snapshot(endpoint)
                     for service, identifier in sorted(self.container_ids.items()):
+                        stage = "delta"
                         stats = _resource_delta(previous[identifier], current[identifier])
+                        stage = "write"
                         writer.writerow(
                             (
                                 timestamp,
@@ -686,8 +701,25 @@ class ResourceSampler:
                         ) * self.interval_seconds
                     if self._stop.wait(max(0.0, next_sample - time.monotonic())):
                         break
-        except Exception:
+        except Exception as exc:
             self.error = "mandatory resource sampling failed"
+            self._exception = exc
+            self.failure = failure(exc, stage, started)
+            self.failure["phase"] = (
+                "warmup" if self.output_path.parent.name == "warmup" else "measurement"
+            )
+            if stage == "delta":
+                self.failure["previous"] = counters(previous.get(identifier))
+                self.failure["current"] = counters(current.get(identifier))
+                self.failure["service"] = next(
+                    (name for name, value in self.container_ids.items() if value == identifier),
+                    "unknown",
+                )
+            self.failed.set()
+            try:
+                write_failure(self.output_path.with_suffix(".error.json"), self.failure)
+            except Exception as write_error:
+                self.failure["diagnostic_write_error"] = failure(write_error, "output", started)
 
     def _snapshot(self, endpoint: str) -> dict[str, dict[str, Any]]:
         completed = self.command_runner(

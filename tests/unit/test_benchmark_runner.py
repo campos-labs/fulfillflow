@@ -114,7 +114,7 @@ def test_run_phase_physically_separates_warmup_from_measurement_csvs(
         def __init__(self, command: list[str]) -> None:
             self.command = command
 
-        def wait(self, _timeout: float) -> int:
+        def wait(self, _timeout: float, **_kwargs: object) -> int:
             return 0
 
         def ensure_stopped(self) -> None:
@@ -217,7 +217,7 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
     stopped: list[str] = []
 
     class FailedProcess:
-        def wait(self, _timeout: float) -> int:
+        def wait(self, _timeout: float, **_kwargs: object) -> int:
             if failure == "timeout":
                 raise CampaignExecutionError("external process exceeded its frozen timeout")
             return 7
@@ -226,6 +226,8 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
             stopped.append("process")
 
     class Sampler:
+        failure = None
+
         def start(self) -> None:
             pass
 
@@ -240,7 +242,7 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
     )
     monkeypatch.setattr(
         "benchmarks.run_campaign.run_capture",
-        lambda *_a: pytest.fail("must not export a failed phase"),
+        lambda *_a: subprocess.CompletedProcess([], 0, "", ""),
     )
     with pytest.raises(CampaignExecutionError, match=r"timeout|invalidated"):
         _run_phase(
@@ -254,7 +256,9 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
             tmp_path,
         )
     assert "process" in stopped and "sampler" in stopped
-    assert ("phase" in stopped) is (failure == "timeout")
+    assert "phase" in stopped
+    assert (tmp_path / "phase-error.json").is_file()
+    assert not (tmp_path / "locust_stats.csv").exists()
 
 
 def _write_resources(path: Path) -> None:

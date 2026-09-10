@@ -7,7 +7,10 @@ import json
 import re
 import socket
 import sys
+import time
 from typing import Any, BinaryIO
+
+from benchmarks.collection_diagnostics import PREFIX, failure
 
 
 class _Pipe:
@@ -61,11 +64,15 @@ def read_stats(endpoint: str, identifier: str) -> dict[str, Any]:
 
 
 def main() -> int:
+    started = time.monotonic()
+    stage = "arguments"
     try:
         endpoint, *identifiers = sys.argv[1:]
         result = {}
         for identifier in identifiers:
+            stage = "transport"
             raw = read_stats(endpoint, identifier)
+            stage = "normalize"
             cpu, memory = raw["cpu_stats"], raw["memory_stats"]
             cache = memory.get("stats", {}).get(
                 "total_inactive_file", memory.get("stats", {}).get("inactive_file", 0)
@@ -81,8 +88,9 @@ def main() -> int:
             }
         print(json.dumps(result))
         return 0
-    except Exception:
+    except Exception as exc:
         print("local Docker resource snapshot failed", file=sys.stderr)
+        print(PREFIX + json.dumps(failure(exc, stage, started)), file=sys.stderr)
         return 2
 
 
