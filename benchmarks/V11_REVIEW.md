@@ -23,6 +23,36 @@ permanecem idênticos. A nova imagem tem SHA próprio, registrado nos manifests 
 Essa diferença de empacotamento/validação é declarada na comparação; não constitui uma
 nova baseline medida nem elimina a necessidade da validação prévia autorizada em III.
 
+## Política efetiva de logs — revisão sem carga
+
+O contrato declarado nos manifests v1.0 e v1.1 é igual: `LOG_LEVEL=WARNING`,
+`LOG_FORMAT=json`, tracing desligado e sampling zero. As duas imagens de aplicação foram
+inspecionadas sem rede, sem iniciar servidor e sem carga: a v1.0 congelada
+`sha256:0fd492…1fc1` e a imagem v1.1 do piloto `sha256:3f084f…b40` usam Uvicorn 0.52.4.
+Em ambas, o entrypoint de imagem é `python -m fulfillflow`; o Compose de benchmark troca
+o comando por `python -m uvicorn … --workers 1`, sem `--log-level`, `--log-config` ou
+`--no-access-log`.
+
+Isso comprova a política efetiva do servidor nos dois casos: `uvicorn.access` fica em
+INFO, com formato texto padrão, no stdout; `uvicorn`/`uvicorn.error` ficam em INFO no
+stderr. `access_log=true` e o argumento de nível é nulo. O driver Docker observado no
+host atual é `json-file`; não há destino de arquivo ou coletor externo configurado pelo
+Compose. O driver atual não demonstra o destino usado na baseline histórica.
+
+Já `LOG_LEVEL` e `LOG_FORMAT` são settings validados e injetados pelo Compose, mas o
+código e os entrypoints das duas imagens não instalam um configurador de logging que os
+aplique ao logger da aplicação ou ao Uvicorn. Logo, eles são configuração declarada e
+observável no ambiente, mas não prova de JSON/WARNING efetivo para logs de aplicação.
+Não foram encontrados emissores estruturados da aplicação no caminho de benchmark. Os
+access logs INFO existentes no diagnóstico do piloto são Uvicorn, não logs da aplicação.
+Não há exportação de `docker logs` da baseline v1.0 que prove sua saída histórica; a
+equivalência é comprovada por imagens, Compose e entrypoints, não inferida da contagem de
+linhas antiga.
+
+A extração acrescenta requisições internas e, portanto, linhas de access log para esses
+saltos. Esse é custo inerente do fluxo observado, não evidência de uma política diferente.
+Nenhum log será desativado, reformatado ou otimizado para novos controles.
+
 ## Preparação e restauração
 
 `seed_v11` autentica o artefato e a sidecar, verifica seu replay semântico e o gerador,
@@ -191,29 +221,57 @@ Acrescentar `-PlanOnly` verifica o plano sem carga. O pacote anterior continua r
 e recusará o build atual. O launcher exige `pwsh` 7; registrar versão e caminho observados
 no pacote. Um preflight aprovado é uma observação, não dispensa os gates na execução futura.
 
-### Proposta delimitada antes da comparação oficial — ainda não autorizada
+### Controles atuais v1.0 no Windows 26200.9445 — preparados, execução pendente
 
-Os dados existentes sustentam a descrição da v1.0 no build antigo e os testes funcionais
-de consistência. Uma comparação com v1.1 no build novo deve declarar a mudança como fator
-de confusão: não permite atribuir a diferença de desempenho somente à extração. Um piloto
-v1.1 válido também não estima o efeito da atualização sobre v1.0 nem prova efeito nulo.
+Esta é a proposta atual autorizada: somente dois controles não oficiais v1.0,
+mixed/4, q=430, uma repetição cada, no build `26200.9445`. A entrada cria um checkout
+destacado no commit efetivamente medido `ae15e0a…7265`, usa os executáveis e imagens v1.0
+originais, cria destinos novos e interrompe a sequência na primeira recusa, falha ou
+interrupção. Ela não faz pull, build, tag, atualização do lock ou repetição automática.
+Cada falha exporta diagnósticos antes de preservar a infraestrutura isolada para revisão.
 
-Para sustentar uma comparação no host atual, proponho revalidação delimitada de v1.0:
-inicialmente **12 execuções diagnósticas**, duas por célula dos três perfis × 4/12 users,
-com imagens/lock/dataset/workload e tempos v1.0 preservados, apenas a expectativa explícita
-do novo build e identidades próprias em destino novo. Isso cobre toda a matriz com um
-escopo menor que repetir automaticamente as 30 oficiais. Duas repetições são triagem;
-não bastam para demonstrar equivalência ou efeito nulo.
+Os candidatos mudam exclusivamente: nome não oficial, seleção de 4 usuários, uma
+repetição, expectativa explícita do build Windows e o caminho relativo do mesmo artefato
+de dataset. Workload, coortes, pesos, q, spawn rate, imagens, recursos, pool, tempos,
+tracing e telemetria declarada ficam iguais aos manifestos v1.0 publicados. As identidades
+observadas do host, o caminho e a versão do PowerShell são gravados em cada tentativa.
 
-Antes da triagem, acordar margens de relevância prática para throughput, latências e
-recursos, usando a dispersão histórica como referência, sem escolher limites depois de
-ver resultados. Verificar primeiro validade HTTP/efeitos, completude e condições do host.
-Diferenças sistemáticas ou resultados inconclusivos justificam ampliar a amostra nas
-células afetadas e estabelecer referência v1.0 pareada no novo host antes de alegações
-quantitativas. Se não houver revalidação, restringir conclusões a comparação descritiva
-entre ambientes, explicitando a impossibilidade de separar seus efeitos. A quantidade
-final e eventual necessidade de uma nova baseline oficial serão decididas com essas
-evidências; nenhuma repetição histórica é sobrescrita nem 30 novas execuções presumidas.
+As regras de leitura foram fixadas antes de medir. Primeiro, ambas precisam ser válidas:
+gates do runner, HTTP/Locust sem erros, efeitos e estado inicial/final conferidos,
+completude e checksums. Para triagem descritiva, cada throughput deve ficar a até 5% da
+mediana histórica v1.0 mixed/4 (185,93 req/s) e cada p95 a até 5 ms da mediana histórica
+(36 ms); entre os dois controles, a diferença absoluta de throughput deve ser no máximo
+5% de sua média e a de p95, no máximo 5 ms. Os 5% arredondam para cima duas vezes o IQR
+relativo histórico de throughput (4,45%); 5 ms também é maior que a faixa histórica
+35–37 ms. São margens práticas prévias, não testes de significância nem prova de
+equivalência.
+
+Dois controles válidos e estáveis dentro dessas margens tornam plausível uma referência
+v1.0 no host novo: a diferença do piloto v1.1 continua descritiva e não causal, mas a
+decisão seguinte pode propor a menor amostra pareada que responda à dúvida restante.
+Se ambos forem válidos, estáveis e fora das margens, o host/versão passa a ser explicação
+plausível e será necessário decidir uma referência v1.0 atual maior antes de atribuir
+diferença à extração. Instabilidade entre eles ou qualquer invalidez pede diagnóstico; não
+dispara nova tentativa. Esses dois resultados não validam equivalência nem as seis células.
+
+Comando manual, somente após autorização de execução, a partir da raiz e usando o
+executável conferido neste terminal:
+
+```powershell
+& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' `
+  -NoProfile -File .\scripts\Invoke-V10Controls.ps1
+```
+
+Acrescentar `-PlanOnly` só confirma commit e destinos; não materializa checkout, consulta
+o host, cria infraestrutura ou executa carga. A execução normal materializa o ambiente
+isolado pelo lock v1.0, depois inicia no máximo os dois controles autorizados.
+
+### Proposta histórica de 12 diagnósticos — não é a próxima ação
+
+A proposta anterior de 12 diagnósticos, duas execuções por célula dos três perfis × 4/12
+users, permanece apenas como registro histórico. Ela não está incluída na entrada atual,
+não é iniciada pelos dois controles e não foi autorizada. Uma expansão futura depende dos
+resultados acima e de decisão específica.
 
 Matriz futura: três perfis × 4/12 users × cinco repetições = 30 válidas. O piso temporal é
 30 × (300 s estabilização + 60 s warm-up + 300 s measurement) = **5 h 30 min**, mais preparo,
