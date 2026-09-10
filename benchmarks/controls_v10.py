@@ -6,10 +6,10 @@ import argparse
 import hashlib
 import json
 import os
-import re
+import shutil
+import signal
 import subprocess
 import sys
-import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -19,19 +19,19 @@ from benchmarks.operational_errors import error_report, sanitize, write_report
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "benchmarks" / "results"
 V10_REVISION = "ae15e0a2da465f4aec3d9c699655441ad1947265"
+# The published manifest was committed after the measured application revision.
+V10_BASELINE_BLOB = "fe0fd0fa46241cade00086091158cdba3a86f6fd"
 PROJECT = "fulfillflow-benchmark"
 DATABASE = "fulfillflow_benchmark"
 WINDOWS_BUILD = "26200.9445"
-# The two earlier bootstraps stopped before Docker or either control because the
-# required locked wheels were absent from the local cache. Keep their evidence and
-# use a new, independently traceable source and bootstrap destination.
-WORKTREE_NAME = "v10-controls-win9445-source-03"
-BOOTSTRAP_NAME = "v10-controls-win9445-bootstrap-03"
+# Earlier failed bootstraps remain immutable. Preparation and load execution now
+# have separate entry points; only a successfully prepared bundle can run.
+WORKTREE_NAME = "v10-controls-win9445-source-06"
+BOOTSTRAP_NAME = "v10-controls-win9445-bootstrap-06"
 ATTEMPT_NAMES = (
     "v10-control-mixed-4-win9445-attempt-01",
     "v10-control-mixed-4-win9445-attempt-02",
 )
-WINDOWS_LOCK_EXCLUSIONS = frozenset({"uvloop"})
 
 
 class ControlError(RuntimeError):
@@ -46,7 +46,9 @@ def _is_direct_result_child(path: Path, expected_name: str) -> bool:
     return path.name == expected_name and path.parent == RESULTS
 
 
-def _validate_locations(checkout: Path, attempts: Sequence[Path]) -> None:
+def _validate_locations(
+    checkout: Path, attempts: Sequence[Path], *, require_new_source: bool = True
+) -> None:
     if not _is_direct_result_child(checkout, WORKTREE_NAME):
         raise ControlError("isolated checkout must use the reviewed result destination")
     if len(attempts) != len(ATTEMPT_NAMES) or any(
@@ -57,7 +59,9 @@ def _validate_locations(checkout: Path, attempts: Sequence[Path]) -> None:
     if len({checkout, *attempts}) != len(attempts) + 1:
         raise ControlError("checkout and attempt destinations must be distinct")
     bootstrap = RESULTS / BOOTSTRAP_NAME
-    if bootstrap.exists() or any(path.exists() for path in (checkout, *attempts)):
+    if any(path.exists() for path in attempts) or (
+        require_new_source and (bootstrap.exists() or checkout.exists())
+    ):
         raise ControlError("all destinations must be new; no automatic retry or overwrite")
 
 
@@ -86,17 +90,61 @@ def _run(
     except (OSError, subprocess.SubprocessError) as exc:
         if evidence is not None:
             write_report(evidence.with_suffix(".error.json"), error_report(exc))
-        raise ControlError("required external command did not complete") from None
+        detail = f"; diagnostics: {evidence.with_suffix('.error.json')}" if evidence else ""
+        raise ControlError(f"required external command did not complete{detail}") from None
     if evidence is not None:
         evidence.parent.mkdir(parents=True, exist_ok=True)
         evidence.write_text(sanitize(completed.stdout + completed.stderr), encoding="utf-8")
     if required and completed.returncode != 0:
-        raise ControlError("required external command failed")
+        detail = f"; diagnostics: {evidence}" if evidence else ""
+        raise ControlError(f"external command exited {completed.returncode}{detail}")
     return completed
 
 
 def _git(root: Path, *args: str) -> str:
     return _run(["git", *args], cwd=root).stdout.strip()
+
+
+def _wait_for_runner(process: subprocess.Popen[str]) -> subprocess.CompletedProcess[str]:
+    """Let the frozen runner handle shared-console Ctrl+C before considering a kill."""
+    interrupted = False
+    try:
+        stdout, stderr = process.communicate()
+    except KeyboardInterrupt:
+        interrupted = True
+        handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=90)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate(timeout=10)
+        finally:
+            signal.signal(signal.SIGINT, handler)
+    return subprocess.CompletedProcess(
+        process.args, 130 if interrupted else process.returncode, stdout, stderr
+    )
+
+
+def _run_runner(
+    argv: Sequence[str], source: Path, environment: Mapping[str, str], evidence: Path
+) -> subprocess.CompletedProcess[str]:
+    # subprocess.run kills its child immediately on KeyboardInterrupt. That would
+    # prevent the frozen runner from stopping its processes inside the loadgen.
+    process = subprocess.Popen(
+        list(argv),
+        cwd=source,
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=False,
+    )
+    completed = _wait_for_runner(process)
+    evidence.write_text(sanitize(completed.stdout + completed.stderr), encoding="utf-8")
+    return completed
 
 
 def _source_environment(source: Path, baseline_environment: Mapping[str, str]) -> dict[str, str]:
@@ -113,11 +161,11 @@ def _source_environment(source: Path, baseline_environment: Mapping[str, str]) -
     return environment
 
 
-def _source_python(_source: Path) -> Path:
-    """Return the verified read-only environment; source code is selected by PYTHONPATH."""
-    executable = ROOT / ".venv" / "Scripts" / "python.exe"
+def _source_python(source: Path) -> Path:
+    """Use only the frozen environment installed inside the isolated checkout."""
+    executable = source / ".venv" / "Scripts" / "python.exe"
     if not executable.is_file():
-        raise ControlError("the verified local benchmark environment is unavailable")
+        raise ControlError("isolated v1.0 virtual environment is unavailable")
     return executable
 
 
@@ -139,9 +187,8 @@ def _run_source_python(
 
 
 def _baseline_document(source: Path) -> dict[str, Any]:
-    path = source / "benchmarks" / "campaigns" / "v1-baseline-mixed.json"
     try:
-        decoded = json.loads(path.read_text(encoding="utf-8"))
+        decoded = json.loads(_git(source, "cat-file", "blob", V10_BASELINE_BLOB))
     except (OSError, json.JSONDecodeError) as exc:
         raise ControlError("frozen v1.0 mixed manifest is unreadable") from exc
     if not isinstance(decoded, dict):
@@ -155,119 +202,6 @@ def _baseline_document(source: Path) -> dict[str, Any]:
     ):
         raise ControlError("frozen v1.0 mixed manifest differs from the published contract")
     return document
-
-
-def _canonical_package_name(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def _lock_packages(path: Path) -> dict[str, dict[str, Any]]:
-    try:
-        decoded = tomllib.loads(path.read_text(encoding="utf-8"))
-        packages = decoded["package"]
-        if not isinstance(packages, list):
-            raise TypeError
-        result: dict[str, dict[str, Any]] = {}
-        for package in packages:
-            if not isinstance(package, dict) or not isinstance(package.get("name"), str):
-                raise TypeError
-            result[package["name"]] = package
-    except (KeyError, OSError, TypeError, tomllib.TOMLDecodeError) as exc:
-        raise ControlError("dependency lock is unreadable") from exc
-    return result
-
-
-def _runtime_parity(source: Path) -> dict[str, object]:
-    """Prove that the read-only local environment matches v1.0's third-party lock."""
-    frozen_lock = source / "uv.lock"
-    active_lock = ROOT / "uv.lock"
-    frozen_packages = _lock_packages(frozen_lock)
-    active_packages = _lock_packages(active_lock)
-    frozen_packages.pop("fulfillflow", None)
-    active_packages.pop("fulfillflow", None)
-    if not frozen_packages or frozen_packages != active_packages:
-        raise ControlError("active dependency lock differs from the frozen v1.0 third-party lock")
-
-    completed = _run_source_python(
-        source,
-        os.environ,
-        """
-import importlib.metadata
-import json
-import re
-import sys
-from pathlib import Path
-import benchmarks
-import fulfillflow
-
-canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
-packages = {
-    canonical(distribution.metadata["Name"]): distribution.version
-    for distribution in importlib.metadata.distributions()
-    if distribution.metadata["Name"]
-}
-print(json.dumps({
-    "platform": sys.platform,
-    "python": sys.executable,
-    "packages": packages,
-    "code": {
-        "fulfillflow": str(Path(fulfillflow.__file__).resolve()),
-        "benchmarks": str(Path(benchmarks.__file__).resolve()),
-    },
-}))
-""",
-    )
-    try:
-        observed = json.loads(completed.stdout)
-        platform = observed["platform"]
-        packages = observed["packages"]
-        code = observed["code"]
-        if (
-            not isinstance(platform, str)
-            or not isinstance(packages, dict)
-            or not isinstance(code, dict)
-            or not all(isinstance(value, str) for value in packages.values())
-        ):
-            raise TypeError
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise ControlError("local benchmark environment inventory is invalid") from exc
-    if platform != "win32":
-        raise ControlError("local benchmark environment is not Windows")
-
-    expected_versions = {
-        _canonical_package_name(name): str(package["version"])
-        for name, package in frozen_packages.items()
-    }
-    observed_versions = {
-        _canonical_package_name(name): version for name, version in packages.items()
-    }
-    missing = set(expected_versions) - set(observed_versions)
-    mismatches = {
-        name: {"expected": expected_versions[name], "observed": observed_versions[name]}
-        for name in expected_versions.keys() & observed_versions.keys()
-        if expected_versions[name] != observed_versions[name]
-    }
-    if missing != WINDOWS_LOCK_EXCLUSIONS or mismatches:
-        raise ControlError("local benchmark environment differs from the frozen v1.0 lock")
-
-    try:
-        code_paths = {name: Path(value).resolve() for name, value in code.items()}
-    except TypeError as exc:
-        raise ControlError("local benchmark environment code inventory is invalid") from exc
-    if set(code_paths) != {"fulfillflow", "benchmarks"} or any(
-        not path.is_relative_to(source) for path in code_paths.values()
-    ):
-        raise ControlError("the local environment did not resolve the frozen v1.0 source")
-
-    return {
-        "mode": "verified-read-only-root-venv",
-        "runtime_python": observed["python"],
-        "frozen_lock_sha256": _sha256(frozen_lock),
-        "active_lock_sha256": _sha256(active_lock),
-        "matched_packages": len(expected_versions) - len(missing),
-        "windows_lock_exclusions": sorted(missing),
-        "code": {name: str(path) for name, path in code_paths.items()},
-    }
 
 
 def candidate_document(baseline: Mapping[str, Any], attempt_number: int) -> dict[str, Any]:
@@ -391,10 +325,12 @@ def _image_preflight(
 def _verify_source(source: Path, *, allow_candidates: bool = False) -> None:
     if source.resolve() == ROOT.resolve():
         raise ControlError("the active v1.1 checkout cannot be used for v1.0 controls")
-    if _git(source, "rev-parse", "--show-toplevel") != str(source.resolve()):
+    if Path(_git(source, "rev-parse", "--show-toplevel")).resolve() != source.resolve():
         raise ControlError("control source is not an independent checkout")
     if _git(source, "rev-parse", "HEAD") != V10_REVISION:
         raise ControlError("control source is not the frozen v1.0 revision")
+    if _git(source, "branch", "--show-current"):
+        raise ControlError("control source must remain detached from all branches")
     changes = _git(source, "status", "--porcelain", "--untracked-files=all").splitlines()
     candidate_directory = "benchmarks/results/v10-controls-win9445-candidates"
     individual_candidates = {f"?? {candidate_directory}/{name}.json" for name in ATTEMPT_NAMES}
@@ -403,6 +339,36 @@ def _verify_source(source: Path, *, allow_candidates: bool = False) -> None:
         allow_candidates and set(changes) not in allowed_changes
     ):
         raise ControlError("control source changed outside its generated control candidates")
+
+
+def _sync_environment(source: Path, *, check: bool = False) -> dict[str, object]:
+    uv = shutil.which("uv")
+    if uv is None:
+        raise ControlError("uv is unavailable for the isolated frozen environment")
+    argv = [
+        uv,
+        "sync",
+        "--frozen",
+        "--all-groups",
+        "--no-python-downloads",
+        "--cache-dir",
+        str(ROOT / ".uv-cache"),
+        "--python",
+        sys.executable,
+    ]
+    if check:
+        argv.extend(("--offline", "--check"))
+    environment = _source_environment(source, os.environ)
+    # Never inherit an override that could install v1.0 into the active v1.1 venv.
+    environment["UV_PROJECT_ENVIRONMENT"] = str(source / ".venv")
+    _run(
+        argv,
+        cwd=source,
+        environment=environment,
+        timeout=180,
+        evidence=None if check else RESULTS / BOOTSTRAP_NAME / "sync.txt",
+    )
+    return {"uv": str(Path(uv).resolve()), "argv": argv, "python": str(_source_python(source))}
 
 
 def _materialize_checkout(checkout: Path, launcher: Mapping[str, Any]) -> Path:
@@ -419,15 +385,16 @@ def _materialize_checkout(checkout: Path, launcher: Mapping[str, Any]) -> Path:
         )
         stage = "source-verification"
         _verify_source(checkout)
-        stage = "runtime-parity"
-        parity = _runtime_parity(checkout)
-        write_report(bootstrap / "runtime-parity.json", parity)
+        stage = "environment-sync"
+        runtime = _sync_environment(checkout)
+        _verify_source(checkout)
         write_report(
-            bootstrap / "ready.json",
+            bootstrap / "runtime.json",
             {
                 "revision": V10_REVISION,
+                "published_baseline_blob": V10_BASELINE_BLOB,
                 "launcher": launcher,
-                "runtime_parity": "runtime-parity.json",
+                "runtime": runtime,
             },
         )
         return checkout
@@ -436,6 +403,7 @@ def _materialize_checkout(checkout: Path, launcher: Mapping[str, Any]) -> Path:
             bootstrap / "error.json",
             {"stage": stage, "error": error_report(exc)},
         )
+        _write_checksums(bootstrap)
         relative = (
             bootstrap.relative_to(ROOT).as_posix()
             if bootstrap.is_relative_to(ROOT)
@@ -473,7 +441,10 @@ from benchmarks.campaign import load_campaign
 from benchmarks.host_probe import HostProbe
 manifest = load_campaign(Path(sys.argv[1])).manifest
 probe = HostProbe(manifest.host, official=False, timeout_seconds=manifest.timeouts.command_seconds)
-print(json.dumps({'identity': probe.identity(), 'conditions': probe.dynamic({})}))
+# Dynamic admission belongs to the frozen runner after preparation/stabilization,
+# when it has the real container IDs. An empty pre-start project is not that state.
+print(json.dumps({'identity': probe.identity(),
+                  'conditions': 'checked by frozen runner after stabilization'}))
 """,
         str(candidate),
         evidence=evidence,
@@ -528,6 +499,7 @@ def _prepare(source: Path, candidate: Path, attempt: Path, environment: Mapping[
             ATTEMPT_NAMES.index(candidate.stem) + 1,
         )
         _assert_project_absent(source, environment)
+        write_report(evidence / "owned.json", {"project": PROJECT, "source": str(source)})
         _run(
             [*_compose(source), "config", "--quiet"],
             cwd=source,
@@ -660,7 +632,7 @@ def _run_attempt(source: Path, candidate: Path, attempt: Path, launcher: Mapping
         write_report(attempt / "preparation-argv.json", prepare)
         result["stage"] = "runner"
         entered = True
-        completed = _run(
+        completed = _run_runner(
             [
                 str(_source_python(source)),
                 "-X",
@@ -680,11 +652,9 @@ def _run_attempt(source: Path, candidate: Path, attempt: Path, launcher: Mapping
                 "--prepare-command-json",
                 json.dumps(prepare),
             ],
-            cwd=source,
+            source=source,
             environment=_source_environment(source, environment),
-            timeout=None,
             evidence=attempt / "runner.txt",
-            required=False,
         )
         code = completed.returncode
         if code != 0:
@@ -702,6 +672,23 @@ def _run_attempt(source: Path, candidate: Path, attempt: Path, launcher: Mapping
         write_report(attempt / "result.json", result)
         if entered:
             try:
+                if code != 0 and (attempt / "preparation" / "owned.json").is_file():
+                    # Also stop an orphaned phase if the runner was forcibly killed.
+                    # Stop preserves containers, volumes and files for diagnostics.
+                    _run(
+                        [
+                            *_compose(source),
+                            "--profile",
+                            "campaign",
+                            "stop",
+                            "--timeout",
+                            "10",
+                            "loadgen",
+                        ],
+                        cwd=source,
+                        environment=environment,
+                        evidence=attempt / "stop-loadgen.txt",
+                    )
                 _capture_diagnostics(source, environment, attempt / "diagnostics")
                 if code == 0:
                     _run(
@@ -734,7 +721,7 @@ def _run_attempt(source: Path, candidate: Path, attempt: Path, launcher: Mapping
 def _plan(
     checkout: Path, attempts: Sequence[Path], launcher: Mapping[str, Any]
 ) -> dict[str, object]:
-    _validate_locations(checkout, attempts)
+    _validate_locations(checkout, attempts, require_new_source=False)
     if _git(ROOT, "cat-file", "-e", f"{V10_REVISION}^{{commit}}") != "":
         raise ControlError("frozen v1.0 commit cannot be resolved")
     return {
@@ -748,42 +735,167 @@ def _plan(
         "host_build": WINDOWS_BUILD,
         "launcher": dict(launcher),
         "load_executed": False,
+        "executable_preflight": False,
     }
 
 
+def _frozen_validation(source: Path, candidate: Path, evidence: Path) -> None:
+    _run_source_python(
+        source,
+        os.environ,
+        """
+import importlib.metadata as metadata
+import json, sys
+from pathlib import Path
+import benchmarks, fulfillflow
+from benchmarks.campaign import load_campaign
+from benchmarks.dataset import verify_benchmark_artifacts
+from benchmarks.run_campaign import _git_provenance, _project_release, _validate_prepare_command
+root = Path.cwd()
+bundle = load_campaign(Path(sys.argv[1]))
+assert _project_release(root) == bundle.manifest.release == 'v1.0.0'
+assert _git_provenance(root).sha == bundle.manifest.git_sha
+assert metadata.version('fulfillflow') == '1.0.0'
+assert Path(sys.prefix).resolve() == (root / '.venv').resolve()
+assert Path(fulfillflow.__file__).resolve().is_relative_to(root)
+assert Path(benchmarks.__file__).resolve().is_relative_to(root)
+assert verify_benchmark_artifacts(root / 'benchmarks/datasets') == bundle.dataset_sha256
+_validate_prepare_command(json.loads(sys.argv[2]))
+print(json.dumps({'valid': True, 'release': bundle.manifest.release,
+                  'candidate': bundle.manifest.name, 'python': sys.executable,
+                  'dataset_sha256': bundle.dataset_sha256}))
+""",
+        str(candidate),
+        json.dumps(_prepare_process(source, candidate, RESULTS / candidate.stem)),
+        evidence=evidence,
+        timeout=120,
+    )
+
+
+def _control_fingerprints(source: Path, candidates: Sequence[Path]) -> dict[str, str]:
+    paths = [
+        ROOT / path
+        for path in (
+            "benchmarks/controls_v10.py",
+            "scripts/Invoke-V10Controls.ps1",
+            "scripts/prepare_v10_control.py",
+        )
+    ]
+    paths += [source / "uv.lock", source / "compose.benchmark.yaml", *candidates]
+    return {str(path): _sha256(path) for path in paths}
+
+
+def prepare_controls(checkout: Path, attempts: Sequence[Path], launcher: Mapping[str, Any]) -> int:
+    """Materialize and validate the real bundle without starting Docker or Locust."""
+    _validate_locations(checkout, attempts)
+    source = _materialize_checkout(checkout, launcher)
+    bootstrap = RESULTS / BOOTSTRAP_NAME
+    stage = "candidate-validation"
+    try:
+        candidates = _write_candidates(source, attempts)
+        _verify_source(source, allow_candidates=True)
+        for candidate in candidates:
+            _frozen_validation(source, candidate, bootstrap / f"{candidate.stem}-validation.txt")
+        document = json.loads(candidates[0].read_text(encoding="utf-8"))
+        environment = _benchmark_environment(document)
+        stage = "docker-read-only-preflight"
+        _assert_project_absent(source, environment)
+        images = _image_preflight(source, document, environment)
+        _run(
+            [*_compose(source), "--profile", "campaign", "config", "--quiet"],
+            cwd=source,
+            environment=environment,
+            evidence=bootstrap / "compose-config.txt",
+        )
+        stage = "host-identity"
+        host = _source_host_preflight(source, candidates[0], environment, bootstrap / "host.txt")
+        write_report(
+            bootstrap / "ready.json",
+            {
+                "source": str(source),
+                "candidates": [str(path) for path in candidates],
+                "fingerprints": _control_fingerprints(source, candidates),
+                "images": images,
+                "host": host,
+                "launcher": dict(launcher),
+                "load_executed": False,
+            },
+        )
+        _write_checksums(bootstrap)
+        print(f"Preparation verified without load: {bootstrap / 'ready.json'}", flush=True)
+        return 0
+    except BaseException as exc:
+        write_report(bootstrap / "validation-error.json", {"stage": stage, **error_report(exc)})
+        _write_checksums(bootstrap)
+        raise ControlError(
+            f"preparation failed at {stage}; diagnostics: {bootstrap / 'validation-error.json'}"
+        ) from None
+
+
+def _prepared_candidates(source: Path) -> list[Path]:
+    ready = RESULTS / BOOTSTRAP_NAME / "ready.json"
+    if not ready.is_file():
+        raise ControlError(f"verified preparation required before load; missing {ready}")
+    document = json.loads(ready.read_text(encoding="utf-8"))
+    candidates = [
+        source / "benchmarks/results/v10-controls-win9445-candidates" / f"{name}.json"
+        for name in ATTEMPT_NAMES
+    ]
+    if document.get("source") != str(source) or document.get(
+        "fingerprints"
+    ) != _control_fingerprints(source, candidates):
+        raise ControlError("prepared control source or launcher changed; review required")
+    _verify_source(source, allow_candidates=True)
+    _sync_environment(source, check=True)
+    return candidates
+
+
 def execute(
-    checkout: Path, attempts: Sequence[Path], launcher: Mapping[str, Any], *, plan_only: bool
+    checkout: Path,
+    attempts: Sequence[Path],
+    launcher: Mapping[str, Any],
+    *,
+    plan_only: bool,
+    prepare_only: bool = False,
 ) -> int:
     plan = _plan(checkout, attempts, launcher)
     if plan_only:
         print(json.dumps(plan, ensure_ascii=False))
         return 0
-    source = _materialize_checkout(checkout, launcher)
-    candidates = _write_candidates(source, attempts)
+    if prepare_only:
+        return prepare_controls(checkout, attempts, launcher)
+    source = checkout
+    candidates = _prepared_candidates(source)
     for candidate, attempt in zip(candidates, attempts, strict=True):
+        print(f"Starting {attempt.name}; frozen timed phases take at least 11 minutes.", flush=True)
         code = _run_attempt(source, candidate, attempt, launcher)
         if code != 0:
+            print(f"Control stopped; diagnostics: {attempt / 'result.json'}", file=sys.stderr)
             return code
+        print(f"Completed {attempt.name}.", flush=True)
     return 0
 
 
-def _options_from_stdin() -> tuple[Path, tuple[Path, Path], dict[str, Any], bool]:
+def _options_from_stdin() -> tuple[Path, tuple[Path, Path], dict[str, Any], bool, bool]:
     try:
         options = json.load(sys.stdin)
         checkout = Path(options["checkout"]).resolve()
         attempts = tuple(Path(value).resolve() for value in options["attempts"])
         launcher = options["launcher"]
         plan_only = options["plan_only"]
+        prepare_only = options["prepare_only"]
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ControlError("control launcher options are invalid") from exc
     if (
-        set(options) != {"checkout", "attempts", "launcher", "plan_only"}
+        set(options) != {"checkout", "attempts", "launcher", "plan_only", "prepare_only"}
         or len(attempts) != 2
         or not isinstance(launcher, dict)
         or type(plan_only) is not bool
+        or type(prepare_only) is not bool
+        or (plan_only and prepare_only)
     ):
         raise ControlError("control launcher options are invalid")
-    return checkout, (attempts[0], attempts[1]), launcher, plan_only
+    return checkout, (attempts[0], attempts[1]), launcher, plan_only, prepare_only
 
 
 def main() -> int:
@@ -800,8 +912,8 @@ def main() -> int:
             args.source.resolve(), args.candidate.resolve(), args.attempt.resolve(), os.environ
         )
     try:
-        checkout, attempts, launcher, plan_only = _options_from_stdin()
-        return execute(checkout, attempts, launcher, plan_only=plan_only)
+        checkout, attempts, launcher, plan_only, prepare_only = _options_from_stdin()
+        return execute(checkout, attempts, launcher, plan_only=plan_only, prepare_only=prepare_only)
     except KeyboardInterrupt:
         return 130
     except BaseException as exc:

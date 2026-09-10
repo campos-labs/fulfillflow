@@ -140,11 +140,15 @@ Registro histórico do primeiro incremento; a situação atual está abaixo.
 
 ## Situação do incremento II
 
-Autorização posterior ao chat 11: preparar exclusivamente um piloto não oficial mixed/4,
-q=430, uma repetição no Windows `26200.9445`, declarando a divergência da baseline
-`26200.9278`. Expectativa fixada no candidato novo; comparador e demais gates preservados.
-Execução do piloto e tratamento da mudança de ambiente na comparação oficial continuam
-pendentes de autorização. Proposta de revalidação delimitada em `benchmarks/V11_REVIEW.md`.
+Incrementos I e II concluídos. O piloto posterior não oficial mixed/4, q=430, no Windows
+`26200.9445` foi válido: 108,04 req/s, p95 82 ms, sem erros e com conciliação. Evidências em
+`benchmarks/results/v11-pilot-win9445-attempt-01` e análise em
+`benchmarks/results/v11-pilot-win9445-analysis/metrics-summary.json`.
+A baseline `26200.9278` permanece histórica; não atribuir a diferença exclusivamente à
+arquitetura ou ao Windows. Campanha oficial e decisão sobre a comparação continuam pendentes.
+A ação atual é preparar sem carga dois controles exploratórios v1.0 mixed/4 no host atual,
+com fontes isolados e parâmetros congelados. Revisão de logs, auditoria dos erros e regras
+prévias de leitura dos resultados estão em `benchmarks/V11_REVIEW.md`.
 
 - Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
 - Implementados matriz adversa adicional, loader/restauração segregados, identidades v1.1,
@@ -155,8 +159,6 @@ pendentes de autorização. Proposta de revalidação delimitada em `benchmarks/
   em destino novo sob `benchmarks/results`, com checksums, sem fingir congelamento experimental.
 - Verificações executáveis: testes funcionais/integração, gates estáticos, CI, restauração
   repetida e smoke de telemetria ociosa. O relatório final do chat informa resultados e commits.
-- III não iniciado. Não houve carga, calibração, measurement, merge, tag ou release.
-  Chat 11: entrada operacional PowerShell preparada para preflight bloqueante e uma única
-  tentativa piloto mixed/4, q=430, não oficial. Transporte e falhas validados por simulações
-  sem carga; detalhes em `benchmarks/V11_REVIEW.md`. Próxima ação no chat 12: conferir o
-  pacote/host e autorizar separadamente a execução. Nenhuma tentativa foi iniciada no chat 11.
+- A matriz oficial do incremento III não foi executada; o piloto não a substitui.
+  A entrada PowerShell original foi preparada sem carga no chat 11; a execução posterior
+  e a revisão atual estão distinguidas no pacote. Não houve merge, tag ou release v1.1.

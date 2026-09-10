@@ -1,8 +1,12 @@
 # Incremento II — pacote de revisão
 
-Este pacote prepara a comparação sem executar Locust, calibração, warm-up ou measurement.
-Os resultados v1.0, seu dataset e manifests publicados permanecem imutáveis. Não há
-resultado de desempenho v1.1. A revisão e a preparação do host antecedem o incremento III.
+Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 mixed/4,
+q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
+conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
+`results/v11-pilot-win9445-analysis/metrics-summary.json`.
+A campanha oficial do incremento III permanece pendente. A revisão atual prepara apenas
+dois controles exploratórios v1.0, sem executar carga. A baseline publicada em 26200.9278,
+seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
 ## Compatibilidade do loadgen
 
@@ -45,12 +49,17 @@ aplique ao logger da aplicação ou ao Uvicorn. Logo, eles são configuração d
 observável no ambiente, mas não prova de JSON/WARNING efetivo para logs de aplicação.
 Não foram encontrados emissores estruturados da aplicação no caminho de benchmark. Os
 access logs INFO existentes no diagnóstico do piloto são Uvicorn, não logs da aplicação.
+Sem configurador, o root mantém WARNING e nenhum handler instalado; se houver emissão
+nessa condição, o fallback padrão envia mensagem simples ao stderr. Isso descreve a
+configuração inspecionada, sem afirmar que ocorreu emissão histórica da aplicação.
 Não há exportação de `docker logs` da baseline v1.0 que prove sua saída histórica; a
 equivalência é comprovada por imagens, Compose e entrypoints, não inferida da contagem de
 linhas antiga.
 
 A extração acrescenta requisições internas e, portanto, linhas de access log para esses
 saltos. Esse é custo inerente do fluxo observado, não evidência de uma política diferente.
+Sua contribuição isolada para throughput ou latência não foi medida. As inspeções estão
+em `results/v10-controls-win9445-preparation-01/{v10,v11}-image-logging.json`.
 Nenhum log será desativado, reformatado ou otimizado para novos controles.
 
 ## Preparação e restauração
@@ -125,7 +134,10 @@ Reutilizar esse argv em `--prepare-command-json` e a confirmação literal da ca
 usar sempre um destino novo. A entrada operacional abaixo monta esses argumentos, sem
 alterar os gates do runner. Preparar o pacote não autoriza executar essa entrada sem `-PlanOnly`.
 
-## Entrada operacional do piloto — chat 11, execução pendente
+## Entrada operacional do piloto — registro da preparação no chat 11
+
+O piloto no build atual já foi executado posteriormente, conforme o estado no início
+deste documento. Os comandos desta seção são históricos; não repetir destinos consumidos.
 
 `scripts/Invoke-V11Pilot.ps1` exige PowerShell 7 e a `.venv` sincronizada pelo lock. Resolve
 caminhos relativos ao diretório do chamador; transmite JSON UTF-8 via stdin ao módulo
@@ -221,30 +233,74 @@ Acrescentar `-PlanOnly` verifica o plano sem carga. O pacote anterior continua r
 e recusará o build atual. O launcher exige `pwsh` 7; registrar versão e caminho observados
 no pacote. Um preflight aprovado é uma observação, não dispensa os gates na execução futura.
 
-### Controles atuais v1.0 no Windows 26200.9445 — preparados, execução pendente
+### Controles atuais v1.0 no Windows 26200.9445 — preparação verificada, carga pendente
 
 Esta é a proposta atual autorizada: somente dois controles não oficiais v1.0,
-mixed/4, q=430, uma repetição cada, no build `26200.9445`. A entrada cria um checkout
+mixed/4, q=430, uma repetição cada, no build `26200.9445`. A preparação cria um checkout
 destacado no commit efetivamente medido `ae15e0a…7265`, usa os executáveis e imagens v1.0
 originais, cria destinos novos e interrompe a sequência na primeira recusa, falha ou
 interrupção. Ela não faz pull, build, tag, atualização do lock ou repetição automática.
 Cada falha exporta diagnósticos antes de preservar a infraestrutura isolada para revisão.
 
-As duas primeiras chamadas manuais do launcher não iniciaram Docker, preparação ou carga. A
-primeira criou `v10-controls-win9445-source`, mas `uv sync --all-groups` tentou baixar Ruff e
-parou por DNS. A segunda criou `v10-controls-win9445-source-02`, mas o modo offline não tinha
-o wheel congelado de `psycopg-binary==3.3.4`. Os dois checkouts e seus diagnósticos foram
-preservados; os destinos de tentativa não foram criados.
+#### Auditoria das falhas e da prontidão anteriormente declarada
 
-A entrada atual usa os destinos novos `v10-controls-win9445-source-03` e
-`v10-controls-win9445-bootstrap-03`. Antes de Docker, ela compara integralmente as entradas
-de terceiros do lock v1.0 com o lock ativo (a única diferença permitida é o pacote local
-`fulfillflow`) e confere as versões efetivamente instaladas. No Windows, `uvloop` é a única
-exclusão prevista, pois não possui wheel Windows. O Python local é usado somente para leitura;
-`PYTHONPATH` e o preflight comprovam que `fulfillflow` e `benchmarks` vêm do checkout v1.0
-isolado. Este ajuste de bootstrap não muda imagens, workload, dataset, recursos, q, tempos,
-telemetria ou a aplicação. Se qualquer paridade falhar, ele para antes de Docker ou carga e
-grava o diagnóstico sanitizado no destino de bootstrap.
+O código 2 é uma saída operacional genérica, não um resultado de benchmark. A revisão dos
+commits `b01ba0e`, `e9ceb7c` e `d81f762` e dos arquivos preservados identificou:
+
+| Destino preservado | Causa comprovada |
+| --- | --- |
+| `v10-controls-win9445-source` | Sync tentou buscar Ruff 0.16.5 no cache padrão incompleto e falhou por DNS. A hipótese anterior de fonte sujo não era a causa registrada. |
+| `v10-controls-win9445-source-02` / `bootstrap-02` | Sync offline não encontrou psycopg-binary 3.3.4. |
+| `v10-controls-win9445-source-03` / `bootstrap-03` | Comparação textual de `C:/…` retornado por Git com `C:\…` recusou um checkout independente válido. |
+| `v10-controls-win9445-source-04` / `bootstrap-04` | Na revisão sem carga, o cache do repositório também se mostrou parcial: faltava Jinja2 3.1.6. |
+| `v10-controls-win9445-source-05` / `bootstrap-05` | As 85 dependências congeladas foram instaladas, mas o manifest publicado não existe ainda no commit medido. |
+
+Todos esses bootstraps pararam antes de iniciar containers ou carga. Os destinos dos dois
+controles continuam ausentes. Os testes anteriores simulavam as partes que falharam, e
+`-PlanOnly` verificava apenas commit/destinos: nem esses testes nem a CI Linux demonstravam
+prontidão operacional no Windows. A instrução inicial com `-File .\scripts\…` também dependia
+do diretório corrente e falhava quando chamada de `C:\Users\natoc`; o comando abaixo é absoluto.
+
+Outros defeitos corrigidos antes da carga: a consulta `HostProbe.dynamic({})` antecedia a
+infraestrutura e recusaria containers vazios no probe congelado; agora a admissão dinâmica
+permanece exclusivamente no runner original, depois da preparação/estabilização e com IDs
+reais. O fallback para a `.venv` ativa da v1.1 foi retirado. O subprocesso compartilha a
+saída do PowerShell e informa causa/arquivo de diagnóstico antes da mensagem de código 2.
+Em Ctrl+C, o supervisor concede até 90 s à finalização do runner antes de considerar kill;
+falhas também param o loadgen do projeto cuja criação foi registrada nesta tentativa,
+preservando containers/volumes e impedindo o segundo controle. Isso não altera tempos das
+fases válidas. Encerramento forçado do host pode impedir finalização e requer inspeção.
+
+#### Pacote atualmente verificado sem carga
+
+`v10-controls-win9445-source-06` contém o código medido `ae15e0a…7265`, em HEAD destacado,
+e sua própria `.venv`, sincronizada com `uv sync --frozen --all-groups`. O cache local é
+explícito; apenas artefatos das versões congeladas faltantes podem ser baixados durante
+preparação. Nenhum lock, Python, dependência do ambiente ativo ou imagem foi atualizado.
+O Python ativo serve apenas ao wrapper; runner, probes, seed e aplicação usam fonte/imagens
+v1.0. Não há exclusão manual de dependências ou substituição por módulos v1.1 no runner.
+
+O manifest publicado é lido pelo blob imutável `fe0fd0fa46241cade00086091158cdba3a86f6fd`,
+presente no tag v1.0.0 (`6235f6c…a871`), pois sua publicação sucedeu o commit medido. Não se
+copia esse arquivo para alterar o checkout congelado. Somente os dois novos candidatos
+aparecem como arquivos não rastreados nesse checkout.
+
+`v10-controls-win9445-bootstrap-06/ready.json` registra a validação real dos dois candidatos
+pelo parser v1.0, replay/hash do dataset, release/metadados/imports da `.venv` isolada,
+identidades das imagens originais, Compose e identidade do host. Nenhum container foi
+iniciado e nenhuma fase medida foi executada. Os hashes do wrapper e dos candidatos são
+conferidos novamente antes da carga, junto de `uv sync --frozen --offline --check`.
+Mudanças posteriores no pacote bloqueiam execução. Essa preparação não antecipa a aprovação
+dos gates dinâmicos, dos bancos ou da conciliação que só podem ocorrer na tentativa real.
+
+Validação desta revisão: suíte unitária local (569 aprovados), regressões finais do controle
+(24 aprovadas, incluindo Git e PowerShell reais no Windows), Ruff, formatação, Mypy e os
+dez contratos de imports aprovados. O Mypy exclui somente `benchmarks/results`, onde os
+checkouts históricos preservados geravam colisão de módulos; o código mantido continua
+sob as mesmas regras estritas. Os 75 registros de checksum da baseline e do piloto e os
+nove registros do bootstrap atual foram conferidos sem divergências. A CI do commit final
+é registrada no relatório de entrega. Não houve alteração de DESIGN, aplicação ou política
+de observabilidade, nem execução local de carga, migração ou build de imagem.
 
 Os candidatos mudam exclusivamente: nome não oficial, seleção de 4 usuários, uma
 repetição, expectativa explícita do build Windows e o caminho relativo do mesmo artefato
@@ -268,19 +324,24 @@ decisão seguinte pode propor a menor amostra pareada que responda à dúvida re
 Se ambos forem válidos, estáveis e fora das margens, o host/versão passa a ser explicação
 plausível e será necessário decidir uma referência v1.0 atual maior antes de atribuir
 diferença à extração. Instabilidade entre eles ou qualquer invalidez pede diagnóstico; não
-dispara nova tentativa. Esses dois resultados não validam equivalência nem as seis células.
+dispara nova tentativa. Se apenas um cruzar uma margem ou os indicadores divergirem,
+a triagem é inconclusiva e exige revisão, sem execução adicional automática. Esses dois
+resultados não validam equivalência nem as seis células.
 
-Comando manual, somente após autorização de execução, a partir da raiz e usando o
-executável conferido neste terminal:
+Comando manual dos dois controles preparados, usando o executável conferido neste terminal
+(PowerShell 7.6.5). Funciona também a partir de `C:\Users\natoc`, em uma linha:
 
 ```powershell
-& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' `
-  -NoProfile -File .\scripts\Invoke-V10Controls.ps1
+& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-V10Controls.ps1'
 ```
 
-Acrescentar `-PlanOnly` só confirma commit e destinos; não materializa checkout, consulta
-o host, cria infraestrutura ou executa carga. A execução normal materializa o ambiente
-isolado pelo lock v1.0, depois inicia no máximo os dois controles autorizados.
+`-PlanOnly` só exibe o plano. `-PrepareOnly` materializa e verifica sem carga, mas já foi
+executado neste pacote: não repeti-lo. A entrada normal exige `ready.json` válido e não
+refaz preparação nem escolhe novos destinos automaticamente. Cada controle leva pelo
+menos 11 minutos nas fases temporizadas; reservar aproximadamente 30–40 minutos para os
+dois. Uma saída rápida não significa dois controles concluídos: conferir ambos os
+`result.json` com `complete=true`, artefatos válidos e checksums. Em qualquer falha, preservar
+os destinos e revisar o diagnóstico indicado; não executar novamente às cegas.
 
 ### Proposta histórica de 12 diagnósticos — não é a próxima ação
 

@@ -57,6 +57,8 @@ python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "scripts/seed_demo.py", "scripts/seed_benchmark.py", "scripts/prepare_demo_v11.py", "benchmarks"]
+# Preserved benchmark evidence may contain detached historical source checkouts.
+exclude = ['^benchmarks[/\\]results[/\\]']
 show_error_codes = true
 pretty = true
 
