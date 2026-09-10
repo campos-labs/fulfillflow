@@ -230,15 +230,21 @@ originais, cria destinos novos e interrompe a sequência na primeira recusa, fal
 interrupção. Ela não faz pull, build, tag, atualização do lock ou repetição automática.
 Cada falha exporta diagnósticos antes de preservar a infraestrutura isolada para revisão.
 
-A primeira chamada manual do launcher não iniciou Docker, preparação ou carga. Ela criou o
-checkout `v10-controls-win9445-source`, mas a sincronização `--all-groups` precisou baixar o
-Ruff e parou por falha de DNS; os dois destinos de tentativa não foram criados. Esse checkout
-e seus diagnósticos foram preservados. A entrada corrigida usa o checkout novo
-`v10-controls-win9445-source-02`, guarda o bootstrap separado em
-`v10-controls-win9445-bootstrap-02` e instala somente runtime + grupo `benchmark` com
-`uv sync --frozen --no-dev --group benchmark --offline`. Assim ela não consulta a rede nem
-altera o lock; se o cache local não contiver uma dependência fixada, ela falha antes de Docker
-ou carga e aponta o diagnóstico sanitizado no destino de bootstrap.
+As duas primeiras chamadas manuais do launcher não iniciaram Docker, preparação ou carga. A
+primeira criou `v10-controls-win9445-source`, mas `uv sync --all-groups` tentou baixar Ruff e
+parou por DNS. A segunda criou `v10-controls-win9445-source-02`, mas o modo offline não tinha
+o wheel congelado de `psycopg-binary==3.3.4`. Os dois checkouts e seus diagnósticos foram
+preservados; os destinos de tentativa não foram criados.
+
+A entrada atual usa os destinos novos `v10-controls-win9445-source-03` e
+`v10-controls-win9445-bootstrap-03`. Antes de Docker, ela compara integralmente as entradas
+de terceiros do lock v1.0 com o lock ativo (a única diferença permitida é o pacote local
+`fulfillflow`) e confere as versões efetivamente instaladas. No Windows, `uvloop` é a única
+exclusão prevista, pois não possui wheel Windows. O Python local é usado somente para leitura;
+`PYTHONPATH` e o preflight comprovam que `fulfillflow` e `benchmarks` vêm do checkout v1.0
+isolado. Este ajuste de bootstrap não muda imagens, workload, dataset, recursos, q, tempos,
+telemetria ou a aplicação. Se qualquer paridade falhar, ele para antes de Docker ou carga e
+grava o diagnóstico sanitizado no destino de bootstrap.
 
 Os candidatos mudam exclusivamente: nome não oficial, seleção de 4 usuários, uma
 repetição, expectativa explícita do build Windows e o caminho relativo do mesmo artefato

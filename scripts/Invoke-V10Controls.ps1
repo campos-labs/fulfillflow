@@ -13,7 +13,7 @@ try {
         throw 'The running PowerShell executable path is unavailable.'
     }
     $options = @{
-        checkout = Join-Path $repository 'benchmarks/results/v10-controls-win9445-source-02'
+        checkout = Join-Path $repository 'benchmarks/results/v10-controls-win9445-source-03'
         attempts = @(
             (Join-Path $repository 'benchmarks/results/v10-control-mixed-4-win9445-attempt-01'),
             (Join-Path $repository 'benchmarks/results/v10-control-mixed-4-win9445-attempt-02')

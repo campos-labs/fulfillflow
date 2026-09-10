@@ -82,7 +82,7 @@ def test_plan_only_rejects_an_existing_bootstrap_destination(tmp_path, monkeypat
         )
 
 
-def test_materialize_bootstraps_runtime_and_benchmark_offline_outside_source(tmp_path, monkeypatch):
+def test_materialize_records_verified_read_only_runtime_outside_source(tmp_path, monkeypatch):
     results = tmp_path / "results"
     results.mkdir()
     checkout = results / controls.WORKTREE_NAME
@@ -95,14 +95,27 @@ def test_materialize_bootstraps_runtime_and_benchmark_offline_outside_source(tmp
     monkeypatch.setattr(controls, "RESULTS", results)
     monkeypatch.setattr(controls, "_run", run)
     monkeypatch.setattr(controls, "_verify_source", lambda _source: None)
-    monkeypatch.setattr(controls.shutil, "which", lambda _name: str(tmp_path / "uv.exe"))
+    monkeypatch.setattr(
+        controls,
+        "_runtime_parity",
+        lambda _source: {"mode": "verified-read-only-root-venv"},
+    )
 
     assert controls._materialize_checkout(checkout, {"executable": "pwsh.exe"}) == checkout
 
     bootstrap = results / controls.BOOTSTRAP_NAME
     assert (bootstrap / "launcher.json").is_file()
     assert (bootstrap / "ready.json").is_file()
-    assert calls[1][0][1:] == ["sync", "--frozen", "--no-dev", "--group", "benchmark", "--offline"]
+    assert calls == [
+        (
+            ["git", "worktree", "add", "--detach", str(checkout), controls.V10_REVISION],
+            controls.ROOT,
+            bootstrap / "worktree-add.txt",
+        )
+    ]
+    assert json.loads((bootstrap / "runtime-parity.json").read_text()) == {
+        "mode": "verified-read-only-root-venv"
+    }
     assert all(evidence is None or evidence.parent == bootstrap for _, _, evidence in calls)
     assert all(
         evidence is None or not evidence.is_relative_to(checkout) for _, _, evidence in calls
@@ -115,20 +128,107 @@ def test_materialize_preserves_a_stage_specific_bootstrap_error(tmp_path, monkey
     checkout = results / controls.WORKTREE_NAME
 
     def run(argv, **_kwargs):
-        if argv[0] == "git":
-            return CompletedProcess(argv, 0, "", "")
-        raise controls.ControlError("required external command failed")
+        return CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(controls, "RESULTS", results)
     monkeypatch.setattr(controls, "_run", run)
-    monkeypatch.setattr(controls.shutil, "which", lambda _name: str(tmp_path / "uv.exe"))
+    monkeypatch.setattr(controls, "_verify_source", lambda _source: None)
+    monkeypatch.setattr(
+        controls,
+        "_runtime_parity",
+        lambda _source: (_ for _ in ()).throw(controls.ControlError("runtime differs")),
+    )
 
-    with pytest.raises(controls.ControlError, match="environment-sync"):
+    with pytest.raises(controls.ControlError, match="runtime-parity"):
         controls._materialize_checkout(checkout, {"executable": "pwsh.exe"})
 
     report = json.loads((results / controls.BOOTSTRAP_NAME / "error.json").read_text())
-    assert report["stage"] == "environment-sync"
-    assert report["error"]["errors"][0]["message"] == "required external command failed"
+    assert report["stage"] == "runtime-parity"
+    assert report["error"]["errors"][0]["message"] == "runtime differs"
+
+
+def test_runtime_parity_requires_identical_third_party_lock_and_frozen_source(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "root"
+    source = tmp_path / "source"
+    root.mkdir()
+    source.mkdir()
+    (root / "uv.lock").write_text("", encoding="utf-8")
+    (source / "uv.lock").write_text("", encoding="utf-8")
+    frozen_fulfillflow = source / "src" / "fulfillflow" / "__init__.py"
+    frozen_benchmarks = source / "benchmarks" / "__init__.py"
+    frozen_fulfillflow.parent.mkdir(parents=True)
+    frozen_benchmarks.parent.mkdir(parents=True)
+    frozen_fulfillflow.write_text("", encoding="utf-8")
+    frozen_benchmarks.write_text("", encoding="utf-8")
+    frozen = {
+        "fulfillflow": {"name": "fulfillflow", "version": "1.0.0"},
+        "psycopg": {"name": "psycopg", "version": "3.3.4"},
+        "uvloop": {"name": "uvloop", "version": "0.22.1"},
+    }
+    active = {
+        "fulfillflow": {"name": "fulfillflow", "version": "1.1.0"},
+        "psycopg": {"name": "psycopg", "version": "3.3.4"},
+        "uvloop": {"name": "uvloop", "version": "0.22.1"},
+    }
+
+    monkeypatch.setattr(controls, "ROOT", root)
+    monkeypatch.setattr(
+        controls,
+        "_lock_packages",
+        lambda path: frozen.copy() if path == source / "uv.lock" else active.copy(),
+    )
+    monkeypatch.setattr(
+        controls,
+        "_run_source_python",
+        lambda *_args, **_kwargs: CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "platform": "win32",
+                    "python": "C:/runtime/python.exe",
+                    "packages": {"psycopg": "3.3.4"},
+                    "code": {
+                        "fulfillflow": str(frozen_fulfillflow),
+                        "benchmarks": str(frozen_benchmarks),
+                    },
+                }
+            ),
+            "",
+        ),
+    )
+
+    report = controls._runtime_parity(source)
+
+    assert report["mode"] == "verified-read-only-root-venv"
+    assert report["windows_lock_exclusions"] == ["uvloop"]
+
+
+def test_runtime_parity_refuses_dependency_lock_drift(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    source = tmp_path / "source"
+    root.mkdir()
+    source.mkdir()
+    frozen = {
+        "fulfillflow": {"name": "fulfillflow", "version": "1.0.0"},
+        "psycopg": {"name": "psycopg", "version": "3.3.4"},
+    }
+    drifted = {
+        "fulfillflow": {"name": "fulfillflow", "version": "1.1.0"},
+        "psycopg": {"name": "psycopg", "version": "3.3.5"},
+    }
+
+    monkeypatch.setattr(controls, "ROOT", root)
+    monkeypatch.setattr(
+        controls,
+        "_lock_packages",
+        lambda path: frozen.copy() if path == source / "uv.lock" else drifted.copy(),
+    )
+
+    with pytest.raises(controls.ControlError, match="active dependency lock differs"):
+        controls._runtime_parity(source)
 
 
 def test_execution_stops_after_the_first_failed_control(tmp_path, monkeypatch):

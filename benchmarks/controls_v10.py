@@ -6,9 +6,10 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
+import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -21,15 +22,16 @@ V10_REVISION = "ae15e0a2da465f4aec3d9c699655441ad1947265"
 PROJECT = "fulfillflow-benchmark"
 DATABASE = "fulfillflow_benchmark"
 WINDOWS_BUILD = "26200.9445"
-# The first bootstrap stopped before Docker or either control because its frozen
-# dependency setup needed a network download.  Keep that checkout as evidence and
-# use a separately named, still-new checkout for the explicitly retried launcher.
-WORKTREE_NAME = "v10-controls-win9445-source-02"
-BOOTSTRAP_NAME = "v10-controls-win9445-bootstrap-02"
+# The two earlier bootstraps stopped before Docker or either control because the
+# required locked wheels were absent from the local cache. Keep their evidence and
+# use a new, independently traceable source and bootstrap destination.
+WORKTREE_NAME = "v10-controls-win9445-source-03"
+BOOTSTRAP_NAME = "v10-controls-win9445-bootstrap-03"
 ATTEMPT_NAMES = (
     "v10-control-mixed-4-win9445-attempt-01",
     "v10-control-mixed-4-win9445-attempt-02",
 )
+WINDOWS_LOCK_EXCLUSIONS = frozenset({"uvloop"})
 
 
 class ControlError(RuntimeError):
@@ -111,10 +113,11 @@ def _source_environment(source: Path, baseline_environment: Mapping[str, str]) -
     return environment
 
 
-def _source_python(source: Path) -> Path:
-    executable = source / ".venv" / "Scripts" / "python.exe"
+def _source_python(_source: Path) -> Path:
+    """Return the verified read-only environment; source code is selected by PYTHONPATH."""
+    executable = ROOT / ".venv" / "Scripts" / "python.exe"
     if not executable.is_file():
-        raise ControlError("isolated v1.0 virtual environment was not created")
+        raise ControlError("the verified local benchmark environment is unavailable")
     return executable
 
 
@@ -152,6 +155,119 @@ def _baseline_document(source: Path) -> dict[str, Any]:
     ):
         raise ControlError("frozen v1.0 mixed manifest differs from the published contract")
     return document
+
+
+def _canonical_package_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _lock_packages(path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        decoded = tomllib.loads(path.read_text(encoding="utf-8"))
+        packages = decoded["package"]
+        if not isinstance(packages, list):
+            raise TypeError
+        result: dict[str, dict[str, Any]] = {}
+        for package in packages:
+            if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+                raise TypeError
+            result[package["name"]] = package
+    except (KeyError, OSError, TypeError, tomllib.TOMLDecodeError) as exc:
+        raise ControlError("dependency lock is unreadable") from exc
+    return result
+
+
+def _runtime_parity(source: Path) -> dict[str, object]:
+    """Prove that the read-only local environment matches v1.0's third-party lock."""
+    frozen_lock = source / "uv.lock"
+    active_lock = ROOT / "uv.lock"
+    frozen_packages = _lock_packages(frozen_lock)
+    active_packages = _lock_packages(active_lock)
+    frozen_packages.pop("fulfillflow", None)
+    active_packages.pop("fulfillflow", None)
+    if not frozen_packages or frozen_packages != active_packages:
+        raise ControlError("active dependency lock differs from the frozen v1.0 third-party lock")
+
+    completed = _run_source_python(
+        source,
+        os.environ,
+        """
+import importlib.metadata
+import json
+import re
+import sys
+from pathlib import Path
+import benchmarks
+import fulfillflow
+
+canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+packages = {
+    canonical(distribution.metadata["Name"]): distribution.version
+    for distribution in importlib.metadata.distributions()
+    if distribution.metadata["Name"]
+}
+print(json.dumps({
+    "platform": sys.platform,
+    "python": sys.executable,
+    "packages": packages,
+    "code": {
+        "fulfillflow": str(Path(fulfillflow.__file__).resolve()),
+        "benchmarks": str(Path(benchmarks.__file__).resolve()),
+    },
+}))
+""",
+    )
+    try:
+        observed = json.loads(completed.stdout)
+        platform = observed["platform"]
+        packages = observed["packages"]
+        code = observed["code"]
+        if (
+            not isinstance(platform, str)
+            or not isinstance(packages, dict)
+            or not isinstance(code, dict)
+            or not all(isinstance(value, str) for value in packages.values())
+        ):
+            raise TypeError
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ControlError("local benchmark environment inventory is invalid") from exc
+    if platform != "win32":
+        raise ControlError("local benchmark environment is not Windows")
+
+    expected_versions = {
+        _canonical_package_name(name): str(package["version"])
+        for name, package in frozen_packages.items()
+    }
+    observed_versions = {
+        _canonical_package_name(name): version for name, version in packages.items()
+    }
+    missing = set(expected_versions) - set(observed_versions)
+    mismatches = {
+        name: {"expected": expected_versions[name], "observed": observed_versions[name]}
+        for name in expected_versions.keys() & observed_versions.keys()
+        if expected_versions[name] != observed_versions[name]
+    }
+    if missing != WINDOWS_LOCK_EXCLUSIONS or mismatches:
+        raise ControlError("local benchmark environment differs from the frozen v1.0 lock")
+
+    try:
+        code_paths = {name: Path(value).resolve() for name, value in code.items()}
+    except TypeError as exc:
+        raise ControlError("local benchmark environment code inventory is invalid") from exc
+    if set(code_paths) != {"fulfillflow", "benchmarks"} or any(
+        not path.is_relative_to(source) for path in code_paths.values()
+    ):
+        raise ControlError("the local environment did not resolve the frozen v1.0 source")
+
+    return {
+        "mode": "verified-read-only-root-venv",
+        "runtime_python": observed["python"],
+        "frozen_lock_sha256": _sha256(frozen_lock),
+        "active_lock_sha256": _sha256(active_lock),
+        "matched_packages": len(expected_versions) - len(missing),
+        "windows_lock_exclusions": sorted(missing),
+        "code": {name: str(path) for name, path in code_paths.items()},
+    }
 
 
 def candidate_document(baseline: Mapping[str, Any], attempt_number: int) -> dict[str, Any]:
@@ -301,25 +417,17 @@ def _materialize_checkout(checkout: Path, launcher: Mapping[str, Any]) -> Path:
             timeout=60,
             evidence=bootstrap / "worktree-add.txt",
         )
-        uv = shutil.which("uv")
-        if uv is None:
-            raise ControlError("uv is unavailable for the isolated frozen environment")
-        stage = "environment-sync"
-        _run(
-            [uv, "sync", "--frozen", "--no-dev", "--group", "benchmark", "--offline"],
-            cwd=checkout,
-            timeout=180,
-            evidence=bootstrap / "sync.txt",
-        )
         stage = "source-verification"
         _verify_source(checkout)
+        stage = "runtime-parity"
+        parity = _runtime_parity(checkout)
+        write_report(bootstrap / "runtime-parity.json", parity)
         write_report(
             bootstrap / "ready.json",
             {
                 "revision": V10_REVISION,
                 "launcher": launcher,
-                "uv": str(Path(uv).resolve()),
-                "sync": ["--frozen", "--no-dev", "--group", "benchmark", "--offline"],
+                "runtime_parity": "runtime-parity.json",
             },
         )
         return checkout
