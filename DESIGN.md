@@ -1830,12 +1830,23 @@ recria apenas um projeto isolado cuja propriedade foi registrada quando estava a
 O pacote e os comandos estão em `benchmarks/V11_REVIEW.md`; os manifests candidatos
 são materializados com HEAD/imagens/schemas reais e conservam as expectativas do host.
 
-Exceção autorizada exclusivamente para o piloto não oficial: Windows build
+Exceção inicialmente autorizada para o piloto não oficial: Windows build
 `26200.9445`, divergente da baseline `26200.9278`, fixado na geração de um candidato
 novo mixed/4, q=430, uma repetição. O comparador permanece exato; não há atualização
 automática de expectativas. Demais parâmetros são preservados. Essa autorização
 não estende a mudança à campanha oficial, cuja comparabilidade de ambiente exige
 decisão própria conforme a proposta em `benchmarks/V11_REVIEW.md`.
+
+Extensão delimitada autorizada após o piloto: dois controles exploratórios v1.0
+mixed/4 no mesmo build (já executados manualmente) e, após sua análise, preparação
+de quatro novos controles não oficiais na ordem v1.0, v1.1, v1.1, v1.0 (pares AB/BA).
+Estes últimos conservam código e imagens medidos de cada versão, workload e parâmetros
+acima; só usam novos nomes, destinos e projetos isolados, com Windows `26200.9445`
+explícito. A preparação pode verificar os bancos sem carga; as quatro execuções são
+manuais e não integram a matriz oficial. Os contrastes e sua leitura exploratória
+ficam fixados antes dos resultados no pacote de revisão. Concordância entre dois
+pares não prova equivalência estatística nem causalidade exclusiva. A baseline
+publicada e a decisão de ambiente/referência da campanha oficial permanecem separadas.
 
 A instrumentação deve observar Core/Tracking separados e agregados, reconciliar
 Locust/HTTP/efeitos nos dois bancos e preservar completude e checksums. Mantém-se a

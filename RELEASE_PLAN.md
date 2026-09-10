@@ -146,9 +146,16 @@ Incrementos I e II concluídos. O piloto posterior não oficial mixed/4, q=430, 
 `benchmarks/results/v11-pilot-win9445-analysis/metrics-summary.json`.
 A baseline `26200.9278` permanece histórica; não atribuir a diferença exclusivamente à
 arquitetura ou ao Windows. Campanha oficial e decisão sobre a comparação continuam pendentes.
-A ação atual é preparar sem carga dois controles exploratórios v1.0 mixed/4 no host atual,
-com fontes isolados e parâmetros congelados. Revisão de logs, auditoria dos erros e regras
-prévias de leitura dos resultados estão em `benchmarks/V11_REVIEW.md`.
+Os dois controles exploratórios v1.0 mixed/4 no host atual foram executados manualmente e
+verificados: 190,0128/189,8441 req/s, p95 35/35 ms, zero falhas e efeitos conciliados.
+Ambos ficaram dentro das margens práticas fixadas antes da execução; isso não prova
+equivalência nem valida seis células. Análise derivada em
+`benchmarks/results/v10-controls-win9445-analysis-01/metrics-summary.json`.
+`benchmarks/V11_REVIEW.md` registra a comparação descritiva e a preparação autorizada de
+dois pares AB/BA (quatro execuções novas), com fontes e imagens congelados por versão,
+destinos novos e regras de leitura prévias. Sua execução manual permanece pendente;
+a preparação verifica os bancos isolados sem carga. DESIGN §30.5 delimita a extensão.
+Nenhuma nova carga foi executada na análise e nenhum resultado histórico foi alterado.
 
 - Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
 - Implementados matriz adversa adicional, loader/restauração segregados, identidades v1.1,

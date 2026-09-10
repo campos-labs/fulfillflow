@@ -4,8 +4,9 @@ Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 m
 q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
 conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
 `results/v11-pilot-win9445-analysis/metrics-summary.json`.
-A campanha oficial do incremento III permanece pendente. A revisão atual prepara apenas
-dois controles exploratórios v1.0, sem executar carga. A baseline publicada em 26200.9278,
+A campanha oficial do incremento III permanece pendente. A revisão atual confere os dois
+controles exploratórios v1.0 executados pelo usuário e prepara os dois pares AB/BA
+posteriormente autorizados, sem iniciar nova carga. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
 ## Compatibilidade do loadgen
@@ -233,9 +234,147 @@ Acrescentar `-PlanOnly` verifica o plano sem carga. O pacote anterior continua r
 e recusará o build atual. O launcher exige `pwsh` 7; registrar versão e caminho observados
 no pacote. Um preflight aprovado é uma observação, não dispensa os gates na execução futura.
 
-### Controles atuais v1.0 no Windows 26200.9445 — preparação verificada, carga pendente
+### Controles v1.0 no Windows 26200.9445 — executados e verificados
 
-Esta é a proposta atual autorizada: somente dois controles não oficiais v1.0,
+Os dois controles foram executados manualmente e concluídos com validade confirmada.
+A análise derivada está em `results/v10-controls-win9445-analysis-01/metrics-summary.json`,
+com script de conferência e checksums próprios. Os resultados originais não foram editados.
+
+| Referência mixed/4 | req/s Locust | p95 | Falhas | Requisições medidas |
+| --- | ---: | ---: | ---: | ---: |
+| Mediana histórica v1.0, Windows 26200.9278, n=5 | 185,9261 | 36 ms | 0 | — |
+| Controle v1.0 atual 01 | 190,0128 | 35 ms | 0 | 57.003 |
+| Controle v1.0 atual 02 | 189,8441 | 35 ms | 0 | 56.954 |
+| Piloto v1.1 anterior, Windows 26200.9445, n=1 | 108,0411 | 82 ms | 0 | 32.412 |
+
+Verificação dos controles: `complete=true`, saída 0, metadados válidos/não oficiais,
+fonte e lock v1.0, candidatos iguais à derivação autorizada, imagens/configurações,
+identidade e condições dinâmicas do host, duração das fases, ausência de marcadores de
+incompletude e CSVs de falhas/exceções vazios. Foram autenticados 47 registros de checksum
+por controle e novamente 68 do piloto. Os validadores congelados conferiram os arquivos
+obrigatórios e ciclos completos de recursos (300 ciclos medidos por controle).
+Warm-up: 1.720 eventos aplicados em cada controle. Measurement: 17.132 e 17.092 eventos
+aplicados, respectivamente, concordando entre HTTP e os deltas de inbox, eventos e
+notificações. As demais contagens permaneceram estáveis; cleanup foi concluído.
+A revisão posterior usa evidências exportadas, sem recriar bancos para reconsultá-los.
+
+Aplicação das regras registradas no commit `4a777ef`, antes dessas execuções:
+throughput +2,1980% e +2,1073% em relação à mediana histórica, p95 −1 ms em ambos.
+Diferença entre controles: 0,08883% da média e 0 ms no p95. Portanto, ambos são válidos,
+estáveis e estão dentro de todas as margens práticas previamente declaradas.
+Isso torna plausível a referência v1.0 no host atual; não demonstra equivalência estatística.
+
+A média dos controles é 189,9285 req/s. O piloto v1.1 fica 43,1149% abaixo dessa referência,
+com p95 47 ms maior. As maiores diferenças descritivas por rota estão em timeline
+(p95 17 → 37 ms) e webhook (40 → 92 ms); detalhe de Shipment fica em 14–15 → 16 ms e
+listagem em 17–18 → 20 ms. A CPU média da aplicação v1.0 ficou em 98,24%/98,56% de um núcleo;
+no piloto, Core/Tracking registraram 85,41%/60,97%, respectivamente. Essas observações são
+compatíveis com custo adicional no fluxo distribuído, mas não isolam HTTP, SQL, recibos,
+partição de recursos ou logs. O piloto ocorreu em outro horário e não forma pares temporais
+com estes controles. Os dados não sustentam atribuir toda a diferença ao Windows ou à
+arquitetura, nem alterar a aplicação ou observabilidade para aproximar métricas.
+
+#### Próxima etapa experimental — preparação dos dois pares autorizada
+
+Antes de ampliar para a matriz oficial, foi autorizada a preparação para verificar repetibilidade da diferença
+com **dois blocos pareados exploratórios**, quatro novas execuções não oficiais mixed/4:
+
+| Ordem fixa | Bloco | Versão |
+| ---: | ---: | --- |
+| 1 | 1 | v1.0 (A1) |
+| 2 | 1 | v1.1 (B1) |
+| 3 | 2 | v1.1 (B2) |
+| 4 | 2 | v1.0 (A2) |
+
+Dois pares em ordens opostas são a menor proposta que repete o contraste sem deixar uma
+versão sempre em primeiro lugar. Isso reduz um confundimento de ordem; não é randomização
+nem dimensionamento estatístico. Os dois controles atuais e o piloto não serão renomeados,
+reclassificados ou usados como membros desses novos pares.
+
+Preservar imagens originais, código medido v1.0 `ae15e0a…7265` e imagem/código do piloto
+v1.1 `948cefd…faf2`, em fontes isolados, com Windows 26200.9445 explícito em candidatos novos.
+Dataset, workload, q=430, spawn rate, divisão/total de recursos, workers/pools e telemetria
+ficam congelados. Restaurar e verificar cada estado inicial; repetir 300 s de estabilização,
+60 s de warm-up e 300 s medidos, com os mesmos deadlines, gates e conciliação por versão.
+Entrada bloqueante, destinos novos para cada uma das quatro execuções, exportação de
+diagnósticos e parada na primeira falha, sem repetir automaticamente. Piso de 44 minutos
+de fases; reservar aproximadamente uma hora a uma hora e vinte para a execução completa.
+
+Leitura fixada antes da execução: calcular, em cada bloco, `100 × (B/A − 1)` para req/s e
+`p95(B) − p95(A)` em ms; mostrar os quatro resultados individuais e os dois contrastes.
+Todos os gates devem passar. Se ambos os contrastes mantiverem menor throughput e maior
+p95 na v1.1, haverá repetição direcional do custo nessa configuração e poderá ser proposta
+a campanha oficial com uma decisão própria de referência no host atual. Direções divergentes
+ou qualquer invalidez tornam a etapa inconclusiva e pedem diagnóstico. Não haverá p-valor,
+declaração de equivalência, nova margem ajustada aos resultados ou otimização para favorecer
+uma versão. Mesmo dois contrastes concordantes não estabelecem causalidade exclusiva.
+
+Esta proposta amplia o desenho além dos dois controles originalmente autorizados. Após
+apresentação específica, o usuário autorizou sua preparação cuidadosa, sem execução pelo
+agente. A mudança do Windows para toda a matriz oficial e a publicação da release continuam
+decisões separadas; a proposta histórica de 12 diagnósticos segue inativa. Os quatro novos
+controles também não substituem as seis células oficiais nem mudam as margens dos dois
+controles anteriores.
+
+A entrada `scripts/Invoke-PairedControls.ps1` separa `-PlanOnly` (apenas mostra o plano),
+`-PrepareOnly` (prepara e verifica sem carga) e execução manual sem switches. A preparação
+usa checkouts destacados `results/paired-win9445-v10-source-01` e
+`results/paired-win9445-v11-source-01`, nos commits medidos de cada versão. Cada fonte tem
+sua própria `.venv` com lock congelado; runner, parser, seeds e probes são os originais.
+Não há alteração ou desvio dos validadores. Os candidatos ficam fora desses checkouts,
+em `results/paired-win9445-review-01/candidates`, mantendo ambos os fontes limpos.
+
+| Etapa | Novo destino sob `benchmarks/results` |
+| --- | --- |
+| A1 | `paired-mixed-4-win9445-01-a1-v10` |
+| B1 | `paired-mixed-4-win9445-02-b1-v11` |
+| B2 | `paired-mixed-4-win9445-03-b2-v11` |
+| A2 | `paired-mixed-4-win9445-04-a2-v10` |
+
+O pacote registra hashes dos scripts/candidatos, identidades de imagens/host/PowerShell,
+validação dos quatro manifests, auditoria da imagem derivada e verificação do estado inicial
+de cada versão sem iniciar fases de carga. O projeto v1.0 continua `fulfillflow-benchmark`;
+o v1.1 novo é `fulfillflow-ii-paired-win9445`. A entrada recusa qualquer recurso preexistente
+desses projetos antes de registrar propriedade. Usa imagens locais verificadas, sem pull
+ou build. Após a verificação ociosa, exporta diagnósticos e remove somente os recursos
+isolados que criou. Na execução real, repete preparação/restauração e os gates congelados;
+a verificação ociosa não antecipa a aprovação da admissão dinâmica ou da conciliação final.
+
+Qualquer destino de execução ou diário `results/paired-win9445-execution-01` existente
+bloqueia repetição. Checksums do pacote, alterações nos scripts/candidatos, checkout sujo
+ou ambiente isolado divergente também bloqueiam carga. Na primeira falha, interrompe a
+sequência e para o loadgen; preserva o erro primário, diagnósticos e recursos para revisão.
+Após sucesso exporta o runtime antes da limpeza. Ctrl+C concede o prazo de finalização
+ao runner congelado; encerramento forçado do host ainda exige inspeção manual.
+
+Comando manual, somente depois da prontidão confirmada em `paired-win9445-review-01/ready.json`:
+
+```powershell
+& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-PairedControls.ps1'
+```
+
+O caminho é absoluto e funciona a partir de `C:\Users\natoc`. Executar uma vez, manter o
+terminal aberto e não iniciar outra carga simultânea. O comando antigo dos dois controles
+v1.0 já concluídos, preservado no registro abaixo, não deve ser repetido.
+
+Prontidão operacional verificada em 10/09/2026: `-PrepareOnly` terminou com código 0,
+chamado pelo caminho absoluto a partir de `C:\Users\natoc`, usando PowerShell 7.6.5.
+Os quatro parsers aceitaram os candidatos; as imagens originais e o host conferiram.
+O seed/restauração e os probes originais verificaram PostgreSQL v1.0 e ambos os bancos
+v1.1 com o hash lógico `5897d744…a63bf`. Os dois projetos foram removidos após exportar
+diagnósticos. Os 42 registros de checksum do novo pacote e o bloqueio de prontidão foram
+conferidos; os quatro destinos de execução e o diário permanecem ausentes.
+
+Validação do código: suíte unitária completa local aprovada (600 testes nessa passagem),
+seguida da suíte focal final com 32 testes, incluindo os dois novos casos de preparação
+e a execução real do launcher PowerShell com processo filho simulado, sem carga.
+Ruff, formatação, Mypy e os dez contratos de imports passaram. A CI do commit entregue
+registra a validação integrada. Nenhum código de aplicação, imagem, lock, política de logs
+ou evidência histórica foi alterado; DESIGN §30.5 registra somente a extensão autorizada.
+
+#### Registro da preparação e das regras anteriores à execução
+
+A autorização original delimitou somente dois controles não oficiais v1.0,
 mixed/4, q=430, uma repetição cada, no build `26200.9445`. A preparação cria um checkout
 destacado no commit efetivamente medido `ae15e0a…7265`, usa os executáveis e imagens v1.0
 originais, cria destinos novos e interrompe a sequência na primeira recusa, falha ou
@@ -255,8 +394,8 @@ commits `b01ba0e`, `e9ceb7c` e `d81f762` e dos arquivos preservados identificou:
 | `v10-controls-win9445-source-04` / `bootstrap-04` | Na revisão sem carga, o cache do repositório também se mostrou parcial: faltava Jinja2 3.1.6. |
 | `v10-controls-win9445-source-05` / `bootstrap-05` | As 85 dependências congeladas foram instaladas, mas o manifest publicado não existe ainda no commit medido. |
 
-Todos esses bootstraps pararam antes de iniciar containers ou carga. Os destinos dos dois
-controles continuam ausentes. Os testes anteriores simulavam as partes que falharam, e
+Todos esses bootstraps pararam antes de iniciar containers ou carga. Naquele momento os
+destinos dos dois controles estavam ausentes. Os testes anteriores simulavam as partes que falharam, e
 `-PlanOnly` verificava apenas commit/destinos: nem esses testes nem a CI Linux demonstravam
 prontidão operacional no Windows. A instrução inicial com `-File .\scripts\…` também dependia
 do diretório corrente e falhava quando chamada de `C:\Users\natoc`; o comando abaixo é absoluto.
@@ -271,7 +410,7 @@ falhas também param o loadgen do projeto cuja criação foi registrada nesta te
 preservando containers/volumes e impedindo o segundo controle. Isso não altera tempos das
 fases válidas. Encerramento forçado do host pode impedir finalização e requer inspeção.
 
-#### Pacote atualmente verificado sem carga
+#### Pacote verificado sem carga antes da execução manual
 
 `v10-controls-win9445-source-06` contém o código medido `ae15e0a…7265`, em HEAD destacado,
 e sua própria `.venv`, sincronizada com `uv sync --frozen --all-groups`. O cache local é
@@ -287,19 +426,19 @@ aparecem como arquivos não rastreados nesse checkout.
 
 `v10-controls-win9445-bootstrap-06/ready.json` registra a validação real dos dois candidatos
 pelo parser v1.0, replay/hash do dataset, release/metadados/imports da `.venv` isolada,
-identidades das imagens originais, Compose e identidade do host. Nenhum container foi
-iniciado e nenhuma fase medida foi executada. Os hashes do wrapper e dos candidatos são
+identidades das imagens originais, Compose e identidade do host. Naquela preparação nenhum
+container foi iniciado e nenhuma fase medida foi executada. Os hashes do wrapper e dos candidatos são
 conferidos novamente antes da carga, junto de `uv sync --frozen --offline --check`.
 Mudanças posteriores no pacote bloqueiam execução. Essa preparação não antecipa a aprovação
 dos gates dinâmicos, dos bancos ou da conciliação que só podem ocorrer na tentativa real.
 
-Validação desta revisão: suíte unitária local (569 aprovados), regressões finais do controle
+Validação da revisão anterior dos dois controles v1.0: suíte unitária local (569 aprovados), regressões finais do controle
 (24 aprovadas, incluindo Git e PowerShell reais no Windows), Ruff, formatação, Mypy e os
 dez contratos de imports aprovados. O Mypy exclui somente `benchmarks/results`, onde os
 checkouts históricos preservados geravam colisão de módulos; o código mantido continua
 sob as mesmas regras estritas. Os 75 registros de checksum da baseline e do piloto e os
 nove registros do bootstrap atual foram conferidos sem divergências. A CI do commit final
-é registrada no relatório de entrega. Não houve alteração de DESIGN, aplicação ou política
+é registrada no relatório daquela entrega. Não houve alteração de DESIGN, aplicação ou política
 de observabilidade, nem execução local de carga, migração ou build de imagem.
 
 Os candidatos mudam exclusivamente: nome não oficial, seleção de 4 usuários, uma
@@ -328,7 +467,7 @@ dispara nova tentativa. Se apenas um cruzar uma margem ou os indicadores divergi
 a triagem é inconclusiva e exige revisão, sem execução adicional automática. Esses dois
 resultados não validam equivalência nem as seis células.
 
-Comando manual dos dois controles preparados, usando o executável conferido neste terminal
+Comando histórico dos dois controles já concluídos; **não executar novamente**. Usa o executável conferido neste terminal
 (PowerShell 7.6.5). Funciona também a partir de `C:\Users\natoc`, em uma linha:
 
 ```powershell
@@ -358,5 +497,6 @@ previsão de desempenho. Execuções inválidas não contam como oficiais e exig
 
 Os testes do incremento I continuam válidos. II acrescenta falhas antes/depois dos commits,
 perda de rejeição, indisponibilidade dos peers, concorrência com rollback/resposta perdida,
-deadlines e preparação parcial. A validação funcional não substitui ensaio de carga. Não houve
-calibração, measurement, merge, tag ou release neste incremento.
+deadlines e preparação parcial. A validação funcional não substitui ensaio de carga. A
+preparação do incremento II não executou calibração ou measurement; o piloto e os controles
+posteriores estão distinguidos acima. Não houve merge, tag ou release v1.1.
