@@ -425,7 +425,7 @@ def _run_phase(
     primary: BaseException | None = None
     secondary: list[dict[str, object]] = []
     supervision_started = time.monotonic()
-    returncode = -1
+    returncode: int | None = None
     try:
         _wait_for_container_file(
             container_id,
@@ -478,7 +478,12 @@ def _run_phase(
                     )
     if primary is not None:
         report = collection_failure(primary, "snapshot", supervision_started)
-        report.update(phase=phase, complete=False, secondary_errors=secondary)
+        report.update(
+            phase=phase,
+            complete=False,
+            process_returncode=returncode,
+            secondary_errors=secondary,
+        )
         if sampler is not None:
             report["collector"] = sampler.failure
         try:

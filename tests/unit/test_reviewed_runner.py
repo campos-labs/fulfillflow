@@ -102,3 +102,37 @@ def test_phase_retains_process_error_and_collector_export_secondary_failures(tmp
     assert report["collector"]["stage"] == "connections"
     assert report["export_error"]["errors"][0]["type"] == "OSError"
     assert "private" not in json.dumps(report)
+
+
+def test_phase_retains_the_original_nonzero_child_exit_code(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    bundle = load_campaign(Path("benchmarks/fixtures/smoke-campaign.json"))
+    monkeypatch.setattr(
+        runner,
+        "ManagedProcess",
+        lambda *_: SimpleNamespace(wait=lambda *_a, **_k: 7, ensure_stopped=lambda: None),
+    )
+    monkeypatch.setattr(
+        runner,
+        "ResourceSampler",
+        lambda *_a, **_k: SimpleNamespace(start=lambda: None, stop=lambda: None, failure=None),
+    )
+    monkeypatch.setattr(runner, "_wait_for_container_file", lambda *_: None)
+    monkeypatch.setattr(runner, "_terminate_container_phase", lambda *_: None)
+    monkeypatch.setattr(runner, "run_capture", lambda *_: None)
+    observed = ObservedEnvironment({}, {"loadgen": "id"}, "user", "database")
+    with pytest.raises(runner.CampaignExecutionError, match="invalidated"):
+        runner._run_phase(
+            bundle,
+            bundle.manifest.loads[0],
+            "measurement",
+            "http://unused",
+            observed,
+            object(),
+            "/runtime",
+            tmp_path,
+        )
+    report = json.loads((tmp_path / "phase-error.json").read_text())
+    assert report["process_returncode"] == 7
+    assert report["complete"] is False
