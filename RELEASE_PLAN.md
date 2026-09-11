@@ -1,8 +1,10 @@
 # FulfillFlow — Release Plan
 
 Incrementos I e II concluídos; comparação oficial e release v1.1 pendentes.
-Piloto e dois controles válidos preservados. O primeiro ABBA foi interrompido;
-a ferramenta de coleta e a preparação da referência contemporânea estão em revisão.
+Piloto, dois controles e novo ABBA válido preservados. A matriz contemporânea
+concluiu dez repetições mixed/4 (cinco por versão), mas parou no primeiro warm-up
+v1.1 mixed/12, antes da medição. Não repetir o launcher encerrado. A próxima etapa
+obrigatória é uma única verificação manual limitada ao warm-up, preparada sem carga.
 
 ## 1. Referência e objetivo
 
@@ -192,3 +194,17 @@ permanece possível efeito de ordem dentro da célula. A referência publicada �
 Os pacotes são preparados sem carga; execução será manual após prontidão comprovada.
 Qualquer falha interrompe a sequência, preservando válidas e inválidas sem repetição
 automática. Preparação, resultados válidos e encerramento de release são estados distintos.
+
+## Interrupção da matriz e verificação limitada ao warm-up
+
+O novo ABBA foi concluído e revisado; a matriz seguinte tem dez repetições mixed/4
+válidas preservadas. A primeira v1.1 mixed/12 encerrou o Locust com código 2 no
+warm-up: 3.722 aplicações de 5.160 exigidas, sem erros HTTP. O coletor registrou
+61 ciclos completos e nenhuma falha; o rótulo histórico `snapshot` está incorreto.
+A correção do runner distingue as fontes de falha sem reescrever esse diagnóstico.
+
+DESIGN §30.5 autoriza uma única tentativa diagnóstica v1.1/12 com parâmetros
+congelados, sem medição nem elegibilidade para a matriz. Sua preparação é obrigatória;
+execução somente manual. Falha equivalente mantém 12 usuários bloqueados. Sucesso
+exige avaliar a divergência e não retoma a campanha. A proposta antiga de doze
+diagnósticos permanece inativa. Pacote e comando em `benchmarks/V11_REVIEW.md`.

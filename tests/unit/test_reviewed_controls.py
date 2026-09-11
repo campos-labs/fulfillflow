@@ -273,23 +273,32 @@ def test_idle_verification_is_fixed_and_never_starts_a_workload(isolated, monkey
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher regression")
 @pytest.mark.parametrize(
+    "series,launcher_name",
+    [
+        ("abba", "Invoke-ReviewedControls.ps1"),
+        ("warmup", "Invoke-V11WarmupDiagnostic.ps1"),
+    ],
+)
+@pytest.mark.parametrize(
     "flag,mode",
     [("-PlanOnly", "--plan-only"), ("-PrepareOnly", "--prepare-only"), (None, "--execute")],
 )
-def test_real_reviewed_powershell_preserves_mode_and_visible_failure(tmp_path, flag, mode):
+def test_real_reviewed_powershell_preserves_mode_and_visible_failure(
+    tmp_path, flag, mode, series, launcher_name
+):
     executable = Path(os.environ.get("CONTROL_TEST_PWSH", "missing"))
     if not executable.is_file():
         pytest.skip("set CONTROL_TEST_PWSH to the verified full executable path")
     root = tmp_path / "repository with spaces"
     (root / "scripts").mkdir(parents=True)
-    script = root / "scripts/Invoke-ReviewedControls.ps1"
-    shutil.copyfile(controls.ROOT / "scripts/Invoke-ReviewedControls.ps1", script)
+    script = root / "scripts" / launcher_name
+    shutil.copyfile(controls.ROOT / "scripts" / launcher_name, script)
     venv.EnvBuilder(with_pip=False).create(root / ".venv")
     (root / "benchmarks").mkdir()
     (root / "benchmarks/__init__.py").write_text("")
     (root / "benchmarks/paired_controls.py").write_text(
         "import json,sys\nidentity=json.load(sys.stdin)\n"
-        f"assert sys.argv[1:] == ['--series','abba',{mode!r}]\n"
+        f"assert sys.argv[1:] == ['--series',{series!r},{mode!r}]\n"
         "print('stage: synthetic failure; diagnostics: example.json', flush=True)\nsys.exit(7)\n"
     )
     result = subprocess.run(

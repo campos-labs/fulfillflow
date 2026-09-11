@@ -37,7 +37,6 @@ from benchmarks.campaign import (
     deterministic_event_id,
     load_campaign,
 )
-from benchmarks.collection_diagnostics import failure as collection_failure
 from benchmarks.collection_diagnostics import write_failure
 from benchmarks.collectors import (
     DatabaseProbe,
@@ -59,6 +58,7 @@ from benchmarks.database_contract import (
     StructuralSchemaIdentity,
 )
 from benchmarks.host_probe import HostProbe
+from benchmarks.phase_diagnostics import phase_failure, warmup_quota_evidence
 from benchmarks.semantic import normalize_frozen_payload, validate_semantic_document
 
 ProcessPhase = Literal["warmup", "measurement"]
@@ -68,6 +68,14 @@ _GIT_TIMEOUT_SECONDS = 10.0
 
 class CampaignExecutionError(RuntimeError):
     """Sanitized campaign failure that leaves an explicitly incomplete directory."""
+
+
+class ProcessTimeoutError(CampaignExecutionError):
+    """The original process deadline elapsed."""
+
+
+class CollectionSupervisionError(ExternalCommandError):
+    """Mandatory sampler failure notified the existing process supervisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +137,7 @@ def main() -> int:
     parser.add_argument("--base-url")
     parser.add_argument("--results-directory", type=Path)
     parser.add_argument("--application-source", type=Path)
+    parser.add_argument("--diagnostic-warmup-only", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
@@ -155,6 +164,7 @@ def main() -> int:
             args.results_directory,
             prepare_command,
             application_source=args.application_source,
+            diagnostic_warmup_only=args.diagnostic_warmup_only,
         )
     except KeyboardInterrupt:
         return 130
@@ -171,7 +181,10 @@ def _execute(
     prepare_command: list[str],
     *,
     application_source: Path | None = None,
+    diagnostic_warmup_only: bool = False,
 ) -> int:
+    if diagnostic_warmup_only:
+        _validate_warmup_diagnostic(bundle)
     runner_root = Path(__file__).resolve().parents[1]
     repository_root = application_source.resolve() if application_source else runner_root
     if application_source is not None:
@@ -200,7 +213,12 @@ def _execute(
     campaign_marker = results_directory / ".incomplete.json"
     _write_json(
         campaign_marker,
-        {"campaign": bundle.manifest.name, "complete": False, "started_at": _utc_now()},
+        {
+            "campaign": bundle.manifest.name,
+            "complete": False,
+            "started_at": _utc_now(),
+            "mode": "diagnostic_warmup_only" if diagnostic_warmup_only else "campaign",
+        },
     )
     completed_directories: list[Path] = []
     try:
@@ -261,6 +279,8 @@ def _execute(
                 stabilization = _stabilize(bundle.manifest.stabilization_seconds)
                 preflight_metadata: dict[str, object] = {
                     "valid": False,
+                    "mode": "diagnostic_warmup_only" if diagnostic_warmup_only else "campaign",
+                    "official": bundle.manifest.official,
                     "host_identity": host_identity,
                     "stabilization": stabilization,
                     "host_runner": host_runner,
@@ -287,6 +307,34 @@ def _execute(
                 pre_measurement_identity = _verify_warmup(
                     bundle, load, database, initial, after_warmup
                 )
+                if diagnostic_warmup_only:
+                    _finish_warmup_diagnostic(
+                        partial_directory,
+                        bundle,
+                        {
+                            **preflight_metadata,
+                            "campaign": bundle.manifest.name,
+                            "git": asdict(provenance),
+                            "manifest_sha256": _file_sha256(manifest_path),
+                            "dataset_sha256": bundle.dataset_sha256,
+                            "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
+                            "environment_checks": observed.checks,
+                            "container_ids": observed.container_ids,
+                            "protocol_expected": bundle.manifest.model_dump(mode="json"),
+                            "logical_database_identity": {
+                                "initial": asdict(initial_identity),
+                                "post_warmup_seeded_rows": asdict(pre_measurement_identity),
+                            },
+                            "warmup": _phase_metadata(warmup),
+                        },
+                        database,
+                        initial,
+                        after_warmup,
+                    )
+                    partial_directory.rename(results_directory / "warmup-diagnostic")
+                    campaign_marker.unlink()
+                    _write_checksums(results_directory)
+                    return 0
                 measurement = _run_phase(
                     bundle,
                     load,
@@ -368,6 +416,75 @@ def _run_preparation(command: list[str], timeout_seconds: float) -> None:
         raise CampaignExecutionError("database preparation command failed")
 
 
+def _validate_warmup_diagnostic(bundle: CampaignBundle) -> None:
+    manifest = bundle.manifest
+    if (
+        manifest.official
+        or manifest.release != "v1.1.0"
+        or manifest.repetitions != 1
+        or manifest.profile != "mixed"
+        or len(manifest.loads) != 1
+        or manifest.loads[0].users != 12
+        or manifest.warmup_quota_per_shipment != 430
+        or manifest.stabilization_seconds != 300
+        or manifest.warmup_seconds != 60
+        or manifest.measurement_seconds != 300
+    ):
+        raise CampaignExecutionError(
+            "warm-up diagnostic requires the frozen nonofficial v1.1/12 contract"
+        )
+
+
+def _finish_warmup_diagnostic(
+    directory: Path,
+    bundle: CampaignBundle,
+    metadata: dict[str, object],
+    database: DatabaseProbe,
+    initial: DatabaseSnapshot,
+    after_warmup: DatabaseSnapshot,
+) -> None:
+    if not isinstance(database, SplitDatabaseProbe):
+        raise CampaignExecutionError("warm-up diagnostic requires both database owners")
+    _write_json(directory / "reconciliation.json", database.reconcile())
+    write_database_counts(directory / "database_counts.csv", [initial, after_warmup])
+    for name in (
+        "locust_stats.csv",
+        "locust_stats_history.csv",
+        "locust_failures.csv",
+        "locust_exceptions.csv",
+        "response_codes.csv",
+        "operational_results.http.csv",
+        "resources.csv",
+        "resources.application.csv",
+    ):
+        if not (directory / "warmup" / name).is_file():
+            raise CampaignExecutionError("warm-up diagnostic artifacts are incomplete")
+    quota = warmup_quota_evidence(
+        directory / "warmup",
+        12 * bundle.manifest.warmup_quota_per_shipment,
+        final_statistics="locust_stats.csv",
+    )
+    if (
+        quota.get("available") is not True
+        or quota.get("applied") != 5160
+        or quota.get("final_http_failures") != 0
+    ):
+        raise CampaignExecutionError("warm-up final HTTP evidence does not confirm the fixed quota")
+    metadata.update(
+        mode="diagnostic_warmup_only",
+        official=False,
+        valid=False,
+        diagnostic_complete=True,
+        warmup_valid=True,
+        matrix_eligible=False,
+        measurement_executed=False,
+        quota_evidence=quota,
+    )
+    _write_json(directory / "metadata.json", metadata)
+    (directory / ".incomplete.json").unlink()
+    _write_checksums(directory)
+
+
 def _stabilize(
     seconds: float,
     *,
@@ -418,7 +535,7 @@ def _run_phase(
         response_file=f"{container_directory}/response_codes.csv",
         operational_file=f"{container_directory}/operational_results.http.csv",
     )
-    process = ManagedProcess(command)
+    process: ManagedProcess | None = None
     sampler: ResourceSampler | None = None
     destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
     started_at: datetime | None = None
@@ -426,7 +543,10 @@ def _run_phase(
     secondary: list[dict[str, object]] = []
     supervision_started = time.monotonic()
     returncode: int | None = None
+    stage = "process_start"
     try:
+        process = ManagedProcess(command)
+        stage = "phase_start"
         _wait_for_container_file(
             container_id,
             marker,
@@ -434,12 +554,14 @@ def _run_phase(
             bundle.manifest.timeouts.command_seconds,
         )
         started_at = datetime.now(UTC)
+        stage = "collector"
         sampler = ResourceSampler(
             destination / "resources.csv",
             observed.container_ids,
             database,
             bundle.manifest.collection_interval_seconds,
             command_timeout_seconds=bundle.manifest.timeouts.command_seconds,
+            phase=phase,
         )
         sampler.start()
         timeout = (
@@ -447,42 +569,80 @@ def _run_phase(
             if phase == "warmup"
             else bundle.manifest.timeouts.measurement_process_seconds
         )
+        stage = "process_wait"
         returncode = process.wait(timeout, sampler=sampler)
         if returncode != 0:
+            stage = "process_exit"
             raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
     except BaseException as exc:
         primary = exc
+        if isinstance(exc, CollectionSupervisionError):
+            stage = "collector"
+        elif isinstance(exc, ProcessTimeoutError):
+            stage = "process_timeout"
         try:
             _terminate_container_phase(
                 container_id, pid_file, bundle.manifest.timeouts.command_seconds
             )
         except BaseException as cleanup_error:
-            secondary.append(collection_failure(cleanup_error, "output", supervision_started))
+            secondary.append(phase_failure(cleanup_error, "shutdown", supervision_started))
     finally:
         try:
-            process.ensure_stopped()
+            if process is not None:
+                process.ensure_stopped()
         except BaseException as cleanup_error:
             if primary is None:
                 primary = cleanup_error
+                stage = "shutdown"
             else:
-                secondary.append(collection_failure(cleanup_error, "output", supervision_started))
+                secondary.append(phase_failure(cleanup_error, "shutdown", supervision_started))
         if sampler is not None:
             try:
                 sampler.stop()
             except BaseException as sampler_error:
                 if primary is None:
                     primary = sampler_error
+                    stage = "collector"
                 else:
-                    secondary.append(
-                        collection_failure(sampler_error, "snapshot", supervision_started)
-                    )
+                    secondary.append(phase_failure(sampler_error, "collector", supervision_started))
+    if primary is None:
+        try:
+            stage = "completion"
+            _wait_for_container_file(
+                container_id,
+                completed_marker,
+                bundle.manifest.timeouts.command_seconds,
+                bundle.manifest.timeouts.command_seconds,
+            )
+            stage = "export"
+            destination.mkdir(exist_ok=True)
+            run_capture(
+                ["docker", "cp", f"{container_id}:{container_directory}/.", str(destination)],
+                bundle.manifest.timeouts.command_seconds,
+            )
+            stage = "validation"
+            _remove_runtime_markers(destination)
+            _promote_final_statistics(destination)
+            validate_resource_samples(destination / "resources.csv", observed.container_ids)
+            if isinstance(database, SplitDatabaseProbe):
+                aggregate_resources(
+                    destination / "resources.csv",
+                    destination / "resources.application.csv",
+                    observed.container_ids,
+                )
+        except BaseException as exc:
+            primary = exc
     if primary is not None:
-        report = collection_failure(primary, "snapshot", supervision_started)
+        report = phase_failure(primary, stage, supervision_started)
         report.update(
             phase=phase,
             complete=False,
             process_returncode=returncode,
             secondary_errors=secondary,
+            cause_basis="recorded_process_exit"
+            if stage == "process_exit"
+            else "runner_observation",
+            locust_internal_reason=None,
         )
         if sampler is not None:
             report["collector"] = sampler.failure
@@ -495,7 +655,12 @@ def _run_phase(
                 bundle.manifest.timeouts.command_seconds,
             )
         except BaseException as export_error:
-            report["export_error"] = collection_failure(export_error, "output", supervision_started)
+            report["export_error"] = phase_failure(export_error, "export", supervision_started)
+        if phase == "warmup":
+            report["quota_evidence"] = warmup_quota_evidence(
+                destination / "failed-runtime",
+                load.users * bundle.manifest.warmup_quota_per_shipment,
+            )
         try:
             write_failure(destination / "phase-error.json", report)
         except OSError:
@@ -505,26 +670,6 @@ def _run_phase(
         raise CampaignExecutionError(f"{phase} did not publish its real start marker")
     if returncode != 0:
         raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
-    _wait_for_container_file(
-        container_id,
-        completed_marker,
-        bundle.manifest.timeouts.command_seconds,
-        bundle.manifest.timeouts.command_seconds,
-    )
-    destination.mkdir(exist_ok=True)
-    run_capture(
-        ["docker", "cp", f"{container_id}:{container_directory}/.", str(destination)],
-        bundle.manifest.timeouts.command_seconds,
-    )
-    _remove_runtime_markers(destination)
-    _promote_final_statistics(destination)
-    validate_resource_samples(destination / "resources.csv", observed.container_ids)
-    if isinstance(database, SplitDatabaseProbe):
-        aggregate_resources(
-            destination / "resources.csv",
-            destination / "resources.application.csv",
-            observed.container_ids,
-        )
     return PhaseExecution(phase, started_at, datetime.now(UTC), returncode)
 
 
@@ -628,11 +773,11 @@ class ManagedProcess:
             deadline = time.monotonic() + timeout_seconds
             while True:
                 if sampler.failed.is_set():
-                    raise ExternalCommandError("mandatory resource sampling failed")
+                    raise CollectionSupervisionError("mandatory resource sampling failed")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self.terminate()
-                    raise CampaignExecutionError("external process exceeded its frozen timeout")
+                    raise ProcessTimeoutError("external process exceeded its frozen timeout")
                 try:
                     return self.process.wait(timeout=min(0.25, remaining))
                 except subprocess.TimeoutExpired:
@@ -641,7 +786,7 @@ class ManagedProcess:
             return self.process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
             self.terminate()
-            raise CampaignExecutionError("external process exceeded its frozen timeout") from exc
+            raise ProcessTimeoutError("external process exceeded its frozen timeout") from exc
 
     def terminate(self) -> None:
         if self.process.poll() is not None:
@@ -1277,6 +1422,8 @@ def runner_provenance(repository_root: Path, *, require_clean: bool = True) -> d
         },
         "supervision_interval_seconds": 0.25,
         "collection_policy": "original-deltas-no-retry-failure-diagnostics-v1",
+        "phase_diagnostics": "separate-process-collector-shutdown-export-v2",
+        "diagnostic_mode": "explicit-warmup-only-not-matrix-eligible",
     }
 
 

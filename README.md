@@ -23,10 +23,13 @@ O piloto não oficial mixed/4 foi executado no Windows `26200.9445`: 108,04 req/
 p95 82 ms, sem erros e com conciliação. Dois controles v1.0 posteriores também foram
 válidos. O bloco ABBA seguinte parou na primeira tentativa por falha da coleta,
 sem produzir uma comparação válida. A baseline histórica usa `26200.9278`.
-A revisão atual preserva as aplicações e prepara um runner de host comum, novo
-ABBA e referência contemporânea de 30 execuções por versão. A preparação é sem
-carga; comandos históricos concluídos não devem ser repetidos. Estado, limites e
-entrada `scripts/Invoke-ReviewedControls.ps1` estão no pacote de revisão.
+O novo ABBA com runner revisado foi válido. A matriz contemporânea concluiu dez
+repetições mixed/4 (cinco por versão) e parou no primeiro warm-up v1.1 mixed/12:
+3.722 aplicações de 5.160 exigidas, sem erros HTTP, Locust exit 2. O diagnóstico
+do runner é corrigido sem alterar imagens ou resultados. A próxima etapa é uma
+única verificação manual limitada ao warm-up, sem medição nem retomada automática.
+Estado, limites e entrada `scripts/Invoke-V11WarmupDiagnostic.ps1` estão no pacote
+de revisão. Não repetir `Invoke-ReviewedControls.ps1`: suas séries estão encerradas.
 
 A política efetiva de logs das imagens é preservada. Os settings de logging não
 configuram o logger da aplicação; access logs Uvicorn continuam INFO em texto.

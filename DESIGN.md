@@ -1884,6 +1884,22 @@ a matriz. Execução manual e revisão dos resultados permanecem etapas separada
 Preserva-se a política efetiva de logs das imagens; as lacunas de implementação
 de logging estruturado, métricas e tracing de §19 permanecem explícitas.
 
+Extensão diagnóstica autorizada após a interrupção da matriz em mixed/12 v1.1:
+uma única tentativa manual não oficial, limitada ao warm-up, com 12 usuários.
+Preservar imagens, dataset, preparação, q430, recursos, estabilização 300 s,
+admissão 60 s, drain, supervisão, coleta e verificações de estado/recibos.
+O runner de host recebe `--diagnostic-warmup-only`; não inicia measurement e
+registra `valid=false`, `matrix_eligible=false`, além de conclusão e validade
+específicas do diagnóstico. O manifest mantém o contrato original de duração;
+a omissão explícita da medição pertence somente a esse modo diagnóstico.
+Aplicação, runner e coordenador têm identidades separadas em pacote novo.
+O diagnóstico separa processo Locust, coleta, encerramento e exportação; quota
+derivada dos artefatos não é apresentada como razão textual interna do Locust.
+Os dez resultados mixed/4 válidos e a tentativa inválida permanecem preservados.
+Nova falha equivalente mantém as células de 12 usuários bloqueadas; sucesso exige
+revisão da divergência e não prova estabilidade nem retoma a matriz automaticamente.
+Não há nova margem de aprovação nem alteração da imagem congelada do loadgen.
+
 ### 30.6 Estado funcional do incremento I
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`

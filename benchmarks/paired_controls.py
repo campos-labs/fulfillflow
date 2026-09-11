@@ -102,7 +102,7 @@ def configure_series(series: str) -> None:
     global SERIES, PACKAGE, JOURNAL, PROJECTS, STEPS
     if series == "historical":
         return
-    if series not in {"abba", "official"} or SERIES != "historical":
+    if series not in {"abba", "official", "warmup"} or SERIES != "historical":
         raise ControlError("control series cannot be changed during execution")
     SERIES = series
     PACKAGE = RESULTS / f"reviewed-{series}-win9445-review-01"
@@ -111,6 +111,9 @@ def configure_series(series: str) -> None:
         "v10": "fulfillflow-task08-prepare-e2e-reviewed01",
         "v11": "fulfillflow-ii-reviewed-win9445",
     }
+    if series == "warmup":
+        PROJECTS = {"v11": "fulfillflow-ii-warmup12-win9445-01"}
+        STEPS = (Step(1, 1, "v11", "w1", "mixed", 12),)
     if series == "official":
         steps: list[Step] = []
         for block, (profile, users) in enumerate(
@@ -236,7 +239,9 @@ def environment_for(step: Step, document: Mapping[str, Any]) -> dict[str, str]:
         for role in ("core", "tracking", "loadgen"):
             environment[f"BENCH_{role.upper()}_IMAGE"] = document["images"][role]
     if SERIES != "historical":
-        environment["BENCH_APP_PORT"] = "18037" if step.version == "v10" else "18038"
+        environment["BENCH_APP_PORT"] = (
+            "18039" if SERIES == "warmup" else "18037" if step.version == "v10" else "18038"
+        )
     return _source_environment(step.source, environment)
 
 
@@ -370,6 +375,7 @@ def fingerprints() -> dict[str, str]:
         ROOT / "scripts/Invoke-PairedControls.ps1",
         ROOT / "scripts/prepare_paired_control.py",
         *([ROOT / "scripts/Invoke-ReviewedControls.ps1"] if SERIES != "historical" else []),
+        *([ROOT / "scripts/Invoke-V11WarmupDiagnostic.ps1"] if SERIES == "warmup" else []),
         PILOT,
         AUDIT,
         *(step.candidate for step in STEPS),
@@ -685,6 +691,8 @@ def prepared() -> None:
         raise ControlError("prepared block changed; review required")
     if SERIES != "historical" and ready.get("host_runner") != runner_provenance(ROOT):
         raise ControlError("reviewed host runner differs from the prepared identity")
+    if SERIES == "warmup" and ready.get("coordinator") != coordinator_identity():
+        raise ControlError("warm-up coordinator differs from the prepared identity")
     verify_candidates()
     for step in STEPS[:2]:
         verify_source(step)
@@ -740,7 +748,7 @@ def idle_verification(step: Step, destination: Path) -> None:
 def prepare_package(launcher: Mapping[str, Any]) -> int:
     require_new_execution()
     if PACKAGE.exists() or (
-        SERIES != "official" and any(step.source.exists() for step in STEPS[:2])
+        SERIES not in {"official", "warmup"} and any(step.source.exists() for step in STEPS[:2])
     ):
         raise ControlError("preparation destinations must be new; no automatic retry")
     originals = original_documents()
@@ -749,7 +757,7 @@ def prepare_package(launcher: Mapping[str, Any]) -> int:
     try:
         write_report(PACKAGE / "launcher.json", launcher)
         for step in STEPS[:2]:
-            if SERIES == "official":
+            if SERIES in {"official", "warmup"}:
                 verify_source(step)
                 sync_source(step, check=True)
                 continue
@@ -812,7 +820,7 @@ def prepare_package(launcher: Mapping[str, Any]) -> int:
             write_report(PACKAGE / "logging-policy.json", logging_report)
         stage = "loadgen-audit"
         source_python(
-            STEPS[1],
+            next(step for step in STEPS if step.version == "v11"),
             """
 import json, sys
 from pathlib import Path
@@ -882,12 +890,15 @@ print(json.dumps(reuse_loadgen_audit(sys.argv[1], Path(sys.argv[2]))))
                 "images": images,
                 "fingerprints": fingerprints(),
                 "load_executed": False,
-                "database_setup_verified": ["v10", "v11"],
+                "database_setup_verified": [step.version for step in STEPS[:2]],
                 "host_runner": runner_provenance(ROOT) if SERIES != "historical" else None,
+                "coordinator": coordinator_identity() if SERIES == "warmup" else None,
                 "series": SERIES,
                 "repetitions_per_step": 5 if SERIES == "official" else 1,
                 "official_execution_requires_abba_review": SERIES == "official",
-                "interpretation": {
+                "interpretation": warmup_interpretation()
+                if SERIES == "warmup"
+                else {
                     "reference": "new current-host v1.0 image controls",
                     "repetitions_per_version": 30,
                     "aggregation": "medians and descriptive dispersion per cell",
@@ -929,6 +940,51 @@ print(json.dumps(reuse_loadgen_audit(sys.argv[1], Path(sys.argv[2]))))
         ) from None
 
 
+def coordinator_identity() -> dict[str, Any]:
+    return {
+        "git_sha": _git(ROOT, "rev-parse", "HEAD"),
+        "components": {
+            name: _sha256(ROOT / name)
+            for name in (
+                "benchmarks/paired_controls.py",
+                "scripts/prepare_paired_control.py",
+                "scripts/Invoke-V11WarmupDiagnostic.ps1",
+            )
+        },
+    }
+
+
+def warmup_interpretation() -> dict[str, Any]:
+    return {
+        "mode": "diagnostic_warmup_only",
+        "official": False,
+        "matrix_eligible": False,
+        "attempts": 1,
+        "measurement_executed": False,
+        "equivalent_failure": "keep 12-user cells blocked; propose a decision before further load",
+        "success": (
+            "preserve previous failure and review divergence; no stability claim or matrix resume"
+        ),
+        "proven_defect": "correct within authorization and assess identities and evidence impact",
+        "new_practical_margin": None,
+        "automatic_retry": False,
+    }
+
+
+def verify_warmup_result(directory: Path) -> bool:
+    verify_checksums(directory)
+    metadata = read_json(directory / "warmup-diagnostic/metadata.json")
+    return (
+        metadata.get("mode") == "diagnostic_warmup_only"
+        and metadata.get("diagnostic_complete") is True
+        and metadata.get("warmup_valid") is True
+        and metadata.get("valid") is False
+        and metadata.get("official") is False
+        and metadata.get("matrix_eligible") is False
+        and metadata.get("measurement_executed") is False
+    )
+
+
 def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
     step.attempt.mkdir()
     report: dict[str, Any] = {
@@ -939,6 +995,8 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
         "label": step.label,
         "version": step.version,
         "launcher": dict(launcher),
+        "mode": "diagnostic_warmup_only" if SERIES == "warmup" else "campaign",
+        "coordinator": coordinator_identity() if SERIES == "warmup" else None,
     }
     code = 2
     try:
@@ -967,6 +1025,7 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 "--manifest",
                 str(step.candidate),
                 "--execute",
+                *(["--diagnostic-warmup-only"] if SERIES == "warmup" else []),
                 "--confirm-campaign",
                 step.name,
                 "--base-url",
@@ -987,21 +1046,29 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 error_path = phase_errors[-1]
                 details = read_json(error_path)
                 report["phase_diagnostic"] = str(error_path)
-                collector = details.get("collector") or {}
-                stage = collector.get("stage", details.get("stage", "unknown"))
-                print(f"Runner failed at {stage}; diagnostics: {error_path}", file=sys.stderr)
+                stage = details.get("stage", "unknown")
+                print(
+                    f"Runner failed at {stage}, phase {details.get('phase', 'unknown')}, "
+                    f"process exit {details.get('process_returncode')}; diagnostics: {error_path}",
+                    file=sys.stderr,
+                )
             raise ControlError(
                 "reviewed runner refused or interrupted the control"
                 if SERIES != "historical"
                 else "frozen runner refused or interrupted the control"
             )
         expected_repetitions = 5 if SERIES == "official" else 1
-        valid = all(
-            read_json(
-                step.attempt / f"run/{step.profile}-{step.users}-users-r{number:02d}/metadata.json"
-            ).get("valid")
-            is True
-            for number in range(1, expected_repetitions + 1)
+        valid = (
+            verify_warmup_result(step.attempt / "run")
+            if SERIES == "warmup"
+            else all(
+                read_json(
+                    step.attempt
+                    / f"run/{step.profile}-{step.users}-users-r{number:02d}/metadata.json"
+                ).get("valid")
+                is True
+                for number in range(1, expected_repetitions + 1)
+            )
         )
         if not valid or list((step.attempt / "run").rglob(".incomplete.json")):
             raise ControlError("runner did not produce a valid complete repetition")
@@ -1110,6 +1177,8 @@ def execute_block(launcher: Mapping[str, Any]) -> int:
         if not review["concordant"]:
             raise ControlError("ABBA contrasts are inconclusive; review before more load")
     prepared()
+    if SERIES == "warmup" and read_json(PACKAGE / "launcher.json") != dict(launcher):
+        raise ControlError("PowerShell identity differs from the prepared warm-up launcher")
     assert_projects_absent()
     JOURNAL.mkdir()
     report: dict[str, Any] = {
@@ -1126,7 +1195,8 @@ def execute_block(launcher: Mapping[str, Any]) -> int:
             write_report(JOURNAL / "result.json", report)
             print(
                 f"Starting {step.name}; frozen timed phases take at least "
-                f"{55 if SERIES == 'official' else 11} minutes.",
+                f"{55 if SERIES == 'official' else 6 if SERIES == 'warmup' else 11} minutes"
+                f"{' (warm-up only; no measurement)' if SERIES == 'warmup' else ''}.",
                 flush=True,
             )
             code = run_step(step, launcher)
@@ -1153,7 +1223,7 @@ def execute_block(launcher: Mapping[str, Any]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--series", choices=["historical", "abba", "official"], default="historical"
+        "--series", choices=["historical", "abba", "official", "warmup"], default="historical"
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--plan-only", action="store_true")
@@ -1185,6 +1255,7 @@ def main() -> int:
                         "package": str(PACKAGE),
                         "load_executed": False,
                         "readiness_verified": False,
+                        "mode": "diagnostic_warmup_only" if SERIES == "warmup" else "campaign",
                     }
                 )
             )

@@ -4,10 +4,84 @@ Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 m
 q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
 conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
 `results/v11-pilot-win9445-analysis/metrics-summary.json`.
-A campanha oficial do incremento III permanece pendente. O primeiro bloco ABBA foi
-interrompido; a ferramenta revisada prepara um novo ABBA e uma referência contemporânea,
-sem executar carga pelo agente. A baseline publicada em 26200.9278,
+A campanha oficial do incremento III permanece incompleta. O novo ABBA revisado foi
+válido; a matriz seguinte concluiu dez repetições mixed/4 e parou no primeiro warm-up
+v1.1 mixed/12. A próxima etapa é uma única verificação manual limitada ao warm-up,
+preparada sem carga pelo agente. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
+
+## Estado operacional atual — uma verificação de warm-up
+
+Preservar as cinco repetições v1.0 e cinco v1.1 em
+`results/reviewed-official-mixed-4-win9445-01-c1-{v10-v10,v11-v11}`.
+A tentativa `reviewed-official-mixed-12-win9445-01-c2-v11-v11` parou antes da
+medição. O diário `reviewed-official-win9445-execution-01` está encerrado.
+Não repetir suas séries ou usar seus pacotes com o runner corrigido.
+
+O Locust registrou exit 2. Os arquivos finais confirmam 3.722 aplicações,
+nenhum erro HTTP e quota incompleta (5.160 exigidas; déficit 1.438). A razão
+textual interna não foi exportada pela imagem congelada; essa quota é conclusão
+derivada dos artefatos, não uma mensagem interna recuperada. O coletor tem 61
+ciclos completos e `collector=null`. O rótulo `snapshot` e a mensagem de falha
+de coleta no JSON antigo estão incorretos e permanecem intactos como evidência.
+O novo runner registra `process_exit`, fase e código, distinguindo coleta,
+encerramento, exportação e validação. Não muda prazos, supervisão de 250 ms,
+consultas, cálculos, amostragem ou imagem do loadgen.
+
+A análise nova está em `results/warmup12-investigation-01/analysis.json`.
+Após o trecho inicial, intervalos descritivos de aproximadamente 10 s mostram
+59,7–62,7 aplicações/s; p95 móvel exportado 230–270 ms. O Core consumiu em média
+97,1–98,9% de uma CPU por intervalo, ante limite de uma CPU; Tracking 87,6–89,9%.
+Memória abaixo dos limites. Timestamps inteiros e atraso do CSV periódico limitam
+a precisão desses intervalos; prevalece o snapshot final drenado: 61,9253 req/s,
+p95 240 ms. Esses números descrevem ingestão de warm-up, independentemente do
+perfil posterior, e não são comparados diretamente ao throughput medido de mixed/4.
+Não são limites novos de aprovação nem identificam causalidade exclusiva.
+
+A observação posterior dos contêineres preservados confirmou imagens, recursos,
+um worker e pool 5/overflow 0 por serviço, sem OOM ou reinício registrado.
+Os bancos conciliaram 3.722 comandos, recibos e finalizações. Essa observação é
+posterior à interrupção, não um snapshot histórico recuperado. O exit 143 do
+contêiner loadgen decorre de sua parada posterior e é distinto do exit 2 do
+processo Locust. Logs e parâmetros permanecem congelados.
+
+O pacote novo é `results/reviewed-warmup-win9445-review-01`; sua prontidão exige
+`ready.json`, checksums, fonte v1.1 congelada, imagens, host, preparação sem carga
+e identidades separadas de aplicação, runner e coordenador. A fonte reutilizada
+é `comparison-win9445-v11-source-01`, no SHA `948cefdf881b10af2c073be5536411daefb3faf2`.
+O projeto novo é `fulfillflow-ii-warmup12-win9445-01`, porta local 18039.
+O host é verificado contra o candidato exato antes da execução; divergência bloqueia.
+
+Entrada bloqueante: `scripts/Invoke-V11WarmupDiagnostic.ps1`. `-PlanOnly` só mostra
+o destino; `-PrepareOnly` prepara sem carga e não deve ser repetido depois da
+prontidão. Sem opções, realiza **uma** tentativa manual, usando caminhos absolutos
+a partir do próprio script, independentemente do diretório corrente:
+
+```powershell
+& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-V11WarmupDiagnostic.ps1'
+```
+
+Executar somente depois da conferência do pacote pronto. São 300 s de estabilização
+e 60 s de admissão, além de preparação, drain e exportação (prever cerca de 7–10 min).
+Não executa measurement de 300 s. Destino exclusivo:
+`results/reviewed-warmup-mixed-12-win9445-01-w1-v11`; diário:
+`results/reviewed-warmup-win9445-execution-01`. Preserva evidências em sucesso e falha;
+falha retém os recursos para revisão. Não repete nem sobrescreve destinos existentes.
+O resultado usa `diagnostic_warmup_only`, `valid=false`, `matrix_eligible=false`,
+`measurement_executed=false` e estados próprios de conclusão/validade do warm-up.
+
+Interpretação fixada antes dessa execução:
+
+- Falha equivalente: manter células de 12 usuários bloqueadas e propor a decisão
+  necessária. Não repetir até passar.
+- Sucesso: preservar a falha anterior e avaliar a divergência. Não declarar
+  estabilidade nem retomar automaticamente a matriz.
+- Defeito demonstrado: corrigir no escopo autorizado e avaliar identidades e
+  impacto sobre as evidências.
+
+A proposta anterior de doze diagnósticos continua inativa. Esta tentativa não
+substitui nenhuma repetição oficial, não conclui a comparação e não autoriza release.
+A existência de cópia independente das evidências continua sem confirmação.
 
 ## Compatibilidade do loadgen
 
@@ -50,17 +124,17 @@ pendências de implementação herdadas. A decisão atual preserva a política
 efetiva das imagens para a comparação; não declara conformidade integral de
 observabilidade nem altera retroativamente os requisitos ou a publicação v1.0.
 
-### Entradas atuais e aceites
+### Entradas anteriores e aceites — séries encerradas
 
-O launcher atual é `scripts/Invoke-ReviewedControls.ps1`. Ele exige PowerShell 7,
+O launcher das séries encerradas é `scripts/Invoke-ReviewedControls.ps1`. Ele exige PowerShell 7,
 usa caminhos absolutos a partir de seu próprio diretório e preserva stdout/stderr
 e o código do filho. O executável verificado neste host é:
 `C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
 
-| Série | Preparação sem carga | Pacote sob `results` | Execução posterior |
+| Série | Estado | Pacote sob `results` | Resultado |
 | --- | --- | --- | --- |
-| Novo ABBA | `-Series abba -PrepareOnly` | `reviewed-abba-win9445-review-01` | Quatro tentativas novas mixed/4 |
-| Matriz atual | `-Series official -PrepareOnly` | `reviewed-official-win9445-review-01` | Doze blocos de cinco, após revisão do novo ABBA |
+| Novo ABBA | Encerrada | `reviewed-abba-win9445-review-01` | Quatro válidas mixed/4 |
+| Matriz atual | Interrompida | `reviewed-official-win9445-review-01` | Dez válidas mixed/4; primeira mixed/12 inválida no warm-up |
 
 Acrescentar `-PlanOnly` no lugar de `-PrepareOnly` somente mostra a seleção.
 A preparação ABBA verifica as duas fontes/imagens, os parsers congelados, a política
@@ -76,11 +150,7 @@ Os projetos isolados são `fulfillflow-task08-prepare-e2e-reviewed01` e
 recusados antes de registrar propriedade. Os containers ociosos da preparação são
 removidos somente após exportação de diagnósticos bem-sucedida.
 
-Comando manual do novo ABBA, somente quando seu pacote estiver pronto:
-
-```powershell
-& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-ReviewedControls.ps1' -Series abba
-```
+O comando manual do novo ABBA já foi executado; não o repetir.
 
 Piso de 44 minutos de fases. Os destinos começam por `reviewed-abba-mixed-4-win9445-01-`
 e terminam em `a1-v10`, `b1-v11`, `b2-v11`, `a2-v10`; o diário é
