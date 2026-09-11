@@ -3,8 +3,9 @@
 Incrementos I e II concluídos; comparação oficial e release v1.1 pendentes.
 Piloto, dois controles e novo ABBA válido preservados. A matriz contemporânea
 concluiu dez repetições mixed/4 (cinco por versão), mas parou no primeiro warm-up
-v1.1 mixed/12, antes da medição. Não repetir o launcher encerrado. A próxima etapa
-obrigatória é uma única verificação manual limitada ao warm-up, preparada sem carga.
+v1.1 mixed/12, antes da medição. A única verificação manual limitada ao warm-up
+reproduziu quota incompleta. Os launchers estão encerrados; células de 12 usuários
+bloqueadas, sem nova tentativa ou retomada automática.
 
 ## 1. Referência e objetivo
 
@@ -203,8 +204,16 @@ warm-up: 3.722 aplicações de 5.160 exigidas, sem erros HTTP. O coletor registr
 61 ciclos completos e nenhuma falha; o rótulo histórico `snapshot` está incorreto.
 A correção do runner distingue as fontes de falha sem reescrever esse diagnóstico.
 
-DESIGN §30.5 autoriza uma única tentativa diagnóstica v1.1/12 com parâmetros
-congelados, sem medição nem elegibilidade para a matriz. Sua preparação é obrigatória;
-execução somente manual. Falha equivalente mantém 12 usuários bloqueados. Sucesso
-exige avaliar a divergência e não retoma a campanha. A proposta antiga de doze
-diagnósticos permanece inativa. Pacote e comando em `benchmarks/V11_REVIEW.md`.
+A única tentativa diagnóstica v1.1/12 autorizada em DESIGN §30.5 foi executada
+manualmente: 3.497/5.160 aplicações, zero falhas HTTP, Locust exit 2 e 61 ciclos
+completos de coleta. Não houve medição. O diagnóstico corrigido registrou
+`process_exit`; a conciliação posterior confirmou 3.497 comandos/recibos/finalizações.
+A regra prévia de falha equivalente mantém 12 usuários bloqueados. Nenhuma repetição
+válida foi substituída ou promovida a outra campanha. Não repetir o launcher.
+A proposta antiga de doze diagnósticos permanece inativa.
+
+Decisão pendente: preservar o protocolo atual e registrar o gate de 12 usuários
+não atendido, mantendo a comparação incompleta; ou autorizar uma revisão específica
+e simétrica do protocolo em campanha separada para buscar a matriz completa.
+Esses resultados não autorizam aumentar recursos, estender duração, reduzir quota
+ou otimizar a aplicação. Evidências e limites em `benchmarks/V11_REVIEW.md`.

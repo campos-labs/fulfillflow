@@ -6,11 +6,51 @@ conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
 `results/v11-pilot-win9445-analysis/metrics-summary.json`.
 A campanha oficial do incremento III permanece incompleta. O novo ABBA revisado foi
 válido; a matriz seguinte concluiu dez repetições mixed/4 e parou no primeiro warm-up
-v1.1 mixed/12. A próxima etapa é uma única verificação manual limitada ao warm-up,
-preparada sem carga pelo agente. A baseline publicada em 26200.9278,
+v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a quota
+incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Estado operacional atual — uma verificação de warm-up
+## Estado operacional atual — verificação encerrada; 12 usuários bloqueados
+
+A verificação `reviewed-warmup-mixed-12-win9445-01-w1-v11` foi executada manualmente
+e encerrada com falha equivalente à anterior, sem measurement. O runner corrigido
+registrou `process_exit`, código 2, `collector=null`, sem erros secundários de
+encerramento ou exportação. A quota incompleta é evidência derivada dos arquivos
+finais; a razão textual interna do Locust continua indisponível.
+
+| Evidência do warm-up v1.1/12 | Primeira interrupção | Verificação única |
+| --- | ---: | ---: |
+| Aplicações confirmadas / quota | 3.722 / 5.160 | 3.497 / 5.160 |
+| Déficit | 1.438 | 1.663 |
+| Throughput final de ingestão | 61,9253 req/s | 58,1752 req/s |
+| p95 | 240 ms | 260 ms |
+| Erros HTTP | 0 | 0 |
+| Ciclos completos de coleta | 61 | 61 |
+
+Preparação, dataset, imagens, recursos e identidade/condições exigidas do host
+conferiram; as identidades de aplicação, runner e coordenador correspondem ao
+pacote. Na verificação, os intervalos descritivos de 10 s mostraram Core em
+96,7–98,4% de uma CPU e Tracking em 88,1–90,8%, com memória abaixo dos limites.
+A inspeção posterior não registrou OOM ou reinício. Os bancos conciliaram 3.497
+comandos, recibos e finalizações. Esses achados são compatíveis com restrição de
+capacidade nas condições congeladas; não isolam a contribuição da arquitetura,
+logging ou Windows nem estabelecem probabilidade de falha.
+
+A análise nova é `results/warmup12-verification-analysis-01/metrics-summary.json`;
+`preserved-runtime-observation.json` identifica a observação SQL posterior.
+Checksums da tentativa, diário, preparação e resultados anteriores foram conferidos.
+Os dez resultados mixed/4 válidos estão preservados. A comparação permanece incompleta.
+O requisito de realizar a única verificação manual foi cumprido; seu warm-up não
+passou. Nenhuma nova tentativa está preparada ou autorizada por esse resultado.
+
+A decisão pendente é manter o protocolo atual e registrar o gate de 12 usuários
+não atendido, ou autorizar uma revisão específica do protocolo, simétrica entre
+versões e com campanha separada. Não ajustar quota, duração, recursos ou aplicação
+para repetir até passar; não reutilizar resultados antigos como membros de uma
+campanha com protocolo diferente. Esta documentação registra a decisão necessária,
+sem implementar uma mudança metodológica.
+
+### Preparação e primeira interrupção — referência preservada
 
 Preservar as cinco repetições v1.0 e cinco v1.1 em
 `results/reviewed-official-mixed-4-win9445-01-c1-{v10-v10,v11-v11}`.
@@ -52,18 +92,10 @@ e identidades separadas de aplicação, runner e coordenador. A fonte reutilizad
 O projeto novo é `fulfillflow-ii-warmup12-win9445-01`, porta local 18039.
 O host é verificado contra o candidato exato antes da execução; divergência bloqueia.
 
-Entrada bloqueante: `scripts/Invoke-V11WarmupDiagnostic.ps1`. `-PlanOnly` só mostra
-o destino; `-PrepareOnly` prepara sem carga e não deve ser repetido depois da
-prontidão. Sem opções, realiza **uma** tentativa manual, usando caminhos absolutos
-a partir do próprio script, independentemente do diretório corrente:
-
-```powershell
-& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-V11WarmupDiagnostic.ps1'
-```
-
-Executar somente depois da conferência do pacote pronto. São 300 s de estabilização
-e 60 s de admissão, além de preparação, drain e exportação (prever cerca de 7–10 min).
-Não executa measurement de 300 s. Destino exclusivo:
+Entrada da verificação já encerrada: `scripts/Invoke-V11WarmupDiagnostic.ps1`.
+Não repetir sua preparação ou execução. O processo foi bloqueante, independente
+do diretório corrente, com 300 s de estabilização e 60 s de admissão, além de
+preparação, drain e exportação; sem measurement de 300 s. Destino preservado:
 `results/reviewed-warmup-mixed-12-win9445-01-w1-v11`; diário:
 `results/reviewed-warmup-win9445-execution-01`. Preserva evidências em sucesso e falha;
 falha retém os recursos para revisão. Não repete nem sobrescreve destinos existentes.

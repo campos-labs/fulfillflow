@@ -26,10 +26,12 @@ sem produzir uma comparação válida. A baseline histórica usa `26200.9278`.
 O novo ABBA com runner revisado foi válido. A matriz contemporânea concluiu dez
 repetições mixed/4 (cinco por versão) e parou no primeiro warm-up v1.1 mixed/12:
 3.722 aplicações de 5.160 exigidas, sem erros HTTP, Locust exit 2. O diagnóstico
-do runner é corrigido sem alterar imagens ou resultados. A próxima etapa é uma
-única verificação manual limitada ao warm-up, sem medição nem retomada automática.
-Estado, limites e entrada `scripts/Invoke-V11WarmupDiagnostic.ps1` estão no pacote
-de revisão. Não repetir `Invoke-ReviewedControls.ps1`: suas séries estão encerradas.
+do runner foi corrigido sem alterar imagens ou resultados. A única verificação
+manual limitada ao warm-up também falhou: 3.497/5.160 aplicações, sem erros HTTP,
+Locust exit 2 e coleta completa. As células de 12 usuários permanecem bloqueadas.
+Estado e decisão pendente estão no pacote de revisão. Não repetir
+`Invoke-V11WarmupDiagnostic.ps1` ou `Invoke-ReviewedControls.ps1`: suas séries
+estão encerradas. Nenhuma retomada automática ou nova carga está preparada.
 
 A política efetiva de logs das imagens é preservada. Os settings de logging não
 configuram o logger da aplicação; access logs Uvicorn continuam INFO em texto.
