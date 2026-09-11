@@ -1658,8 +1658,9 @@ consistência e custos. A extração não depende de a baseline provar necessida
 distribuição: os dados v1.0 não isolam Tracking como causa exclusiva de contenção e
 não sustentam promessa de ganho de desempenho. O incremento I entrega a extração
 funcional descrita em §30.1–30.4. O incremento II implementa a preparação experimental
-de §30.5 para revisão. Não há campanha v1.1 executada; congelamento e validação sob
-carga continuam dependendo do incremento III e de autorização própria.
+de §30.5 para revisão. Piloto e controles foram executados; a matriz contemporânea
+concluiu mixed/4 e permanece incompleta após o warm-up v1.1/12. A conclusão do
+incremento III depende de revisão das evidências e de autorização específica.
 
 ### 30.1 Substituições delimitadas do contrato v1.0
 
@@ -1899,6 +1900,68 @@ Os dez resultados mixed/4 válidos e a tentativa inválida permanecem preservado
 Nova falha equivalente mantém as células de 12 usuários bloqueadas; sucesso exige
 revisão da divergência e não prova estabilidade nem retoma a matriz automaticamente.
 Não há nova margem de aprovação nem alteração da imagem congelada do loadgen.
+
+#### Sensibilidade autorizada à política de warm-up
+
+Após duas tentativas v1.1/12 com quota incompleta em 60 s, preparar uma campanha
+separada, não oficial, identificada por `warmup-policy-sensitivity-v1`. Os 120 s
+foram escolhidos após conhecer essas evidências; não constituem parâmetro prévio
+da campanha histórica. A aplicação, imagens originais, dataset, q430 por usuário,
+12 usuários, spawn rate 16/s, coortes, eventos, recursos, pools, logs, timeouts de
+requisição e drain permanecem congelados. Estabilização de 300 s a cada tentativa.
+Não executar measurement. A quota total de 5.160 distribui-se proporcionalmente
+em 60 s (86 aplicações/s nominais) ou 120 s (43/s). Variam duração **e ritmo**;
+não se identifica o efeito isolado do tempo. Após admissão, somente requisições
+já iniciadas concluem no drain; não há emissão adicional para completar quota.
+
+São oito tentativas máximas, duas por combinação, na ordem fixa:
+v1.0/60, v1.1/120, v1.1/60, v1.0/120, v1.0/120, v1.1/60, v1.1/120, v1.0/60.
+A ordem não é randomizada e não elimina variação temporal. Não substituir falhas,
+ampliar durações, reduzir quota ou incorporar resultados anteriores nessas condições.
+
+O loader histórico `CampaignManifest` mantém `Literal[60]` e rejeita o campo de
+protocolo novo. `SensitivityManifest` tem entrada explícita distinta. Compartilham
+os gates de identidade, dataset, recursos e topologia. O manifest de preparação
+histórico de 60 s é uma referência para os probes/checkouts congelados; o manifest
+executável separado declara o novo protocolo e a duração efetiva. O coordenador
+confere sua correspondência campo a campo: somente protocolo, duração e prazo de
+supervisão do warm-up diferem. O prazo de 120 s recebe mais 60 s, preservando a
+margem original sobre admissão/drain. O runner recusa measurement neste modo.
+
+Criar loadgens derivados dos parents preservados de cada versão, com os mesmos
+`campaign.py`, `locustfile.py` e `warmup_sensitivity.py` revisados. Inventariar hashes,
+parents, imagens e distribuições instaladas; nenhuma atualização de dependências.
+O novo loadgen exporta, ao término, contadores por usuário e código de causa
+controlado, sem corpos, segredos ou erro livre. Essa causa registrada pertence
+somente às novas imagens; não recupera a razão textual das tentativas históricas.
+Aplicação, runner, loadgen e coordenador/pacote conservam identidades separadas.
+O override Compose do pacote altera somente a imagem do loadgen; fontes históricas
+e tags originais não são modificadas.
+
+Mantêm-se coleta de 1 s, consultas e cálculos existentes, supervisão de 250 ms e
+interrupção sem repetição. Conferir os prefixos determinísticos por usuário, bytes,
+efeitos, ponteiros de ordenação, coortes inativas e conteúdo inicial preservado;
+na v1.1, conciliar também comandos, recibos e finalizações. Quota incompleta segue
+com saída não zero e warm-up inválido; observação íntegra pode informar a análise
+de sensibilidade, nunca a matriz oficial. Erros primários, secundários e evidências
+parciais permanecem separados. Não adicionar consultas periódicas ou instrumentação.
+
+Cada chamada manual executa uma tentativa em destino/projeto novo. A próxima
+condição exige revisão explícita das evidências anteriores: somente sucesso ou
+quota incompleta com integridade e conciliação permitem liberação. Preparação,
+identidade, coleta, exportação, reinício/OOM, integridade ou conciliação falhos
+bloqueiam a sequência. Após exportação, parar somente recursos de propriedade
+comprovada; preservar contêineres, volumes e evidências. Nenhum retry automático.
+
+Interpretação fixada antes dessas oito tentativas: v1.1 incompleta em 60 s e completa
+em 120 s indica sensibilidade à política, compatível com demanda nominal maior que
+o ritmo observado em 60 s, sem causalidade exclusiva. Ambas completas em 120 s
+com conciliação tornam essa política candidata à preparação comum, sem aprovar
+estabilidade ou a matriz. Divergências entre repetições são variabilidade a relatar;
+erros, inconsistência ou perda de progresso exigem investigação. Duas observações
+por condição são exploratórias, e amostras de 1 s não são repetições independentes.
+Não declarar significância, equivalência, ausência de vazamentos ou deadlocks.
+Uma nova comparação completa exige decisão posterior; não está preparada aqui.
 
 ### 30.6 Estado funcional do incremento I
 

@@ -5,7 +5,9 @@ Piloto, dois controles e novo ABBA válido preservados. A matriz contemporânea
 concluiu dez repetições mixed/4 (cinco por versão), mas parou no primeiro warm-up
 v1.1 mixed/12, antes da medição. A única verificação manual limitada ao warm-up
 reproduziu quota incompleta. Os launchers estão encerrados; células de 12 usuários
-bloqueadas, sem nova tentativa ou retomada automática.
+bloqueadas na matriz original, sem repetição ou retomada automática. Uma campanha
+separada de sensibilidade à política de warm-up foi autorizada conforme §30.5;
+preparação sem carga e revisão individual antecedem as oito tentativas manuais.
 
 ## 1. Referência e objetivo
 
@@ -212,8 +214,9 @@ A regra prévia de falha equivalente mantém 12 usuários bloqueados. Nenhuma re
 válida foi substituída ou promovida a outra campanha. Não repetir o launcher.
 A proposta antiga de doze diagnósticos permanece inativa.
 
-Decisão pendente: preservar o protocolo atual e registrar o gate de 12 usuários
-não atendido, mantendo a comparação incompleta; ou autorizar uma revisão específica
-e simétrica do protocolo em campanha separada para buscar a matriz completa.
-Esses resultados não autorizam aumentar recursos, estender duração, reduzir quota
-ou otimizar a aplicação. Evidências e limites em `benchmarks/V11_REVIEW.md`.
+Decisão posterior autorizada: preparar uma campanha separada de sensibilidade
+60/120 s, duas observações por versão/duração, somente warm-up, na ordem de §30.5.
+Essa autorização não amplia nem retoma a matriz original. Preserva recursos,
+aplicação, dataset e quota; altera explicitamente duração e ritmo de admissão.
+Não prepara uma nova matriz oficial. Evidências, interpretação e bloqueios em
+`benchmarks/V11_REVIEW.md`; a proposta antiga de doze diagnósticos segue inativa.

@@ -10,7 +10,92 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Estado operacional atual — verificação encerrada; 12 usuários bloqueados
+## Campanha separada — sensibilidade à política de warm-up
+
+Autorizada após a revisão documental `61543b8`, preservando as dez repetições
+mixed/4 válidas e as duas interrupções v1.1/12. Os launchers anteriores permanecem
+encerrados; a proposta antiga de doze diagnósticos continua inativa. A matriz
+original de seis células permanece incompleta e bloqueada em 12 usuários.
+
+Protocolo: `warmup-policy-sensitivity-v1`. Pacote reservado:
+`results/warmup-sensitivity-win9445-review-01`. Revisões individuais novas:
+`results/warmup-sensitivity-win9445-reviews-01`. A existência de `ready.json`
+íntegro e concordante com runner/coordenador é obrigatória; código implementado
+não significa pacote pronto, warm-up válido ou release concluída.
+
+| Ordem | Versão | Admissão | Tentativa da condição | Destino em `results/` |
+|---|---|---|---|---|
+| 1 | v1.0 | 60 s | 1 | `warmup-sensitivity-win9445-01-01-v10-60s` |
+| 2 | v1.1 | 120 s | 1 | `warmup-sensitivity-win9445-01-02-v11-120s` |
+| 3 | v1.1 | 60 s | 1 | `warmup-sensitivity-win9445-01-03-v11-60s` |
+| 4 | v1.0 | 120 s | 1 | `warmup-sensitivity-win9445-01-04-v10-120s` |
+| 5 | v1.0 | 120 s | 2 | `warmup-sensitivity-win9445-01-05-v10-120s` |
+| 6 | v1.1 | 60 s | 2 | `warmup-sensitivity-win9445-01-06-v11-60s` |
+| 7 | v1.1 | 120 s | 2 | `warmup-sensitivity-win9445-01-07-v11-120s` |
+| 8 | v1.0 | 60 s | 2 | `warmup-sensitivity-win9445-01-08-v10-60s` |
+
+Projetos isolados `fulfillflow-sensitivity-win9445-01-01` a `-08`, portas locais
+18041 a 18048. Ordem fixa, não randomizada, sem eliminação de variação temporal.
+Tentativas históricas não substituem condições. Não acrescentar tentativas ou
+selecionar apenas sucessos. Os 120 s foram escolhidos após conhecer as falhas
+anteriores: variam duração e ritmo nominal (86/s em 60 s; 43/s em 120 s), com
+quota idêntica de 430 por usuário/5.160 total. O piso conjunto é 52 minutos de
+estabilização/admissão, além de preparação, drain, exportação e revisões.
+
+`scripts/Invoke-WarmupSensitivity.ps1` exige `-Attempt N`, `-PlanOnly` ou
+`-PrepareOnly`; executar sem opção é erro. Cada chamada de execução faz somente
+uma tentativa, bloqueante e independente do diretório corrente. Usar exclusivamente
+o PowerShell verificado em
+`C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
+Comandos de carga são liberados individualmente após prontidão e revisão; não
+reexecutar comandos encerrados. A preparação do pacote verifica fontes, imagens,
+dataset, host e Compose sem carga; cada chamada manual prepara e verifica os bancos
+limpos antes dos 300 s de estabilização e da admissão. Divergências bloqueiam, sem
+atualizar expectativas. Nenhuma janela de medição é executada.
+
+Os manifests de preparação conservam o formato histórico de 60 s para os probes
+das fontes congeladas. Os manifests executáveis têm protocolo novo explícito;
+somente protocolo, duração e extensão equivalente do timeout de supervisão podem
+diferir. O loadgen derivado de cada parent usa os mesmos três arquivos revisados,
+com inventário completo e dependências idênticas às respectivas imagens originais.
+O override Compose altera apenas a imagem do loadgen. Aplicações, fontes históricas,
+recursos, workers/pools, logs, request/drain, coortes e dataset não mudam.
+
+O artefato final `warmup-progress.json` registra contadores por usuário, requisições
+pendentes e código controlado da causa nas imagens novas. Verificar os prefixos de
+eventos e efeitos esperados, incluindo estados com número ímpar, par ou zero de
+aplicações. O total agregado sozinho não aprova o warm-up. `warmup_valid` e
+`observation_integrity_verified` são independentes; `valid=false`,
+`matrix_eligible=false` e `measurement_executed=false` são permanentes neste modo.
+O diretório `.partial` nunca é promovido a uma repetição válida da matriz.
+
+Após exportar diagnósticos, parar apenas os contêineres cuja propriedade foi
+conferida; preservar os contêineres, volumes e dados para inspeção. A próxima
+condição exige revisão explícita e checksums intactos. Somente quota incompleta
+com integridade e conciliação confirmadas permite seguir para a condição seguinte
+planejada, com saída não zero e warm-up inválido preservados. Falhas de preparação,
+identidade, coleta, exportação, integridade, conciliação, reinícios ou OOM bloqueiam.
+A revisão não dispara carga. Não repetir até passar, nem repor tentativa inválida.
+
+Interpretação prévia: v1.1 incompleta em 60 s/completa em 120 s indica sensibilidade
+à política, compatível com exigência de ingestão acima do ritmo observado em 60 s;
+não estabelece causa exclusiva. Ambas completas em 120 s com conciliação tornam a
+política candidata à preparação comum, sem estabilidade estatística ou aprovação
+da matriz. Divergências entre repetições devem ser relatadas; erros, inconsistência
+ou perda observável de progresso exigem investigação antes de ampliar a campanha.
+Duas observações por condição não sustentam significância ou equivalência, e
+amostras de 1 s não são repetições independentes. Ausência de erros/OOM/crescimento
+em dois minutos não exclui vazamentos ou deadlocks. Não há consultas de deadlocks,
+instrumentação nova ou ensaio prolongado. Operacionalmente, os resultados orientam
+a política e o custo da preparação; não fundamentam promessas de capacidade ou SLA.
+
+A cópia independente das evidências continua sem confirmação; nenhuma transferência
+externa está autorizada. A validação sem carga do conferidor sobre o PostgreSQL
+preservado e a conferência dos hashes ficam em
+`results/sensitivity-preparation-audit-01`; são validações da ferramenta, não novas
+tentativas nem recuperação da mensagem interna do Locust histórico.
+
+## Verificação anterior encerrada — 12 usuários bloqueados na matriz original
 
 A verificação `reviewed-warmup-mixed-12-win9445-01-w1-v11` foi executada manualmente
 e encerrada com falha equivalente à anterior, sem measurement. O runner corrigido

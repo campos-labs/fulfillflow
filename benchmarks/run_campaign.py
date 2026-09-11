@@ -60,6 +60,7 @@ from benchmarks.database_contract import (
 from benchmarks.host_probe import HostProbe
 from benchmarks.phase_diagnostics import phase_failure, warmup_quota_evidence
 from benchmarks.semantic import normalize_frozen_payload, validate_semantic_document
+from benchmarks.warmup_sensitivity import PROTOCOL, SensitivityManifest, load_sensitivity_campaign
 
 ProcessPhase = Literal["warmup", "measurement"]
 _SENSITIVE_ARGUMENT = re.compile(r"(?i)(://|password|secret|signature|raw[_-]?body|dsn)")
@@ -138,6 +139,7 @@ def main() -> int:
     parser.add_argument("--results-directory", type=Path)
     parser.add_argument("--application-source", type=Path)
     parser.add_argument("--diagnostic-warmup-only", action="store_true")
+    parser.add_argument("--warmup-sensitivity", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
@@ -145,7 +147,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.validate_only and args.execute:
         parser.error("choose either --validate-only or --execute")
-    bundle = load_campaign(args.manifest.resolve())
+    if args.warmup_sensitivity and args.diagnostic_warmup_only:
+        parser.error("choose one diagnostic protocol")
+    loader = load_sensitivity_campaign if args.warmup_sensitivity else load_campaign
+    bundle = loader(args.manifest.resolve())
     if not args.execute:
         _print_validation(bundle)
         return 0
@@ -183,6 +188,14 @@ def _execute(
     application_source: Path | None = None,
     diagnostic_warmup_only: bool = False,
 ) -> int:
+    sensitivity = isinstance(bundle.manifest, SensitivityManifest)
+    mode = (
+        PROTOCOL
+        if sensitivity
+        else "diagnostic_warmup_only"
+        if diagnostic_warmup_only
+        else "campaign"
+    )
     if diagnostic_warmup_only:
         _validate_warmup_diagnostic(bundle)
     runner_root = Path(__file__).resolve().parents[1]
@@ -217,7 +230,7 @@ def _execute(
             "campaign": bundle.manifest.name,
             "complete": False,
             "started_at": _utc_now(),
-            "mode": "diagnostic_warmup_only" if diagnostic_warmup_only else "campaign",
+            "mode": mode,
         },
     )
     completed_directories: list[Path] = []
@@ -279,7 +292,7 @@ def _execute(
                 stabilization = _stabilize(bundle.manifest.stabilization_seconds)
                 preflight_metadata: dict[str, object] = {
                     "valid": False,
-                    "mode": "diagnostic_warmup_only" if diagnostic_warmup_only else "campaign",
+                    "mode": mode,
                     "official": bundle.manifest.official,
                     "host_identity": host_identity,
                     "stabilization": stabilization,
@@ -293,6 +306,23 @@ def _execute(
                     raise
                 preflight_metadata["host_state"] = host_state
                 _write_json(partial_directory / "metadata.json", preflight_metadata)
+                if sensitivity:
+                    from benchmarks.sensitivity_result import execute_warmup_observation
+
+                    result = execute_warmup_observation(
+                        bundle,
+                        load,
+                        base_url,
+                        observed,
+                        database,
+                        runtime_manifest,
+                        partial_directory,
+                        initial,
+                        preflight_metadata,
+                    )
+                    _write_checksums(partial_directory)
+                    _write_checksums(results_directory)
+                    return result
                 warmup = _run_phase(
                     bundle,
                     load,
@@ -535,6 +565,10 @@ def _run_phase(
         response_file=f"{container_directory}/response_codes.csv",
         operational_file=f"{container_directory}/operational_results.http.csv",
     )
+    if isinstance(bundle.manifest, SensitivityManifest):
+        if phase != "warmup":
+            raise CampaignExecutionError("sensitivity protocol forbids measurement")
+        command[2:2] = ["--env", f"BENCHMARK_WARMUP_SENSITIVITY={PROTOCOL}"]
     process: ManagedProcess | None = None
     sampler: ResourceSampler | None = None
     destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
@@ -934,17 +968,36 @@ def _verify_warmup(
     database: DatabaseProbe,
     initial: DatabaseSnapshot,
     after: DatabaseSnapshot,
+    *,
+    applied_by_user: tuple[int, ...] | None = None,
 ) -> LogicalDatabaseIdentity:
+    if applied_by_user is not None and (
+        not isinstance(bundle.manifest, SensitivityManifest)
+        or len(applied_by_user) != load.users
+        or any(type(count) is not int or not 0 <= count <= 430 for count in applied_by_user)
+    ):
+        raise CampaignExecutionError("partial quota requires the explicit sensitivity protocol")
+    quotas = applied_by_user or (bundle.manifest.warmup_quota_per_shipment,) * load.users
+    expected_delta = sum(quotas)
     if isinstance(database, SplitDatabaseProbe):
         database.reconcile()
         if (
             after.auxiliary_counts["core_receipts"] - initial.auxiliary_counts["core_receipts"]
-            != load.users * bundle.manifest.warmup_quota_per_shipment
+            != expected_delta
         ):
             raise CampaignExecutionError("warm-up receipt delta differs from fixed quota")
     active = balanced_active_slots(bundle.warmup, load.users)
     quota = bundle.manifest.warmup_quota_per_shipment
     expected_events = _expected_warmup_events(bundle, load, active)
+    if applied_by_user is not None:
+        admitted_ids = {
+            deterministic_event_id(bundle.manifest.profile, load.name, "warmup", slot.slot_id, seq)
+            for slot, count in zip(active, quotas, strict=True)
+            for seq in range(1, count + 1)
+        }
+        expected_events = {
+            key: value for key, value in expected_events.items() if key in admitted_ids
+        }
     observed_events = database.event_observations(sorted(expected_events))
     if set(observed_events) != set(expected_events):
         raise CampaignExecutionError("warm-up did not persist its exact deterministic event quota")
@@ -960,7 +1013,6 @@ def _verify_warmup(
         or len({item.notification_id for item in observed_events.values()}) != len(observed_events)
     ):
         raise CampaignExecutionError("warm-up event persistence identities are not one-to-one")
-    expected_delta = load.users * quota
     for table in ("carrier_event_inbox", "tracking_events", "notifications"):
         if after.counts[table] - initial.counts[table] != expected_delta:
             raise CampaignExecutionError(f"warm-up {table} delta does not match the fixed quota")
@@ -972,10 +1024,14 @@ def _verify_warmup(
     all_slots = (*bundle.warmup, *bundle.measurement)
     states = database.cohort_states([str(item.shipment_id) for item in all_slots])
     active_by_id = {str(item.shipment_id): item for item in active}
+    counts_by_id = {
+        str(slot.shipment_id): count for slot, count in zip(active, quotas, strict=True)
+    }
     for slot in bundle.warmup:
         state = states.get(str(slot.shipment_id))
         active_slot = active_by_id.get(str(slot.shipment_id))
-        if active_slot is None:
+        quota = counts_by_id.get(str(slot.shipment_id), 0)
+        if active_slot is None or quota == 0:
             expected_state = _initial_shipment_state(bundle, str(slot.shipment_id))
             if state != expected_state:
                 raise CampaignExecutionError("warm-up touched an inactive warm-up Shipment")
@@ -991,7 +1047,7 @@ def _verify_warmup(
             microseconds=quota * bundle.manifest.occurred_at_step_microseconds
         )
         expected_logical = (
-            active_slot.initial_status,
+            cycle_target_status(active_slot.initial_status, quota),
             last_occurred.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             last_event_id,
         )
@@ -1010,7 +1066,7 @@ def _verify_warmup(
     seeded_counts = _seeded_event_counts(bundle)
     observed_counts = database.shipment_event_counts([str(item.shipment_id) for item in all_slots])
     expected_counts = {
-        shipment_id: count + (quota if shipment_id in active_by_id else 0)
+        shipment_id: count + counts_by_id.get(shipment_id, 0)
         for shipment_id, count in seeded_counts.items()
         if shipment_id in {str(item.shipment_id) for item in all_slots}
     }
@@ -1026,6 +1082,7 @@ def _verify_warmup(
                     "status_event_received_at",
                     "status_external_event_id",
                     "updated_at",
+                    *({"status"} if applied_by_user is not None else set()),
                 }
             )
             for slot in active
@@ -1504,9 +1561,11 @@ def _print_validation(bundle: CampaignBundle) -> None:
                 "loads": [item.model_dump(mode="json") for item in manifest.loads],
                 "repetitions": manifest.repetitions,
                 "warmup_processes": 1,
-                "measurement_processes": 1,
+                "measurement_processes": 0 if isinstance(manifest, SensitivityManifest) else 1,
                 "warmup_seconds": manifest.warmup_seconds,
-                "measurement_seconds": manifest.measurement_seconds,
+                "measurement_seconds": 0
+                if isinstance(manifest, SensitivityManifest)
+                else manifest.measurement_seconds,
                 "warmup_quota_per_shipment": manifest.warmup_quota_per_shipment,
                 "warmup_cohort": len(bundle.warmup),
                 "measurement_cohort": len(bundle.measurement),

@@ -241,7 +241,7 @@ class InternalTimeouts(StrictModel):
     tracking_seconds: PositiveFloat
 
 
-class CampaignManifest(StrictModel):
+class CampaignContract(StrictModel):
     """Complete protocol; host-specific values are mandatory only in an actual file."""
 
     schema_version: Literal[1, 2] = 1
@@ -252,7 +252,7 @@ class CampaignManifest(StrictModel):
     profile: Literal["timeline", "ingestion", "mixed"]
     loads: tuple[LoadLevel, ...] = Field(min_length=1)
     workers: Literal[1]
-    warmup_seconds: Literal[60]
+    warmup_seconds: Literal[60, 120]
     measurement_seconds: Literal[300]
     stabilization_seconds: float = Field(ge=0, allow_inf_nan=False)
     repetitions: PositiveInt
@@ -365,6 +365,12 @@ class CampaignManifest(StrictModel):
         return self
 
 
+class CampaignManifest(CampaignContract):
+    """Historical entry point: admission remains restricted to exactly 60 seconds."""
+
+    warmup_seconds: Literal[60]
+
+
 class CohortSlot(StrictModel):
     slot_id: str = Field(min_length=1)
     shipment_id: UUID
@@ -383,7 +389,7 @@ class TimelineSlot(StrictModel):
 
 @dataclass(frozen=True, slots=True)
 class CampaignBundle:
-    manifest: CampaignManifest
+    manifest: CampaignContract
     warmup: tuple[CohortSlot, ...]
     measurement: tuple[CohortSlot, ...]
     timeline: tuple[TimelineSlot, ...]
@@ -395,6 +401,11 @@ class CampaignBundle:
 def load_campaign(path: Path) -> CampaignBundle:
     """Load one campaign and cross-check its referenced frozen dataset cohorts."""
     manifest = CampaignManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    return load_validated_bundle(path, manifest)
+
+
+def load_validated_bundle(path: Path, manifest: CampaignContract) -> CampaignBundle:
+    """Authenticate all dataset/cohort contracts after explicit protocol validation."""
     dataset_path = Path(manifest.cohorts.dataset_manifest)
     if not dataset_path.is_absolute():
         dataset_path = (path.parent / dataset_path).resolve()
@@ -431,7 +442,7 @@ def load_campaign(path: Path) -> CampaignBundle:
 
 
 def _validate_cohorts(
-    manifest: CampaignManifest,
+    manifest: CampaignContract,
     warmup: tuple[CohortSlot, ...],
     measurement: tuple[CohortSlot, ...],
     timeline: tuple[TimelineSlot, ...],

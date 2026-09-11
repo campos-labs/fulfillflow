@@ -95,6 +95,7 @@ class CampaignRuntime:
         self.phase: Phase = "barrier"
         self.phase_started_at: float | None = None
         self.invalid_reason: str | None = None
+        self.failure_code: str | None = None
         self._lock = threading.RLock()
         self._registered = 0
         self._warmup_completed: dict[int, int] = {}
@@ -168,11 +169,12 @@ class CampaignRuntime:
         with self._lock:
             return self._in_flight
 
-    def invalidate(self, reason: str) -> None:
+    def invalidate(self, reason: str, *, code: str = "request_or_runtime_failure") -> None:
         """Stop the mutable sequence after the first ambiguous result."""
         with self._lock:
             if self.invalid_reason is None:
                 self.invalid_reason = reason
+                self.failure_code = code
             self.phase = "invalid"
 
     def stop_new_requests(self) -> None:
@@ -291,12 +293,13 @@ class FulfillFlowBenchmarkUser(HttpUser):
             return
         assert runtime.phase_started_at is not None
         # The final interval is admission headroom, not a response deadline:
-        # requests admitted before 60 seconds may finish during the bounded drain.
+        # requests admitted before the deadline may finish during the bounded drain.
         scheduled = runtime.phase_started_at + _warmup_scheduled_offset(
             completed,
             quota,
             runtime.load.users,
             self.assignment.index,
+            runtime.bundle.manifest.warmup_seconds,
         )
         remaining = scheduled - time.monotonic()
         if remaining > 0:
@@ -424,12 +427,15 @@ def _warmup_scheduled_offset(
     quota: int,
     user_count: int,
     slot_rank: int,
+    admission_seconds: int = 60,
 ) -> float:
-    """Assign each campaign event a unique deterministic instant inside 60 seconds."""
+    """Preserve the historical schedule; scale explicitly for the sensitivity protocol."""
+    if admission_seconds not in {60, 120}:
+        raise ValueError("unsupported admission duration")
     if quota <= 0 or user_count <= 0 or not 0 <= slot_rank < user_count:
         raise ValueError("warm-up schedule inputs are invalid")
     global_index = (sequence_index * user_count) + slot_rank
-    return (global_index + 1) * 60 / ((user_count * quota) + 1)
+    return (global_index + 1) * admission_seconds / ((user_count * quota) + 1)
 
 
 def _balanced_active_slots(cohort: tuple[CohortSlot, ...], users: int) -> tuple[CohortSlot, ...]:
@@ -547,7 +553,15 @@ def _initialize(environment: Environment, **_kwargs: object) -> None:
     manifest_path = os.environ.get("BENCHMARK_CAMPAIGN_MANIFEST")
     if not manifest_path:
         raise RuntimeError("BENCHMARK_CAMPAIGN_MANIFEST is required")
-    bundle = load_campaign(Path(manifest_path))
+    sensitivity = os.environ.get("BENCHMARK_WARMUP_SENSITIVITY")
+    if sensitivity:
+        from benchmarks.warmup_sensitivity import PROTOCOL, load_sensitivity_campaign
+
+        if sensitivity != PROTOCOL or os.environ.get("BENCHMARK_PHASE") != "warmup":
+            raise RuntimeError("sensitivity permits only its explicit warm-up protocol")
+        bundle = load_sensitivity_campaign(Path(manifest_path))
+    else:
+        bundle = load_campaign(Path(manifest_path))
     process_phase = os.environ.get("BENCHMARK_PHASE")
     if process_phase not in {"warmup", "measurement"}:
         raise RuntimeError("BENCHMARK_PHASE must be warmup or measurement")
@@ -589,11 +603,16 @@ def _coordinate_campaign(environment: Environment, runtime: CampaignRuntime) -> 
     while runtime.in_flight and time.monotonic() < drain_deadline and not runtime.is_invalid:
         gevent.sleep(0.01)
     if runtime.in_flight:
-        runtime.invalidate("request drain timeout expired with requests still in flight")
+        runtime.invalidate(
+            "request drain timeout expired with requests still in flight", code="drain_timeout"
+        )
         _quit_runner(environment, invalid=True)
         return
     if runtime.process_phase == "warmup" and not runtime.warmup_complete:
-        runtime.invalidate("warm-up quota was incomplete at the fixed 60-second boundary")
+        runtime.invalidate(
+            f"warm-up quota was incomplete at the fixed {duration}-second boundary",
+            code="quota_incomplete",
+        )
         _quit_runner(environment, invalid=True)
         return
     runtime.finish()
@@ -631,6 +650,23 @@ def _write_response_artifacts(environment: Environment, **_kwargs: object) -> No
         final_path = Path(response).with_name("locust_final_stats.csv")
         with final_path.open("w", encoding="utf-8", newline="") as stream:
             exporter.requests_csv(csv.writer(stream, lineterminator="\n"))
+        if os.environ.get("BENCHMARK_WARMUP_SENSITIVITY"):
+            runtime = _require_runtime()
+            # Final drained counters only; no request bodies or free-form errors.
+            progress = {
+                "schema_version": 1,
+                "admission_seconds": runtime.bundle.manifest.warmup_seconds,
+                "registered_users": runtime._registered,
+                "in_flight": runtime.in_flight,
+                "failure_code": runtime.failure_code,
+                "warmup_complete": runtime.warmup_complete,
+                "applied_by_user": [
+                    runtime.warmup_completed_for(index) for index in range(runtime._registered)
+                ],
+            }
+            Path(response).with_name("warmup-progress.json").write_text(
+                json.dumps(progress, sort_keys=True) + "\n", encoding="utf-8"
+            )
 
 
 events.init.add_listener(_initialize)  # type: ignore[no-untyped-call]

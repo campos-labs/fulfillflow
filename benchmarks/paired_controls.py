@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from benchmarks.campaign import load_campaign
 from benchmarks.collectors import (
@@ -183,7 +183,20 @@ def candidate_document(step: Step, originals: Mapping[str, dict[str, Any]]) -> d
     return document
 
 
-def verify_source(step: Step) -> None:
+class PreparedApplication(Protocol):
+    """Shared read-only source identity for historical and sensitivity preparation."""
+
+    @property
+    def source(self) -> Path: ...
+
+    @property
+    def candidate(self) -> Path: ...
+
+    @property
+    def version(self) -> Version: ...
+
+
+def verify_source(step: PreparedApplication) -> None:
     source = step.source.resolve()
     if (
         source == ROOT.resolve()
@@ -227,7 +240,7 @@ def sync_source(step: Step, *, check: bool = False) -> None:
     )
 
 
-def environment_for(step: Step, document: Mapping[str, Any]) -> dict[str, str]:
+def environment_for(step: PreparedApplication, document: Mapping[str, Any]) -> dict[str, str]:
     if step.version == "v10":
         environment = _benchmark_environment(document)
     else:
@@ -302,7 +315,11 @@ def image_preflight(step: Step, document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def source_python(
-    step: Step, code: str, *args: str, evidence: Path | None = None, timeout: float = 120
+    step: PreparedApplication,
+    code: str,
+    *args: str,
+    evidence: Path | None = None,
+    timeout: float = 120,
 ) -> dict[str, Any]:
     environment = environment_for(step, read_json(step.candidate))
     completed = _run(
