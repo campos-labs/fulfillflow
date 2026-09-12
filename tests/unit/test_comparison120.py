@@ -345,3 +345,151 @@ def test_host_mismatch_blocks_before_image_derivation(configured, monkeypatch, t
     with pytest.raises(EnvironmentMismatchError):
         comparison.prepare_review({"executable": str(executable), "version": "7"})
     assert not controls.PACKAGE.exists()
+
+
+@pytest.mark.parametrize("defect", [None, "users", "name", "spawn", "protocol"])
+@pytest.mark.parametrize("is_continuation", [False, True])
+def test_real_metadata_allows_second_preparation_only_after_valid_first(
+    configured, monkeypatch, defect, is_continuation
+):
+    from datetime import UTC, datetime
+
+    step = replace(configured[0], continuation=is_continuation)
+    manifest_path = comparison.executable(step)
+    bundle = replace(
+        load_campaign(Path("benchmarks/fixtures/smoke-campaign.json")),
+        manifest=ComparisonManifest.model_validate(controls.read_json(manifest_path)),
+    )
+    monkeypatch.setattr(comparison, "load_comparison_campaign", lambda _: bundle)
+    git = runner.GitProvenance(bundle.manifest.git_sha, "", True, True)
+    host_runner = {"identity": "reviewed-host"}
+    monkeypatch.setattr(comparison, "runner_provenance", lambda _: host_runner)
+    snapshot = SimpleNamespace(label="synthetic", metrics=lambda: {})
+    phase = SimpleNamespace(
+        phase="warmup", started_at=datetime.now(UTC), finished_at=datetime.now(UTC), returncode=0
+    )
+    metadata = runner._metadata(
+        bundle,
+        manifest_path,
+        Path.cwd(),
+        bundle.manifest.loads[0],
+        step.first_repetition,
+        git,
+        SimpleNamespace(checks={}, container_ids={}),
+        snapshot,
+        snapshot,
+        snapshot,
+        git,
+        git,
+        phase,
+        phase,
+        {},
+        {},
+        {},
+        host_runner=host_runner,
+    )
+    assert "loads" not in metadata["protocol_expected"]
+    if defect == "protocol":
+        metadata["protocol_expected"]["warmup_seconds"] = 60
+    elif defect:
+        key = {"users": "users", "name": "name", "spawn": "spawn_rate"}[defect]
+        metadata["load"][key] = "different"
+    first = step.attempt / f"run/mixed-4-users-r{step.first_repetition:02d}"
+    controls.write_report(first / "metadata.json", metadata)
+    controls.write_report(first / "warmup/warmup-progress.json", progress())
+    controls._write_checksums(first)
+    (step.attempt / f"preparation/r{step.first_repetition:02d}").mkdir(parents=True)
+    events = []
+    monkeypatch.setattr(controls, "diagnostics", lambda *_a, **_k: events.append("diagnostics"))
+    monkeypatch.setattr(controls, "cleanup", lambda *_: events.append("cleanup"))
+
+    def reached_next_preparation(_):
+        events.append("prepare-r02")
+        raise controls.ControlError("simulated preparation stop before Docker")
+
+    monkeypatch.setattr(controls, "verify_source", reached_next_preparation)
+    if defect:
+        with pytest.raises(controls.ControlError, match="identity and completion"):
+            controls.prepare_step(step, setup_only=False)
+        assert events == []
+        assert not (step.attempt / f"preparation/r{step.first_repetition + 1:02d}").exists()
+    else:
+        assert controls.prepare_step(step, setup_only=False) == 2
+        assert events == ["diagnostics", "cleanup", "prepare-r02"]
+        assert (step.attempt / f"preparation/r{step.first_repetition + 1:02d}/error.json").exists()
+    controls.verify_checksums(first)
+
+
+def test_preparation_child_error_is_preserved_and_sanitized(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYNTHETIC_TOKEN", "do-not-export")
+    path = tmp_path / "preparation-error.json"
+    child = (
+        "import sys; "
+        "sys.stderr.write('comparison repetition did not pass identity and completion gates; "
+        "token=do-not-export'); sys.exit(2)"
+    )
+    with pytest.raises(runner.CampaignExecutionError, match="subprocess exited 2"):
+        runner._run_preparation([sys.executable, "-c", child], 10, path)
+    report = controls.read_json(path)
+    assert report["process_returncode"] == 2
+    assert report["stage"] == "preparation" and report["phase"] is None
+    assert report["shutdown"] is None
+    assert "identity and completion gates" in report["child_stderr"]
+    assert "do-not-export" not in path.read_text()
+    assert "argv" not in report
+
+
+def test_preparation_primary_and_shutdown_failures_stay_separate(tmp_path, monkeypatch):
+    class Process:
+        def wait(self, _):
+            return 2
+
+        def ensure_stopped(self):
+            raise runner.CampaignExecutionError("simulated teardown failure")
+
+    monkeypatch.setattr(runner, "ManagedProcess", lambda *_a, **_k: Process())
+    path = tmp_path / "preparation-error.json"
+    with pytest.raises(runner.CampaignExecutionError, match="subprocess exited 2"):
+        runner._run_preparation(["simulated"], 10, path)
+    report = controls.read_json(path)
+    assert "exited 2" in report["primary"]["errors"][0]["message"]
+    assert "teardown" in report["shutdown"]["errors"][0]["message"]
+
+
+def test_preparation_timeout_retains_deadline_and_stops_child(tmp_path, monkeypatch):
+    calls = []
+
+    class Process:
+        def wait(self, timeout):
+            calls.append(timeout)
+            raise runner.ProcessTimeoutError("external process exceeded its frozen timeout")
+
+        def ensure_stopped(self):
+            calls.append("stopped")
+
+    monkeypatch.setattr(runner, "ManagedProcess", lambda *_a, **_k: Process())
+    path = tmp_path / "preparation-error.json"
+    with pytest.raises(runner.ProcessTimeoutError):
+        runner._run_preparation(["simulated"], 120, path)
+    assert calls == [120, "stopped"]
+    report = controls.read_json(path)
+    assert report["process_returncode"] is None
+    assert report["primary"]["errors"][0]["type"] == "ProcessTimeoutError"
+
+
+def test_preparation_export_failure_retains_original_cause(tmp_path, monkeypatch):
+    class Process:
+        def wait(self, _):
+            return 2
+
+        def ensure_stopped(self):
+            pass
+
+    def fail_export(*_):
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(runner, "ManagedProcess", lambda *_a, **_k: Process())
+    monkeypatch.setattr(runner, "_write_json", fail_export)
+    with pytest.raises(runner.DiagnosticExportError, match="diagnostic export failed") as caught:
+        runner._run_preparation(["simulated"], 120, tmp_path / "error.json")
+    assert "subprocess exited 2" in str(caught.value.__cause__)

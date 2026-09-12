@@ -10,7 +10,63 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Caminho atual — comparação simétrica de 120 s, aguardando revisão
+## Caminho atual — comparação de 120 s interrompida na coordenação
+
+A liberação do commit `02fe942b597f2e85e1bd2df5b9a3be6507561257` teve CI
+aprovada e foi executada manualmente. O primeiro bloco parou antes do segundo
+warm-up: r01 v1.0 mixed/4 tem warm-up e measurement completos, 186,705826 req/s,
+p95 36 ms e zero erros HTTP; r02 contém somente o marcador parcial. Nenhum
+bloco v1.1 começou. Preservar todos esses arquivos e suas classificações.
+
+A diferença comprovada é exclusivamente `loads` na comparação de
+`protocol_expected`; o runner registra a carga em `load`. O verificador passa
+a comparar o protocolo sem `loads` e a validar nome, usuários e spawn rate em
+`load` separadamente. O stderr da preparação antes descartado será preservado
+sanitizado em `preparation-error.json`, com código de saída, horário, duração,
+erro primário e encerramento separados. Não recuperar retrospectivamente uma
+mensagem que não foi exportada. Esta falha não demonstra defeito no PostgreSQL
+nem insuficiência de capacidade da aplicação.
+
+**A entrada `scripts/Invoke-Comparison120.ps1` e sua liberação 01 estão encerradas;
+não repetir.** A correção tem identidade nova e ainda não possui commit/CI ou
+liberação de continuação. O pacote pré-commit e a liberação anterior permanecem
+intactos. A revisão da correção e o mapa proposto da continuação ficam em
+`results/comparison120-coordination-review-01`.
+
+A continuação implementada referencia r01 sob seu runner original e executa
+somente r02–r05 de v1.0 mixed/4 e os onze blocos posteriores. São **59 medições
+novas**, piso **11 h 48 min**, além de preparação, verificações, drain e exportação.
+A r02 parcial anterior permanece encerrada e intacta. Não se reduz o manifest
+a quatro repetições nem se copia r01 para os destinos novos.
+
+Pacote para revisão: `results/comparison120-continuation-review-02/review.json`.
+Entrada nova: `scripts/Invoke-Comparison120Continuation.ps1`, **não liberada**.
+O inventário contém doze destinos com sufixo `-continuation-01`; projetos
+`fulfillflow-comparison120-continuation-01-v10` e `-v11`. O journal novo será
+`results/comparison120-continuation-execution-02`; a liberação pós-revisão/CI será
+`results/comparison120-continuation-release-02`, sem alterar o pacote pré-commit.
+
+O contrato operacional `comparison120-explicit-continuation-v1` exige manifest,
+destino e referência externa exatos. Resumo do primeiro bloco: r01 original mais
+quatro diretórios novos, com as duas identidades de runner explicitadas. O modo
+histórico não aceita o parâmetro de continuação. Prazos e protocolo de medição
+não mudam; a alteração dos manifests é somente o nome do projeto isolado.
+Falhas interrompem os 59 itens sem retry; não existe retomada genérica.
+A revisão 01 foi preservada e substituída pela 02 antes de qualquer execução;
+a revisão final acrescentou a verificação do checkout antes da limpeza antiga.
+
+O projeto antigo ainda pode conter containers de aplicação/banco ativos e
+containers de migração encerrados. A preparação apenas os identifica. A entrada
+manual, após liberação, confere `owned.json` e IDs do inventário selado, exporta
+logs no journal novo e remove exclusivamente esse projeto antes de verificar a
+admissão dinâmica do host. Containers divergentes bloqueiam essa operação.
+
+Se a exportação de `preparation-error.json` falhar, o relatório completo
+sanitizado fica disponível na exceção e no stderr capturado pelo coordenador,
+incluindo os erros de processo, encerramento e exportação separadamente.
+A correção não reconstrói a mensagem descartada na tentativa histórica.
+
+
 
 A sensibilidade foi executada e revisada integralmente:
 
@@ -34,17 +90,16 @@ equivalência ou estabilidade. Os 60 s continuam requisito histórico, sem renom
 como SLA. Nenhuma medição anterior será incorporada à nova matriz.
 
 Protocolo: `symmetric-warmup120-comparison-v1`. Pacote:
-`results/reviewed-comparison120-win9445-review-01`. Entrada operacional atual:
-`scripts/Invoke-Comparison120.ps1`, **não liberada para carga** antes da revisão
-independente, autorização do usuário, commit final e CI correspondente.
+`results/reviewed-comparison120-win9445-review-01`. A entrada original
+`scripts/Invoke-Comparison120.ps1` foi liberada após revisão e CI e está agora
+encerrada pela interrupção descrita acima.
 
 O primeiro pré-requisito de preparação foi bloqueado pela indisponibilidade do
 engine Linux (`sailor-ingest.sock`); o registro está preservado em
 `results/comparison120-code-review-01`. Após reinício manual do Desktop, o engine
 29.7.2 e a identidade exigida do host foram conferidos novamente, sem mudança das
 expectativas. Esse incidente ocorreu antes da derivação de imagens e não constitui
-uma tentativa da campanha. O pacote atual continua bloqueado para carga até a
-revisão e a liberação explícitas descritas acima.
+uma tentativa da campanha. Esse pacote foi posteriormente liberado e sua execução está encerrada.
 
 | Célula | Primeiro bloco | Segundo bloco |
 |---|---|---|
@@ -72,7 +127,7 @@ validade integral. **Qualquer falha para**, inclusive quota incompleta; não se
 aplica a exceção da sensibilidade. Não há reposição ou retomada implícita.
 
 O pacote pré-commit registra hashes dos arquivos em revisão e o SHA de partida.
-A liberação futura será um artefato separado em `results/comparison120-win9445-release-01`,
+A liberação original foi registrada separadamente em `results/comparison120-win9445-release-01`,
 vinculado ao commit limpo e à sua CI, sem reescrever o pacote de revisão. A cópia
 independente das evidências continua sem confirmação; não há transferência externa.
 

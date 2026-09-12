@@ -11,6 +11,14 @@ from pathlib import Path
 from benchmarks.collectors import EnvironmentMismatchError
 
 
+class DiagnosticExportError(RuntimeError):
+    """Retain all sanitized diagnostic branches when the destination cannot be written."""
+
+    def __init__(self, report: dict[str, object]) -> None:
+        super().__init__("preparation diagnostic export failed")
+        self.report = report
+
+
 def sanitize(value: str) -> str:
     for key, secret in os.environ.items():
         if secret and re.search(r"password|secret|token|signature|database_url", key, re.I):
@@ -45,6 +53,8 @@ def error_report(error: BaseException) -> dict[str, object]:
             item["message"] = sanitize(str(current))
         if isinstance(current, EnvironmentMismatchError):
             item["checks"] = json.loads(sanitize(json.dumps(current.report)))
+        if isinstance(current, DiagnosticExportError):
+            item["diagnostic"] = current.report
         chain.append(item)
         current = current.__cause__ or (
             current.__context__ if not current.__suppress_context__ else None

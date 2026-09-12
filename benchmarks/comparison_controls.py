@@ -41,6 +41,7 @@ def inputs() -> dict[str, str]:
         *ROOT.glob("tests/unit/test_*benchmark*.py"),
         *ROOT.glob("tests/unit/test_*comparison*.py"),
         ROOT / "scripts/Invoke-Comparison120.ps1",
+        ROOT / "scripts/Invoke-Comparison120Continuation.ps1",
         ROOT / "scripts/prepare_paired_control.py",
         ROOT / "uv.lock",
         ROOT / "pyproject.toml",
@@ -142,18 +143,29 @@ def seal_execution(ci_run: str, approval_reference: str) -> None:
     _write_checksums(RELEASE)
 
 
-def verify_repetition(step: controls.Step, directory: Path) -> None:
+def verify_repetition(
+    step: controls.Step,
+    directory: Path,
+    *,
+    recorded_runner: dict[str, Any] | None = None,
+    manifest_path: Path | None = None,
+) -> None:
     controls.verify_checksums(directory)
     metadata = controls.read_json(directory / "metadata.json")
-    bundle = load_comparison_campaign(executable(step))
+    manifest_path = manifest_path or executable(step)
+    bundle = load_comparison_campaign(manifest_path)
     if (
         metadata.get("valid") is not True
         or metadata.get("official") is not True
         or metadata.get("campaign") != step.name
         or metadata.get("git", {}).get("sha") != controls.REVISIONS[step.version]
-        or metadata.get("host_runner") != runner_provenance(ROOT)
-        or metadata.get("manifest_sha256") != _sha256(executable(step))
-        or metadata.get("protocol_expected") != bundle.manifest.model_dump(mode="json")
+        or metadata.get("host_runner") != (recorded_runner or runner_provenance(ROOT))
+        or metadata.get("manifest_sha256") != _sha256(manifest_path)
+        or directory.name
+        != f"{step.profile}-{step.users}-users-r{metadata.get('repetition', 0):02d}"
+        or metadata.get("protocol_expected")
+        != bundle.manifest.model_dump(mode="json", exclude={"loads"})
+        or metadata.get("load") != bundle.manifest.loads[0].model_dump(mode="json")
         or metadata.get("warmup", {}).get("exit_code") != 0
         or metadata.get("measurement", {}).get("exit_code") != 0
         or list(directory.rglob(".incomplete.json"))
@@ -168,9 +180,15 @@ def verify_repetition(step: controls.Step, directory: Path) -> None:
 
 def verify_block(step: controls.Step) -> None:
     run = step.attempt / "run"
-    expected = {f"{step.profile}-{step.users}-users-r{n:02d}" for n in range(1, 6)}
+    expected = {
+        f"{step.profile}-{step.users}-users-r{n:02d}" for n in range(step.first_repetition, 6)
+    }
     if {p.name for p in run.iterdir() if p.is_dir()} != expected:
         raise ControlError("comparison requires exactly five complete repetitions")
+    if step.continuation:
+        from benchmarks.comparison_continuation import verify_segment
+
+        verify_segment(step)
     for name in sorted(expected):
         verify_repetition(step, run / name)
     if not (run / "summary.csv").is_file() or list(run.rglob(".incomplete.json")):

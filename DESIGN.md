@@ -2009,6 +2009,36 @@ isolados de propriedade comprovada. Não executar carga na preparação. O pacot
 bloqueado até revisão independente, liberação do usuário, commit final, sua CI e
 conferência final da identidade; documentos e evidências publicados ficam intactos.
 
+A continuação explicitamente autorizada usa o contrato operacional
+`comparison120-explicit-continuation-v1`. Mantém os manifests de cinco repetições;
+a única alteração neles é o projeto Compose isolado. O primeiro segmento novo
+executa r02–r05 e referencia r01 no diretório original, vinculada aos checksums
+aprovados, manifest original e runner `02fe942`. Nenhuma cópia ou alteração de
+metadados antigos é permitida. Os onze blocos seguintes executam r01–r05, na
+ordem já fixada: 59 medições novas, piso 42.480 s (11 h 48 min).
+
+O runner só aceita o modo explícito de continuação com pacote liberado, manifest
+e destino exatos. O resumo do primeiro bloco reúne quatro diretórios novos e a
+referência externa autenticada, sem declarar que foram medidos pelo mesmo SHA
+da ferramenta. Identidades da aplicação e loadgen permanecem congeladas; runner,
+coordenador e pacote novo são registrados separadamente. Cada preparação revisa
+a repetição anterior nova; a r01 original é verificada por sua identidade aprovada.
+Falha em qualquer segmento encerra o novo journal, sem repetição ou retomada implícita.
+
+A entrada manual nova pode remover somente o projeto anterior v1.0 de propriedade
+comprovada por `owned.json` e pelo inventário de containers selado, depois de
+exportar logs para o journal novo. Nenhum arquivo antigo é escrito. Na preparação
+do pacote, essa remoção não ocorre; host e imagens são inspecionados sem carga.
+Qualquer container divergente bloqueia a remoção. A admissão dinâmica do host é
+repetida após a remoção e antes da carga, mantendo os requisitos originais.
+
+Uma falha de exportação do diagnóstico da preparação preserva em memória o
+relatório sanitizado completo: erro primário, encerramento, stderr do filho,
+código de saída, duração e erro de exportação. O mesmo relatório é emitido no
+stderr capturado pelo coordenador, sem dependência da gravação que falhou.
+Prazos, coleta e cálculos não mudam. O pacote novo aguarda revisão antes do
+commit final e sua CI; a entrada anterior permanece encerrada.
+
 Duas quotas completas em 120 s por versão não demonstram estabilidade, equivalência,
 superioridade, teto físico universal, causa exclusiva ou ausência geral de defeitos.
 Os 60 s eram requisito do protocolo original, não um SLA. Nenhuma mudança funcional,

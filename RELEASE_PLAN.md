@@ -7,8 +7,10 @@ v1.1 mixed/12, antes da medição. A única verificação manual limitada ao war
 reproduziu quota incompleta. Os launchers estão encerrados; células de 12 usuários
 bloqueadas na matriz original, sem repetição ou retomada automática. Uma campanha
 separada de sensibilidade à política de warm-up foi concluída conforme §30.5.
-A decisão atual prepara uma nova comparação simétrica de 120 s; aguarda revisão
-independente antes do commit final, CI e liberação da entrada manual.
+A comparação simétrica de 120 s foi liberada em `02fe942` e parou antes do
+segundo warm-up por falha de coordenação, preservando uma medição v1.0 mixed/4
+válida. A correção e o pacote de continuação das 59 medições estão em revisão, sem
+commit final ou liberação de carga.
 
 ## 1. Referência e objetivo
 
@@ -223,7 +225,7 @@ Não prepara uma nova matriz oficial. Evidências, interpretação e bloqueios e
 `benchmarks/V11_REVIEW.md`; a proposta antiga de doze diagnósticos segue inativa.
 
 
-## Nova comparação simétrica de 120 s — preparação para revisão
+## Nova comparação simétrica de 120 s — interrupção de coordenação
 
 A sensibilidade encerrou oito tentativas. v1.0: duas quotas completas em 60 s e
 duas em 120 s. v1.1: 3.677 e 3.674/5.160 em 60 s, duas completas em 120 s.
@@ -240,3 +242,12 @@ da aplicação, dados e observabilidade permanecem congelados. Runner e loadgen 
 identidades próprias. Preparação e testes sem carga antecedem revisão independente,
 commit em `codex/v1.1-tracking`, CI do commit e conferência final do pacote.
 Release pendente; cópia independente das evidências sem confirmação.
+
+
+A execução liberada em `02fe942` preservou r01 v1.0 mixed/4 válida e uma r02
+parcial anterior ao warm-up. O verificador exigia `loads` dentro de
+`protocol_expected`, embora o runner exporte `load` separadamente. Corrigir a
+comparação e o diagnóstico não altera carga ou aplicação. A sequência encerrada
+não será repetida; a continuação implementada exige identidade e vínculo explícitos com
+a medição preservada, sem reescrever seus metadados ou completar artificialmente
+o bloco histórico. Ver `benchmarks/V11_REVIEW.md`.

@@ -33,9 +33,11 @@ A sensibilidade posterior concluiu as oito observações: v1.0 completou ambas a
 quotas em cada política; v1.1 completou as duas de 120 s e ficou em 3.677 e 3.674
 nas de 60 s. A nova comparação simétrica adota 120 s para ambas, alterando duração
 e ritmo de admissão, com aplicação preservada. São 60 medições novas, sem incorporar
-resultados anteriores. Preparação aguarda revisão independente antes do commit
-final e da CI correspondente. Entrada atual: `scripts/Invoke-Comparison120.ps1`,
-**ainda bloqueada para carga**. Estado e destinos no [pacote de revisão](benchmarks/V11_REVIEW.md).
+resultados anteriores. A execução liberada no commit `02fe942` preservou uma medição
+v1.0 mixed/4 válida e parou antes do segundo warm-up por incompatibilidade do
+verificador de metadados. `scripts/Invoke-Comparison120.ps1` está **encerrado; não repetir**.
+O pacote das 59 medições restantes usa `scripts/Invoke-Comparison120Continuation.ps1`,
+ainda sem liberação de carga. Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
 Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
 
 A política efetiva de logs das imagens é preservada. Os settings de logging não

@@ -64,6 +64,11 @@ class Step:
     label: str
     profile: str = "mixed"
     users: int = 4
+    continuation: bool = False
+
+    @property
+    def first_repetition(self) -> int:
+        return 2 if self.continuation and self.number == 1 else 1
 
     @property
     def name(self) -> str:
@@ -86,7 +91,7 @@ class Step:
 
     @property
     def attempt(self) -> Path:
-        return RESULTS / self.name
+        return RESULTS / (self.name + ("-continuation-01" if self.continuation else ""))
 
 
 STEPS: tuple[Step, ...] = (
@@ -359,7 +364,9 @@ def preparation_argv(step: Step, *, setup_only: bool = False) -> list[str]:
             "utf8",
             "-B",
             "-m",
-            "benchmarks.comparison_controls",
+            "benchmarks.comparison_continuation"
+            if step.continuation
+            else "benchmarks.comparison_controls",
             "--prepare-step",
             step.label,
         ]
@@ -531,10 +538,18 @@ def prepare_step(step: Step, *, setup_only: bool) -> int:
     if SERIES in {"official", "comparison120"} and not setup_only:
         evidence.mkdir(parents=True, exist_ok=True)
         previous = sorted(evidence.glob("r[0-9][0-9]"))
-        if len(previous) >= 5:
-            raise ControlError("all five preparation destinations already exist")
+        expected_previous = [
+            f"r{n:02d}" for n in range(step.first_repetition, step.first_repetition + len(previous))
+        ]
+        if [path.name for path in previous] != expected_previous:
+            raise ControlError("preparation sequence contains a gap or unexpected repetition")
+        if len(previous) >= 6 - step.first_repetition:
+            raise ControlError("all planned preparation destinations already exist")
         if previous:
-            completed = step.attempt / f"run/{step.profile}-{step.users}-users-r{len(previous):02d}"
+            previous_number = step.first_repetition + len(previous) - 1
+            completed = (
+                step.attempt / f"run/{step.profile}-{step.users}-users-r{previous_number:02d}"
+            )
             if read_json(completed / "metadata.json").get("valid") is not True:
                 raise ControlError("previous repetition is not valid; preparation cannot retry")
             if SERIES == "comparison120":
@@ -544,7 +559,7 @@ def prepare_step(step: Step, *, setup_only: bool) -> int:
             diagnostics(step, previous[-1] / "diagnostics", stop=False)
             cleanup(step, previous[-1])
         owner_index = evidence / "owned.json"
-        evidence = evidence / f"r{len(previous) + 1:02d}"
+        evidence = evidence / f"r{step.first_repetition + len(previous):02d}"
     evidence.mkdir(parents=True, exist_ok=False)
     try:
         verify_source(step)
@@ -1043,6 +1058,10 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
         "mode": "diagnostic_warmup_only" if SERIES == "warmup" else "campaign",
         "coordinator": coordinator_identity() if SERIES == "warmup" else None,
     }
+    if step.continuation:
+        from benchmarks.comparison_continuation import coordinator_identity as segment_coordinator
+
+        report["coordinator"] = segment_coordinator()
     code = 2
     try:
         verify_source(step)
@@ -1073,6 +1092,7 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 else str(step.candidate),
                 "--execute",
                 *(["--comparison-120"] if SERIES == "comparison120" else []),
+                *(["--comparison-continuation"] if step.continuation else []),
                 *(["--diagnostic-warmup-only"] if SERIES == "warmup" else []),
                 "--confirm-campaign",
                 step.name,
@@ -1100,6 +1120,16 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                     f"process exit {details.get('process_returncode')}; diagnostics: {error_path}",
                     file=sys.stderr,
                 )
+            preparation_errors = sorted((step.attempt / "run").rglob("preparation-error.json"))
+            if preparation_errors:
+                error_path = preparation_errors[-1]
+                details = read_json(error_path)
+                report["preparation_diagnostic"] = str(error_path)
+                print(
+                    f"Runner failed at preparation, process exit "
+                    f"{details.get('process_returncode')}; diagnostics: {error_path}",
+                    file=sys.stderr,
+                )
             raise ControlError(
                 "reviewed runner refused or interrupted the control"
                 if SERIES != "historical"
@@ -1115,7 +1145,7 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                     / f"run/{step.profile}-{step.users}-users-r{number:02d}/metadata.json"
                 ).get("valid")
                 is True
-                for number in range(1, expected_repetitions + 1)
+                for number in range(step.first_repetition, expected_repetitions + 1)
             )
         )
         if not valid or list((step.attempt / "run").rglob(".incomplete.json")):

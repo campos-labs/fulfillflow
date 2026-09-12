@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
 
 from benchmarks.artifact import BENCHMARK_HASH_NAME, BENCHMARK_MANIFEST_NAME
 from benchmarks.campaign import (
@@ -66,6 +66,7 @@ from benchmarks.database_contract import (
     StructuralSchemaIdentity,
 )
 from benchmarks.host_probe import HostProbe
+from benchmarks.operational_errors import DiagnosticExportError, error_report, sanitize
 from benchmarks.phase_diagnostics import phase_failure, warmup_quota_evidence
 from benchmarks.semantic import normalize_frozen_payload, validate_semantic_document
 from benchmarks.warmup_sensitivity import PROTOCOL, SensitivityManifest, load_sensitivity_campaign
@@ -149,6 +150,7 @@ def main() -> int:
     parser.add_argument("--diagnostic-warmup-only", action="store_true")
     parser.add_argument("--warmup-sensitivity", action="store_true")
     parser.add_argument("--comparison-120", action="store_true")
+    parser.add_argument("--comparison-continuation", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
@@ -158,6 +160,8 @@ def main() -> int:
         parser.error("choose either --validate-only or --execute")
     if sum((args.warmup_sensitivity, args.diagnostic_warmup_only, args.comparison_120)) > 1:
         parser.error("choose one explicit protocol")
+    if args.comparison_continuation and not args.comparison_120:
+        parser.error("continuation requires the explicit comparison protocol")
     loader = (
         load_comparison_campaign
         if args.comparison_120
@@ -185,10 +189,16 @@ def main() -> int:
             prepare_command,
             application_source=args.application_source,
             diagnostic_warmup_only=args.diagnostic_warmup_only,
+            comparison_continuation=args.comparison_continuation,
         )
     except KeyboardInterrupt:
         return 130
-    except (CampaignExecutionError, EnvironmentMismatchError, ExternalCommandError) as exc:
+    except (
+        CampaignExecutionError,
+        EnvironmentMismatchError,
+        ExternalCommandError,
+        DiagnosticExportError,
+    ) as exc:
         print(f"campaign refused: {exc}", file=sys.stderr)
         return 2
 
@@ -202,6 +212,7 @@ def _execute(
     *,
     application_source: Path | None = None,
     diagnostic_warmup_only: bool = False,
+    comparison_continuation: bool = False,
 ) -> int:
     sensitivity = isinstance(bundle.manifest, SensitivityManifest)
     mode = (
@@ -237,6 +248,13 @@ def _execute(
             raise CampaignExecutionError("separate application source must be clean")
         host_runner = runner_provenance(runner_root, require_clean=True)
     _validate_prepare_command(prepare_command)
+    prefix: list[Path] = []
+    if comparison_continuation:
+        if not isinstance(bundle.manifest, ComparisonManifest) or application_source is None:
+            raise CampaignExecutionError("continuation requires comparison and frozen application")
+        from benchmarks.comparison_continuation import runner_segment
+
+        prefix = runner_segment(manifest_path, results_directory)
     results_directory.mkdir(parents=True, exist_ok=False)
     campaign_marker = results_directory / ".incomplete.json"
     _write_json(
@@ -248,7 +266,20 @@ def _execute(
             "mode": mode,
         },
     )
-    completed_directories: list[Path] = []
+    completed_directories: list[Path] = list(prefix)
+    if comparison_continuation:
+        _write_json(
+            results_directory / "continuation.json",
+            {
+                "schema_version": 1,
+                "preserved": [
+                    {"path": str(path), "checksums_sha256": _file_sha256(path / "checksums.sha256")}
+                    for path in prefix
+                ],
+                "first_repetition": len(prefix) + 1,
+                "host_runner": host_runner,
+            },
+        )
     try:
         docker = DockerProbe(bundle, repository_root)
         host = HostProbe(
@@ -272,7 +303,7 @@ def _execute(
             },
         )
         for load in bundle.manifest.loads:
-            for repetition in range(1, bundle.manifest.repetitions + 1):
+            for repetition in range(len(prefix) + 1, bundle.manifest.repetitions + 1):
                 final_directory = results_directory / f"{load.name}-r{repetition:02d}"
                 partial_directory = results_directory / f"{load.name}-r{repetition:02d}.partial"
                 partial_directory.mkdir(exist_ok=False)
@@ -280,7 +311,11 @@ def _execute(
                     partial_directory / ".incomplete.json",
                     {"complete": False, "load": load.name, "repetition": repetition},
                 )
-                _run_preparation(prepare_command, bundle.manifest.timeouts.preparation_seconds)
+                _run_preparation(
+                    prepare_command,
+                    bundle.manifest.timeouts.preparation_seconds,
+                    partial_directory / "preparation-error.json",
+                )
                 try:
                     observed = docker.observe()
                 except EnvironmentMismatchError as exc:
@@ -436,6 +471,9 @@ def _execute(
                 _write_checksums(partial_directory)
                 partial_directory.rename(final_directory)
                 completed_directories.append(final_directory)
+        if comparison_continuation:
+            if runner_segment(manifest_path, results_directory) != prefix:
+                raise CampaignExecutionError("continuation reference changed during execution")
         if bundle.manifest.official:
             _write_summary(results_directory, bundle, completed_directories)
         campaign_marker.unlink()
@@ -453,14 +491,62 @@ def _execute(
         raise
 
 
-def _run_preparation(command: list[str], timeout_seconds: float) -> None:
-    process = ManagedProcess(command)
-    try:
-        returncode = process.wait(timeout_seconds)
-    finally:
-        process.ensure_stopped()
-    if returncode != 0:
-        raise CampaignExecutionError("database preparation command failed")
+def _run_preparation(
+    command: list[str], timeout_seconds: float, diagnostic_path: Path | None = None
+) -> None:
+    # A file avoids pipe backpressure; raw child output is never exported.
+    with tempfile.TemporaryFile(mode="w+b") as stderr:
+        process: ManagedProcess | None = None
+        primary: BaseException | None = None
+        shutdown: BaseException | None = None
+        returncode: int | None = None
+        started = time.monotonic()
+        try:
+            process = (
+                ManagedProcess(command)
+                if diagnostic_path is None
+                else ManagedProcess(command, stderr=stderr)
+            )
+            returncode = process.wait(timeout_seconds)
+            if returncode != 0:
+                raise CampaignExecutionError(f"preparation subprocess exited {returncode}")
+        except BaseException as exc:
+            primary = exc
+        finally:
+            if process is not None:
+                try:
+                    process.ensure_stopped()
+                except BaseException as exc:
+                    shutdown = exc
+        if primary is None and shutdown is None:
+            return
+        if diagnostic_path is not None:
+            stderr.seek(0, os.SEEK_END)
+            stderr.seek(max(0, stderr.tell() - 12000))
+            child = sanitize(stderr.read().decode("utf-8", errors="replace"))
+            report: dict[str, object] = {
+                "stage": "preparation",
+                "phase": None,
+                "recorded_at": _utc_now(),
+                "process_returncode": returncode,
+                "duration_seconds": time.monotonic() - started,
+                "primary": error_report(primary) if primary else None,
+                "shutdown": error_report(shutdown) if shutdown else None,
+                "child_stderr": child,
+                "cause_source": "recorded subprocess stderr" if child else "unavailable",
+            }
+            try:
+                _write_json(diagnostic_path, report)
+            except Exception as export:
+                report["export"] = error_report(export)
+                failure = DiagnosticExportError(report)
+                # The coordinator captures stderr independently of this failed file export.
+                print(json.dumps(error_report(failure)), file=sys.stderr, flush=True)
+                raise failure from (primary or shutdown or export)
+        if primary is not None:
+            raise primary
+        assert shutdown is not None
+        raise shutdown
 
 
 def _validate_warmup_diagnostic(bundle: CampaignBundle) -> None:
@@ -802,7 +888,7 @@ def _promote_final_statistics(directory: Path) -> None:
 class ManagedProcess:
     """Bounded cross-platform process group with conclusive teardown."""
 
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], *, stderr: IO[bytes] | None = None) -> None:
         if sys.platform == "win32":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP
             start_new_session = False
@@ -814,7 +900,7 @@ class ManagedProcess:
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr if stderr is not None else subprocess.DEVNULL,
                 creationflags=flags,
                 start_new_session=start_new_session,
             )

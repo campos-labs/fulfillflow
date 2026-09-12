@@ -15,8 +15,13 @@ collection failure. The subsequent reviewed matrix completed ten mixed/4 repetit
 and stopped at the first v1.1/12 warm-up. That campaign remains incomplete. The eight
 warm-up sensitivity observations are now complete and preserved.
 
-The current path is `scripts/Invoke-Comparison120.ps1`, pending independent review,
-final commit and its CI before execution release. `symmetric-warmup120-comparison-v1`
+The released `scripts/Invoke-Comparison120.ps1` sequence is closed; do not rerun it.
+Commit `02fe942` produced one valid v1.0 mixed/4 repetition and stopped before the
+second warm-up because the coordinator compared differently shaped protocol metadata.
+The diagnostic correction and executable 59-measurement continuation are prepared
+for review, not execution. The new entry is `scripts/Invoke-Comparison120Continuation.ps1`.
+It references immutable r01, runs r02-r05 in a new destination, then the remaining
+eleven blocks. A separate release seal and exact-commit CI remain mandatory. `symmetric-warmup120-comparison-v1`
 uses a separate explicit loader, 120-second admission and proportional pacing, five
 repetitions per version/cell, 300-second stabilization and 300-second measurement.
 The original 60-second loader still rejects this protocol. The preparation manifest
