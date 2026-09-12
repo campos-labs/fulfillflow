@@ -554,7 +554,19 @@ def _initialize(environment: Environment, **_kwargs: object) -> None:
     if not manifest_path:
         raise RuntimeError("BENCHMARK_CAMPAIGN_MANIFEST is required")
     sensitivity = os.environ.get("BENCHMARK_WARMUP_SENSITIVITY")
-    if sensitivity:
+    comparison = os.environ.get("BENCHMARK_COMPARISON_PROTOCOL")
+    if sensitivity and comparison:
+        raise RuntimeError("choose one explicit protocol")
+    if comparison:
+        from benchmarks.comparison_protocol import PROTOCOL, load_comparison_campaign
+
+        if comparison != PROTOCOL or os.environ.get("BENCHMARK_PHASE") not in {
+            "warmup",
+            "measurement",
+        }:
+            raise RuntimeError("comparison requires its explicit phase and protocol")
+        bundle = load_comparison_campaign(Path(manifest_path))
+    elif sensitivity:
         from benchmarks.warmup_sensitivity import PROTOCOL, load_sensitivity_campaign
 
         if sensitivity != PROTOCOL or os.environ.get("BENCHMARK_PHASE") != "warmup":
@@ -650,7 +662,10 @@ def _write_response_artifacts(environment: Environment, **_kwargs: object) -> No
         final_path = Path(response).with_name("locust_final_stats.csv")
         with final_path.open("w", encoding="utf-8", newline="") as stream:
             exporter.requests_csv(csv.writer(stream, lineterminator="\n"))
-        if os.environ.get("BENCHMARK_WARMUP_SENSITIVITY"):
+        if os.environ.get("BENCHMARK_WARMUP_SENSITIVITY") or (
+            os.environ.get("BENCHMARK_COMPARISON_PROTOCOL")
+            and os.environ.get("BENCHMARK_PHASE") == "warmup"
+        ):
             runtime = _require_runtime()
             # Final drained counters only; no request bodies or free-form errors.
             progress = {

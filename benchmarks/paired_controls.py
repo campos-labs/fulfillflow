@@ -102,7 +102,7 @@ def configure_series(series: str) -> None:
     global SERIES, PACKAGE, JOURNAL, PROJECTS, STEPS
     if series == "historical":
         return
-    if series not in {"abba", "official", "warmup"} or SERIES != "historical":
+    if series not in {"abba", "official", "warmup", "comparison120"} or SERIES != "historical":
         raise ControlError("control series cannot be changed during execution")
     SERIES = series
     PACKAGE = RESULTS / f"reviewed-{series}-win9445-review-01"
@@ -114,7 +114,9 @@ def configure_series(series: str) -> None:
     if series == "warmup":
         PROJECTS = {"v11": "fulfillflow-ii-warmup12-win9445-01"}
         STEPS = (Step(1, 1, "v11", "w1", "mixed", 12),)
-    if series == "official":
+    if series == "comparison120":
+        PROJECTS = {v: f"fulfillflow-comparison120-win9445-01-{v}" for v in ("v10", "v11")}
+    if series in {"official", "comparison120"}:
         steps: list[Step] = []
         for block, (profile, users) in enumerate(
             (
@@ -168,12 +170,16 @@ def candidate_document(step: Step, originals: Mapping[str, dict[str, Any]]) -> d
                 document[field] = json.loads(json.dumps(reference[field]))
         document["environment"]["compose_project"] = PROJECTS[step.version]
     document.update(
-        name=step.name, official=SERIES == "official", repetitions=5 if SERIES == "official" else 1
+        name=step.name,
+        official=SERIES in {"official", "comparison120"},
+        repetitions=5 if SERIES in {"official", "comparison120"} else 1,
     )
     document["loads"] = [load for load in document["loads"] if load["users"] == step.users]
     if len(document["loads"]) != 1 or document["warmup_quota_per_shipment"] != 430:
         raise ControlError("frozen mixed/4 quota or load selection differs")
     document["host"]["identity"]["os_build"] = "26200.9445"
+    if SERIES == "comparison120":
+        document["images"]["loadgen"] = read_json(PACKAGE / "images.json")[step.version]["image"]
     dataset = step.source / "benchmarks/datasets/benchmark-v1.0.json"
     document["cohorts"]["dataset_manifest"] = os.path.relpath(
         dataset, step.candidate.parent
@@ -272,6 +278,11 @@ def compose(step: Step) -> list[str]:
         PROJECTS[step.version],
         "--file",
         str(step.source / filename),
+        *(
+            ["--file", str(PACKAGE / f"loadgen-{step.version}.json")]
+            if SERIES == "comparison120"
+            else []
+        ),
     ]
 
 
@@ -292,7 +303,9 @@ def image_preflight(step: Step, document: Mapping[str, Any]) -> dict[str, Any]:
     report = {}
     for role, identifier in document["images"].items():
         reference = identifier
-        if step.version == "v10" and role in {"app", "loadgen"}:
+        if step.version == "v10" and (
+            role == "app" or (role == "loadgen" and SERIES != "comparison120")
+        ):
             reference = {
                 "app": "fulfillflow:benchmark-local",
                 "loadgen": "fulfillflow-loadgen:benchmark-local",
@@ -339,6 +352,17 @@ def source_python(
 
 
 def preparation_argv(step: Step, *, setup_only: bool = False) -> list[str]:
+    if SERIES == "comparison120":
+        return [
+            str(ROOT / ".venv/Scripts/python.exe"),
+            "-X",
+            "utf8",
+            "-B",
+            "-m",
+            "benchmarks.comparison_controls",
+            "--prepare-step",
+            step.label,
+        ]
     return [
         str(ROOT / ".venv/Scripts/python.exe"),
         "-X",
@@ -504,7 +528,7 @@ def cleanup(step: Step, evidence: Path) -> None:
 def prepare_step(step: Step, *, setup_only: bool) -> int:
     evidence = (PACKAGE / "setup" / step.version if setup_only else step.attempt) / "preparation"
     owner_index: Path | None = None
-    if SERIES == "official" and not setup_only:
+    if SERIES in {"official", "comparison120"} and not setup_only:
         evidence.mkdir(parents=True, exist_ok=True)
         previous = sorted(evidence.glob("r[0-9][0-9]"))
         if len(previous) >= 5:
@@ -513,6 +537,10 @@ def prepare_step(step: Step, *, setup_only: bool) -> int:
             completed = step.attempt / f"run/{step.profile}-{step.users}-users-r{len(previous):02d}"
             if read_json(completed / "metadata.json").get("valid") is not True:
                 raise ControlError("previous repetition is not valid; preparation cannot retry")
+            if SERIES == "comparison120":
+                from benchmarks.comparison_controls import verify_repetition
+
+                verify_repetition(step, completed)
             diagnostics(step, previous[-1] / "diagnostics", stop=False)
             cleanup(step, previous[-1])
         owner_index = evidence / "owned.json"
@@ -1040,8 +1068,11 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 "benchmarks.run_campaign",
                 *(["--application-source", str(step.source)] if SERIES != "historical" else []),
                 "--manifest",
-                str(step.candidate),
+                str(step.candidate.with_name(step.candidate.stem + "-execution.json"))
+                if SERIES == "comparison120"
+                else str(step.candidate),
                 "--execute",
+                *(["--comparison-120"] if SERIES == "comparison120" else []),
                 *(["--diagnostic-warmup-only"] if SERIES == "warmup" else []),
                 "--confirm-campaign",
                 step.name,
@@ -1074,7 +1105,7 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 if SERIES != "historical"
                 else "frozen runner refused or interrupted the control"
             )
-        expected_repetitions = 5 if SERIES == "official" else 1
+        expected_repetitions = 5 if SERIES in {"official", "comparison120"} else 1
         valid = (
             verify_warmup_result(step.attempt / "run")
             if SERIES == "warmup"
@@ -1089,6 +1120,10 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
         )
         if not valid or list((step.attempt / "run").rglob(".incomplete.json")):
             raise ControlError("runner did not produce a valid complete repetition")
+        if SERIES == "comparison120":
+            from benchmarks.comparison_controls import verify_block
+
+            verify_block(step)
         report["complete"] = True
     except BaseException as exc:
         code = 130 if isinstance(exc, KeyboardInterrupt) else (code or 2)

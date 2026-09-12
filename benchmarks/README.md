@@ -11,8 +11,21 @@ resource aggregation and review commands are documented in [V11_REVIEW.md](V11_R
 The sections below retain the historical v1.0 contracts; v1.1 uses explicit schema-v2
 owner identities while preserving the workload and logical dataset. A later non-official
 pilot and two v1.0 controls are valid; the first ABBA stopped on mandatory resource
-collection failure. The official v1.1 matrix has not run. The reviewed host runner and
-new current-host preparation are documented in the same review package.
+collection failure. The subsequent reviewed matrix completed ten mixed/4 repetitions
+and stopped at the first v1.1/12 warm-up. That campaign remains incomplete. The eight
+warm-up sensitivity observations are now complete and preserved.
+
+The current path is `scripts/Invoke-Comparison120.ps1`, pending independent review,
+final commit and its CI before execution release. `symmetric-warmup120-comparison-v1`
+uses a separate explicit loader, 120-second admission and proportional pacing, five
+repetitions per version/cell, 300-second stabilization and 300-second measurement.
+The original 60-second loader still rejects this protocol. The preparation manifest
+is historical-shaped for frozen probes; the executable manifest differs only in
+protocol, admission and warm-up process timeout (90 to 150 seconds). Both use the
+same new loadgen identity. Applications, logical datasets and other limits remain
+frozen. Any failure stops the sequence without retry; incomplete quota never allows
+measurement or the next condition. None of the earlier results enter this new matrix.
+See [the current review](V11_REVIEW.md) for the fixed block order and evidence.
 
 ## Frozen logical datasets
 

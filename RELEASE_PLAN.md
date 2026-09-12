@@ -6,8 +6,9 @@ concluiu dez repetições mixed/4 (cinco por versão), mas parou no primeiro war
 v1.1 mixed/12, antes da medição. A única verificação manual limitada ao warm-up
 reproduziu quota incompleta. Os launchers estão encerrados; células de 12 usuários
 bloqueadas na matriz original, sem repetição ou retomada automática. Uma campanha
-separada de sensibilidade à política de warm-up foi autorizada conforme §30.5;
-preparação sem carga e revisão individual antecedem as oito tentativas manuais.
+separada de sensibilidade à política de warm-up foi concluída conforme §30.5.
+A decisão atual prepara uma nova comparação simétrica de 120 s; aguarda revisão
+independente antes do commit final, CI e liberação da entrada manual.
 
 ## 1. Referência e objetivo
 
@@ -56,7 +57,7 @@ Entre commits pode haver Core atualizado e timeline pendente. A v1.1 não oferec
 
 Referências: DESIGN.md, benchmarks/README.md e benchmarks/baselines/v1.0/RELATORIO.md, além dos manifests oficiais publicados. A baseline não identifica Tracking como causa exclusiva de contenção.
 
-Preservar workload, contratos externos, dataset lógico, coortes, pesos, q=430, spawn rate 16 users/s, matriz 4/12 users × mixed/timeline/ingestion × cinco repetições válidas por ponto. Manter estabilização de 300 s após preparação, warm-up de 60 s, measurement de 300 s, coleta de 1 s e as regras congeladas de admissão, drain, timeouts e energia. Logging, tracing/sampling, timeouts de pool/SQL e healthcheck do loadgen permanecem conforme os manifests e Compose publicados.
+Preservar workload, contratos externos, dataset lógico, coortes, pesos, q=430, spawn rate 16 users/s, matriz 4/12 users × mixed/timeline/ingestion × cinco repetições válidas por ponto. O protocolo original conserva warm-up de 60 s. A nova campanha simétrica de §30.5 mantém estabilização de 300 s após preparação, warm-up de 120 s com ritmo proporcional, measurement de 300 s, coleta de 1 s e as regras congeladas de admissão, drain, timeouts e energia. Logging, tracing/sampling, timeouts de pool/SQL e healthcheck do loadgen permanecem conforme os manifests e Compose publicados.
 
 | Componente | CPU | Memória | Pool |
 | --- | --- | --- | --- |
@@ -220,3 +221,22 @@ Essa autorização não amplia nem retoma a matriz original. Preserva recursos,
 aplicação, dataset e quota; altera explicitamente duração e ritmo de admissão.
 Não prepara uma nova matriz oficial. Evidências, interpretação e bloqueios em
 `benchmarks/V11_REVIEW.md`; a proposta antiga de doze diagnósticos segue inativa.
+
+
+## Nova comparação simétrica de 120 s — preparação para revisão
+
+A sensibilidade encerrou oito tentativas. v1.0: duas quotas completas em 60 s e
+duas em 120 s. v1.1: 3.677 e 3.674/5.160 em 60 s, duas completas em 120 s.
+Isso sustenta a política comum; não prova teto físico, estabilidade, causalidade
+exclusiva ou ausência de defeitos. Os 60 s permanecem requisito do protocolo
+histórico, sem reclassificação como SLA. Evidências e próxima entrada estão em
+`benchmarks/V11_REVIEW.md`; todos os launchers anteriores estão encerrados.
+
+A nova campanha terá 30 medições por versão, cinco por perfil/carga, em blocos na
+ordem aprovada. Nenhuma medição anterior será incorporada. Piso temporal: 12 horas,
+além de preparação, verificações, drain e exportação. Qualquer falha interrompe;
+não se aplica a exceção da sensibilidade para quota incompleta. Fontes, imagens
+da aplicação, dados e observabilidade permanecem congelados. Runner e loadgen têm
+identidades próprias. Preparação e testes sem carga antecedem revisão independente,
+commit em `codex/v1.1-tracking`, CI do commit e conferência final do pacote.
+Release pendente; cópia independente das evidências sem confirmação.

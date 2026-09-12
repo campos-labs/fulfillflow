@@ -15,7 +15,7 @@ automática sem reentrega. Falhas de comunicação retornam 503, erros inesperad
 A v1.0.0 publicada permanece na tag original. O incremento II prepara a comparação:
 loader dos dois bancos, manifests com identidades observadas, telemetria por serviço
 e agregada e conciliação de recibos/efeitos. O loadgen candidato deriva da imagem
-congelada, com alteração autorizada somente do módulo de manifest. Workload,
+congelada; as revisões da ferramenta e dos protocolos têm identidades próprias. Workload,
 dependências e dataset permanecem iguais. O [pacote de revisão](benchmarks/V11_REVIEW.md)
 descreve comandos e limites; carga, congelamento experimental e release pertencem
 ao incremento III e ainda exigem autorização.
@@ -29,9 +29,14 @@ repetições mixed/4 (cinco por versão) e parou no primeiro warm-up v1.1 mixed/
 do runner foi corrigido sem alterar imagens ou resultados. A única verificação
 manual limitada ao warm-up também falhou: 3.497/5.160 aplicações, sem erros HTTP,
 Locust exit 2 e coleta completa. As células de 12 usuários permanecem bloqueadas.
-Estado e decisão pendente estão no pacote de revisão. Não repetir
-`Invoke-V11WarmupDiagnostic.ps1` ou `Invoke-ReviewedControls.ps1`: suas séries
-estão encerradas. Nenhuma retomada automática ou nova carga está preparada.
+A sensibilidade posterior concluiu as oito observações: v1.0 completou ambas as
+quotas em cada política; v1.1 completou as duas de 120 s e ficou em 3.677 e 3.674
+nas de 60 s. A nova comparação simétrica adota 120 s para ambas, alterando duração
+e ritmo de admissão, com aplicação preservada. São 60 medições novas, sem incorporar
+resultados anteriores. Preparação aguarda revisão independente antes do commit
+final e da CI correspondente. Entrada atual: `scripts/Invoke-Comparison120.ps1`,
+**ainda bloqueada para carga**. Estado e destinos no [pacote de revisão](benchmarks/V11_REVIEW.md).
+Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
 
 A política efetiva de logs das imagens é preservada. Os settings de logging não
 configuram o logger da aplicação; access logs Uvicorn continuam INFO em texto.

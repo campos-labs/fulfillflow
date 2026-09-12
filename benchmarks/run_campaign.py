@@ -52,6 +52,14 @@ from benchmarks.collectors import (
     write_database_counts,
 )
 from benchmarks.collectors_v11 import SplitDatabaseProbe, aggregate_resources
+from benchmarks.comparison_protocol import (
+    PROTOCOL as COMPARISON_PROTOCOL,
+)
+from benchmarks.comparison_protocol import (
+    ComparisonManifest,
+    load_comparison_campaign,
+    verify_warmup_progress,
+)
 from benchmarks.database_contract import (
     DatabaseDigests,
     DatabaseIdentityError,
@@ -140,6 +148,7 @@ def main() -> int:
     parser.add_argument("--application-source", type=Path)
     parser.add_argument("--diagnostic-warmup-only", action="store_true")
     parser.add_argument("--warmup-sensitivity", action="store_true")
+    parser.add_argument("--comparison-120", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
@@ -147,9 +156,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.validate_only and args.execute:
         parser.error("choose either --validate-only or --execute")
-    if args.warmup_sensitivity and args.diagnostic_warmup_only:
-        parser.error("choose one diagnostic protocol")
-    loader = load_sensitivity_campaign if args.warmup_sensitivity else load_campaign
+    if sum((args.warmup_sensitivity, args.diagnostic_warmup_only, args.comparison_120)) > 1:
+        parser.error("choose one explicit protocol")
+    loader = (
+        load_comparison_campaign
+        if args.comparison_120
+        else load_sensitivity_campaign
+        if args.warmup_sensitivity
+        else load_campaign
+    )
     bundle = loader(args.manifest.resolve())
     if not args.execute:
         _print_validation(bundle)
@@ -334,6 +349,8 @@ def _execute(
                     partial_directory,
                 )
                 after_warmup = database.snapshot("pre_measurement")
+                if isinstance(bundle.manifest, ComparisonManifest):
+                    verify_warmup_progress(partial_directory / "warmup", load.users)
                 pre_measurement_identity = _verify_warmup(
                     bundle, load, database, initial, after_warmup
                 )
@@ -569,6 +586,8 @@ def _run_phase(
         if phase != "warmup":
             raise CampaignExecutionError("sensitivity protocol forbids measurement")
         command[2:2] = ["--env", f"BENCHMARK_WARMUP_SENSITIVITY={PROTOCOL}"]
+    elif isinstance(bundle.manifest, ComparisonManifest):
+        command[2:2] = ["--env", f"BENCHMARK_COMPARISON_PROTOCOL={COMPARISON_PROTOCOL}"]
     process: ManagedProcess | None = None
     sampler: ResourceSampler | None = None
     destination = partial_directory / "warmup" if phase == "warmup" else partial_directory

@@ -10,14 +10,81 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Campanha separada — sensibilidade à política de warm-up
+## Caminho atual — comparação simétrica de 120 s, aguardando revisão
+
+A sensibilidade foi executada e revisada integralmente:
+
+| Condição | Observação 1 | Observação 2 | Warm-up |
+|---|---:|---:|---|
+| v1.0 / 60 s | 5.160 | 5.160 | Ambos completos |
+| v1.0 / 120 s | 5.160 | 5.160 | Ambos completos |
+| v1.1 / 60 s | 3.677 | 3.674 | Ambos inválidos, quota incompleta |
+| v1.1 / 120 s | 5.160 | 5.160 | Ambos completos |
+
+Integridade e conciliação confirmadas nas oito; quotas incompletas seguem inválidas
+e sem measurement. Consolidação separada, com hashes das revisões preservadas:
+`results/warmup-sensitivity-win9445-consolidated-01/metrics-summary.json`.
+A continuação 4–8 terminou com código agregado 2, preservando a invalidade da sexta
+tentativa. Todos esses launchers estão encerrados; não repetir suas entradas.
+
+A política comum de 120 s foi escolhida para uma campanha nova. Alteram-se duração
+e ritmo nominal (14,333… aplicações/s para 4 usuários, 43/s para 12, q430 por usuário).
+Não se demonstrou teto universal, causa exclusiva, ausência de defeitos, superioridade,
+equivalência ou estabilidade. Os 60 s continuam requisito histórico, sem renomeá-los
+como SLA. Nenhuma medição anterior será incorporada à nova matriz.
+
+Protocolo: `symmetric-warmup120-comparison-v1`. Pacote:
+`results/reviewed-comparison120-win9445-review-01`. Entrada operacional atual:
+`scripts/Invoke-Comparison120.ps1`, **não liberada para carga** antes da revisão
+independente, autorização do usuário, commit final e CI correspondente.
+
+O primeiro pré-requisito de preparação foi bloqueado pela indisponibilidade do
+engine Linux (`sailor-ingest.sock`); o registro está preservado em
+`results/comparison120-code-review-01`. Após reinício manual do Desktop, o engine
+29.7.2 e a identidade exigida do host foram conferidos novamente, sem mudança das
+expectativas. Esse incidente ocorreu antes da derivação de imagens e não constitui
+uma tentativa da campanha. O pacote atual continua bloqueado para carga até a
+revisão e a liberação explícitas descritas acima.
+
+| Célula | Primeiro bloco | Segundo bloco |
+|---|---|---|
+| mixed/4 | v1.0 × 5 | v1.1 × 5 |
+| mixed/12 | v1.1 × 5 | v1.0 × 5 |
+| timeline/4 | v1.0 × 5 | v1.1 × 5 |
+| timeline/12 | v1.1 × 5 | v1.0 × 5 |
+| ingestion/4 | v1.0 × 5 | v1.1 × 5 |
+| ingestion/12 | v1.1 × 5 | v1.0 × 5 |
+
+Os doze destinos usam
+`reviewed-comparison120-{profile}-{users}-win9445-01-c{cell}-{version}-{version}`;
+inventário materializado em `review.json` no pacote. Projetos isolados
+`fulfillflow-comparison120-win9445-01-v10` e `-v11`, com propriedade comprovada antes
+da criação e limpeza. Preparação limpa por repetição reutiliza o procedimento
+verificado. Piso 12 horas: 300 s estabilização + 120 s warm-up + 300 s measurement
+por repetição; preparação, verificações, drain e exportação acrescentam tempo.
+
+O loader histórico de 60 s permanece estrito. A execução usa contrato separado,
+admissão proporcional e timeout do processo de warm-up 90→150 s. Loadgens derivados
+dos parents de sensibilidade alteram somente `locustfile.py` e acrescentam
+`comparison_protocol.py`; dependências, aplicação e observabilidade preservadas.
+Revisões programáticas entre repetições e blocos só permitem continuidade após
+validade integral. **Qualquer falha para**, inclusive quota incompleta; não se
+aplica a exceção da sensibilidade. Não há reposição ou retomada implícita.
+
+O pacote pré-commit registra hashes dos arquivos em revisão e o SHA de partida.
+A liberação futura será um artefato separado em `results/comparison120-win9445-release-01`,
+vinculado ao commit limpo e à sua CI, sem reescrever o pacote de revisão. A cópia
+independente das evidências continua sem confirmação; não há transferência externa.
+
+## Campanha encerrada — sensibilidade à política de warm-up
 
 Autorizada após a revisão documental `61543b8`, preservando as dez repetições
 mixed/4 válidas e as duas interrupções v1.1/12. Os launchers anteriores permanecem
 encerrados; a proposta antiga de doze diagnósticos continua inativa. A matriz
 original de seis células permanece incompleta e bloqueada em 12 usuários.
 
-Protocolo: `warmup-policy-sensitivity-v1`. Pacote reservado:
+Registro histórico da preparação; comandos desta seção estão encerrados.
+Protocolo: `warmup-policy-sensitivity-v1`. Pacote preservado:
 `results/warmup-sensitivity-win9445-review-01`. Revisões individuais novas:
 `results/warmup-sensitivity-win9445-reviews-01`. A existência de `ready.json`
 íntegro e concordante com runner/coordenador é obrigatória; código implementado

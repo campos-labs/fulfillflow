@@ -1963,6 +1963,57 @@ por condição são exploratórias, e amostras de 1 s não são repetições ind
 Não declarar significância, equivalência, ausência de vazamentos ou deadlocks.
 Uma nova comparação completa exige decisão posterior; não está preparada aqui.
 
+#### Nova comparação simétrica autorizada após a sensibilidade
+
+As oito observações foram encerradas e preservadas: v1.0 completou as quatro
+quotas; v1.1 completou as duas de 120 s e ficou em 3.677 e 3.674/5.160 nas de 60 s.
+A continuação manual bloqueante 4–8 foi posteriormente autorizada com revisão
+programática entre condições. Seu código agregado 2 preservou a quota inválida.
+
+A decisão atual prepara `symmetric-warmup120-comparison-v1`, campanha nova com
+120 s para ambas as versões. Variam duração e ritmo nominal: 14,333… aplicações/s
+em 4 usuários e 43/s em 12, preservando q430 por usuário. Não é correção da aplicação
+nem efeito isolado do tempo. Nenhum piloto, controle, ABBA, diagnóstico, sensibilidade,
+resultado inválido ou medição anterior integra a nova matriz. A campanha original
+e suas dez medições válidas permanecem intactas e com classificações preservadas.
+
+São cinco repetições por versão/célula, total 60. Ordem dos blocos: mixed/4 A→B,
+mixed/12 B→A, timeline/4 A→B, timeline/12 B→A, ingestion/4 A→B, ingestion/12 B→A.
+A=v1.0 e B=v1.1; ordem fixa, não randomizada, sem exclusão de efeito temporal.
+Estabilização 300 s, measurement 300 s, coleta 1 s e preparação limpa por repetição.
+Piso das fases: 43.200 s (12 horas), além de preparação, verificações, drain e exportação.
+
+`ComparisonManifest` usa loader explícito separado: oficial, cinco repetições, uma
+carga 4 ou 12, 120 s e q430. O loader histórico continua restrito a 60 s; o de
+sensibilidade continua não oficial e sem measurement. Probes congelados usam um
+manifest de preparação de 60 s; o executável difere somente em protocolo, warm-up
+e seu prazo de processo (90→150 s). Mantém-se a margem de 20 s sobre admissão +
+drain, request/drain 10 s, measurement process 330 s, preparation 120 s e phase
+start 30 s. Demais parâmetros, recursos e configurações permanecem congelados.
+
+Reutilizar os loadgens de sensibilidade como parents. A derivação adiciona
+`comparison_protocol.py` e revisa somente `locustfile.py` para selecionar o contrato
+completo e exportar os mesmos contadores finais de warm-up. Agendamento, barreira,
+quota, drain e workload são reutilizados. Conferir inventário integral, parents,
+digests, fontes e distribuições instaladas; nenhuma dependência muda. O runner só
+passa a measurement após quota por usuário completa, drain e verificação integral
+do banco e efeitos. Aplicação, runner, loadgen, coordenador e pacote têm identidades
+separadas. Checkouts e imagens históricos não são modificados.
+
+Uma entrada manual bloqueante coordena os doze blocos. Validadores programáticos
+entre repetições e blocos dispensam interações rotineiras. Qualquer falha, inclusive
+quota incompleta, medição, identidade, coleta, exportação ou conciliação, interrompe
+sem retry, reposição ou reinício de blocos. Preservar medições válidas e diagnósticos;
+retomada exige autorização posterior com estado verificado. Limpeza só atinge recursos
+isolados de propriedade comprovada. Não executar carga na preparação. O pacote fica
+bloqueado até revisão independente, liberação do usuário, commit final, sua CI e
+conferência final da identidade; documentos e evidências publicados ficam intactos.
+
+Duas quotas completas em 120 s por versão não demonstram estabilidade, equivalência,
+superioridade, teto físico universal, causa exclusiva ou ausência geral de defeitos.
+Os 60 s eram requisito do protocolo original, não um SLA. Nenhuma mudança funcional,
+de observabilidade ou de serviços integra esta etapa. Matriz e release permanecem pendentes.
+
 ### 30.6 Estado funcional do incremento I
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`
