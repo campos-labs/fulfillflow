@@ -85,6 +85,8 @@ def inputs() -> dict[str, str]:
         *ROOT.glob("benchmarks/*.py"),
         *ROOT.glob("src/**/*.py"),
         ROOT / "scripts/ActiveScreenGuard.cs",
+        ROOT / "scripts/ActiveScreenIO.cs",
+        ROOT / "scripts/ActiveScreenIO.ps1",
         ROOT / "scripts/Invoke-ActiveScreenDiagnostic.ps1",
         ROOT / "uv.lock",
         ROOT / "pyproject.toml",
@@ -93,6 +95,7 @@ def inputs() -> dict[str, str]:
         ROOT / "benchmarks/README.md",
         ROOT / "benchmarks/V11_REVIEW.md",
         ROOT / "tests/unit/test_active_screen.py",
+        ROOT / "tests/unit/test_active_screen_io.py",
     ]
     return {p.relative_to(ROOT).as_posix(): _sha256(p) for p in sorted(paths)}
 

@@ -21,6 +21,7 @@ function Wait-ActiveScreenChild {
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$false
 $root=Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'ActiveScreenIO.ps1')
 $base=Join-Path $root 'benchmarks/results'
 $destination=Join-Path $base $(if($Mode -eq 'IdleCheck'){"active-screen-idle-$($IdleAttempt.ToString('00'))"}else{'active-screen-operation-02'})
 $guard=$null
@@ -39,10 +40,11 @@ try {
     New-Item -ItemType Directory -Path $destination | Out-Null
     $created=$true
     Add-Type -Path (Join-Path $PSScriptRoot 'ActiveScreenGuard.cs')
-    $schemeBefore=& "$env:SystemRoot/System32/powercfg.exe" /query 2>&1
-    $schemeExit=$LASTEXITCODE
+    $beforeCapture=Invoke-PowerCapture '/query' (Join-Path $destination 'power-before')
+    $schemeBefore=$beforeCapture.Text
+    $schemeExit=$beforeCapture.ExitCode
     if($schemeExit -ne 0){throw 'Power settings query failed.'}
-    $schemeBefore | Out-File -Encoding utf8 (Join-Path $destination 'power-before.txt')
+
     $guard=[ActiveScreenGuard]::new()
     $started=[DateTime]::UtcNow
     $statePath=Join-Path $destination 'guard.json'
@@ -51,17 +53,15 @@ try {
     while($true){
         $heartbeat=[DateTime]::new($guard.HeartbeatTicks,[DateTimeKind]::Utc)
         $state=@{ready=$guard.Ready;failure=$guard.Failure;display=$guard.Display;heartbeat_utc=$heartbeat.ToString('o')}
-        $temp=Join-Path $destination 'guard-next.json'
-        $state | ConvertTo-Json | Set-Content -Encoding utf8 $temp
-        [IO.File]::Move($temp,$statePath,$true)
+        [ActiveScreenIO]::Publish($statePath,($state | ConvertTo-Json))
         $elapsed=([DateTime]::UtcNow-$started).TotalSeconds
         if($guard.Failure -ne ''){throw "Environmental condition failed: $($guard.Failure)"}
         if($elapsed -gt 3 -and ([DateTime]::UtcNow-$heartbeat).TotalSeconds -gt 3){throw 'Native observer heartbeat unavailable.'}
         if($elapsed -gt 8 -and -not $guard.Ready){throw 'Observer did not establish screen/session/AC.'}
         if($guard.Ready -and $null -eq $activeRequestsExit){
-            $activeRequests=& "$env:SystemRoot/System32/powercfg.exe" /requests 2>&1
-            $activeRequestsExit=$LASTEXITCODE
-            $activeRequests | Out-File -Encoding utf8 (Join-Path $destination 'requests-active.txt')
+            $activeRequests=Invoke-PowerCapture '/requests' (Join-Path $destination 'requests-active')
+            $activeRequestsExit=$activeRequests.ExitCode
+
         }
         if($Mode -eq 'Execute' -and $guard.Ready -and $null -eq $child){
             $info=[Diagnostics.ProcessStartInfo]::new()
@@ -77,16 +77,25 @@ try {
         Start-Sleep -Milliseconds 250
     }
 } catch {
+    $cause=$_.Exception.GetBaseException()
+    $native=if($cause -is [ComponentModel.Win32Exception]){$cause.NativeErrorCode}else{$null}
+    [Console]::Error.WriteLine("Power supervision failed: $($cause.GetType().Name); native=$native; hresult=$($cause.HResult)")
     [Console]::Error.WriteLine($_.Exception.Message)
     if($created){
-        @{stage='power-supervision';type=$_.Exception.GetType().Name;message=$_.Exception.Message} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $destination 'error.json')
+        @{stage='power-supervision';type=$cause.GetType().Name;native_code=$native;hresult=$cause.HResult;message=$_.Exception.Message} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $destination 'error.json')
     }
     $exitCode=2
 } finally {
     if($null -ne $guard){$guard.Dispose()}
     if($created){
         if($null -ne $guard){
-            @{ready=$false;failure='guard_released';display=$guard.Display;heartbeat_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $destination 'guard.json')
+            try {
+                @{ready=$false;failure='guard_released';display=$guard.Display;heartbeat_utc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | ForEach-Object { [ActiveScreenIO]::Publish((Join-Path $destination 'guard.json'),$_) }
+            } catch {
+                $exitCode=2
+                $cause=$_.Exception.GetBaseException()
+                [Console]::Error.WriteLine("Final heartbeat publication failed: $($cause.GetType().Name); hresult=$($cause.HResult)")
+            }
             $guard.Events() | Set-Content -Encoding utf8 (Join-Path $destination 'power-events.txt')
             if(-not $guard.Released){$exitCode=2}
         }
@@ -102,13 +111,19 @@ try {
             }
             $childShutdown | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $destination 'child-shutdown.json')
         }
-        $requests=& "$env:SystemRoot/System32/powercfg.exe" /requests 2>&1
-        $requestExit=$LASTEXITCODE
-        $requests | Out-File -Encoding utf8 (Join-Path $destination 'requests-after.txt')
-        $after=& "$env:SystemRoot/System32/powercfg.exe" /query 2>&1
-        $afterExit=$LASTEXITCODE
-        $after | Out-File -Encoding utf8 (Join-Path $destination 'power-after.txt')
+        try {
+        $requests=Invoke-PowerCapture '/requests' (Join-Path $destination 'requests-after')
+        $requestExit=$requests.ExitCode
+
+        $afterCapture=Invoke-PowerCapture '/query' (Join-Path $destination 'power-after')
+        $after=$afterCapture.Text
+        $afterExit=$afterCapture.ExitCode
+
         if($afterExit -ne 0 -or ($schemeBefore -join "`n") -ne ($after -join "`n")){$exitCode=2}
+        } catch {
+            $exitCode=2
+            [Console]::Error.WriteLine("Final power capture failed: $($_.Exception.GetBaseException().GetType().Name)")
+        }
         # Dispatch is not evidence that Locust started. Unknown stays null.
         $loadExecuted=if($null -eq $child){$false}else{$null}
         $statusPath=Join-Path $destination 'coordinator-status.json'

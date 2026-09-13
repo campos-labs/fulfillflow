@@ -2084,6 +2084,14 @@ carga e estabilização; preparação em andamento conserva seu prazo de 120 s, 
 autoriza iniciar carga após falha ambiental. A verificação ociosa manual dura 960 s,
 excede o timeout de tela de 15 minutos e deve anteceder a liberação do bloco.
 Capturam-se saída e código de powercfg; saída vazia ou acesso negado é inconclusivo.
+O transporte do heartbeat no host usa mutex nomeado por caminho, com espera máxima
+de 250 ms, e substituição do arquivo dentro da seção crítica. Leitura e publicação
+não repetem erros; timeout, abandono e erro de acesso interrompem. A idade é calculada
+após a leitura e continua limitada a 3 s, sem cache de evidência. Capturas PowerShell
+de energia preservam stdout/stderr binários, códigos de saída e páginas de código
+antes/depois de cada consulta. A comparação integral usa texto decodificado
+estritamente; mudança de codificação durante uma consulta bloqueia. Não há mudança
+dos parâmetros de energia nem da coleta de recursos da aplicação.
 Repetições ociosas recebem número explícito e destino novo; essa seleção é recusada
 no modo de carga e não altera o destino operacional único.
 

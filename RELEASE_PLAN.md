@@ -13,7 +13,12 @@ válida. A continuação depois executada encerrou na r04 v1.1 mixed/4, com um 5
 na medição: a campanha conserva oito medições válidas pelos validadores e permanece
 incompleta. Ambos os launchers estão encerrados. O procedimento atual prepara somente
 cinco repetições não oficiais v1.1 mixed/4 com tela e sistema ativos, conforme §30.5;
-a verificação ociosa 02 está encerrada e aprovada. A operação 01 parou no gate de energia antes da carga. A revisão 08 corrige a decodificação nativa e o diagnóstico; aguarda revisão e nova liberação, sem repetir o teste ocioso.
+a verificação ociosa 02 está encerrada e aprovada. A operação 02 encerrou com quatro
+medições não oficiais válidas e r05 interrompida na estabilização por falha de leitura
+do heartbeat, antes do warm-up. O critério de cinco sucessos não foi atendido.
+Corrigem-se somente transporte do heartbeat e captura de energia, sem nova carga.
+Uma comparação simétrica nova depende de aprovação específica da revisão da condição
+de avanço; não incorporar medições anteriores nem completar isoladamente a r05.
 
 ## 1. Referência e objetivo
 

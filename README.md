@@ -38,8 +38,10 @@ v1.0 mixed/4 válida e parou antes do segundo warm-up por incompatibilidade do
 verificador de metadados. `scripts/Invoke-Comparison120.ps1` está **encerrado; não repetir**.
 `scripts/Invoke-Comparison120Continuation.ps1` também encerrou: há oito medições
 aprovadas pelos validadores, e r04 v1.1 mixed/4 inválida por 503 na medição.
-A preparação atual é somente um bloco não oficial de cinco repetições v1.1 mixed/4
-com tela e sistema ativos, ainda sem liberação de carga e inelegível para a matriz.
+O bloco não oficial com tela ativa encerrou com quatro medições válidas e r05
+interrompida na estabilização por falha de leitura do heartbeat. Corrigem-se apenas
+as ferramentas do host, sem completar r05 ou liberar outra execução. A condição de
+cinco sucessos não foi atendida; qualquer nova comparação exige decisão específica.
 Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
 Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
 

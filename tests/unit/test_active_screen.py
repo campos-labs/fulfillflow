@@ -263,6 +263,8 @@ def test_real_powershell_simulated_five_children_and_no_overwrite(tmp_path, fail
     scripts.mkdir(parents=True)
     source = Path(__file__).resolve().parents[2]
     shutil.copyfile(source / "scripts/Invoke-ActiveScreenDiagnostic.ps1", scripts / "Invoke.ps1")
+    for name in ("ActiveScreenIO.cs", "ActiveScreenIO.ps1"):
+        shutil.copyfile(source / "scripts" / name, scripts / name)
     if fail_at in {"uncooperative", "deadline"}:
         launcher = scripts / "Invoke.ps1"
         text = launcher.read_text()

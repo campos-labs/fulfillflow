@@ -10,7 +10,30 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Caminho atual — diagnóstico com tela e sistema ativos, aguardando revisão
+## Caminho atual — bloco encerrado; correção operacional sem carga
+
+A operação `active-screen-operation-02` encerrou com quatro medições não oficiais
+válidas; r05 parou na estabilização por acesso negado ao heartbeat. Preservam-se
+pacote 09, release 02, todos os resultados e a análise `active-screen-block-analysis-01`.
+Não repetir o launcher, completar r05 ou considerar o critério de cinco sucessos atendido.
+O 503 histórico permanece sem causa determinada. As instruções de execução abaixo
+descrevem a preparação histórica encerrada; nenhum comando novo está liberado.
+
+A correção operacional serializa publicação/substituição e leitura via mutex Windows
+nomeado por caminho, com espera de até 250 ms. Os testes reais reproduziram erros
+de substituição/leitura sem essa sincronização, mas não identificam retrospectivamente
+o mecanismo exato da r05. Erros de acesso incluem errno/winerror disponíveis; timeout,
+abandono, formato inválido e idade superior a 3 s continuam fatais, sem retry ou cache.
+O custo adicional é somente a aquisição/liberação do mutex por acesso ao heartbeat.
+Capturas PowerShell de powercfg preservam bytes separados de stdout/stderr, páginas
+de código e saída. A decodificação estrita compara todos os parâmetros; CP850/UTF-8
+entre consultas não altera identidade. Divergência durante a consulta bloqueia.
+Esses ajustes não alteram aplicação, imagens, dependências ou coleta periódica.
+
+A recomendação após validação da ferramenta é avaliar uma nova campanha simétrica
+de 60 medições novas mediante aprovação explícita da revisão da condição de avanço.
+Não se prepara essa campanha nesta correção. Integridade/WAL históricos e cópia
+independente seguem pendentes; a verificação ociosa 02 não é repetida.
 
 A continuação encerrou com **8/60** medições aprovadas pelos validadores: cinco
 v1.0 mixed/4 (incluindo r01 original) e três v1.1 mixed/4. A r04 v1.1 permanece
