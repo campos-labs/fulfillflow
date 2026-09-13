@@ -22,7 +22,7 @@ Os relatórios administrativos registram Screen Off sem segmentos Sleep; não
 explicam os segundos do 503. Os testes funcionais passaram nos cenários examinados,
 sem identificar a causa histórica. Não repetir essas suítes ou os launchers encerrados.
 
-Pacote atual: `results/active-screen-mixed4-review-08`. Contrato:
+Pacote atual: `results/active-screen-mixed4-review-09`. Contrato:
 `active-screen-mixed4-diagnostic-v1`, cinco repetições não oficiais v1.1 mixed/4,
 inelegíveis para a matriz. O pacote 01 e sua primeira imagem derivados durante a
 preparação ficam preservados, não liberados: a revisão corrigiu a seleção necessária
@@ -71,6 +71,8 @@ confirmação, true somente após cinco resultados validados. Não altera o guar
 protocolo, imagens ou configuração persistente. O reaproveitamento da verificação
 ociosa 02 registra seu launcher original separadamente e exige o mesmo hash do
 guard; os ajustes de host são validados com PowerShell e processos simulados.
+
+A revisão 09 preserva a 08 e explicita que a leitura nativa exige Windows, corrigindo a checagem de tipos na CI Linux sem alterar a leitura no host. Mypy completo é verificado também com plataforma Linux.
 
 O novo journal será `results/active-screen-operation-02`, dependente do selo novo
 `results/active-screen-release-02`, ainda não liberado. O destino de benchmark e o

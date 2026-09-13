@@ -393,6 +393,7 @@ public class ActiveScreenGuard : IDisposable {
 
 @pytest.mark.parametrize("codepage", [850, 65001])
 def test_power_query_native_encoding_and_exact_values(tmp_path, monkeypatch, codepage):
+    monkeypatch.setattr(active.sys, "platform", "win32")
     monkeypatch.setenv("FULFILLFLOW_ACTIVE_GUARD", str(tmp_path / "guard.json"))
     expected = "Índice de Configurações Atuais: 0x00000063\n"
     raw = expected.replace("\n", "\r\n").encode(f"cp{codepage}")
@@ -415,6 +416,7 @@ def test_power_query_native_encoding_and_exact_values(tmp_path, monkeypatch, cod
 
 
 def test_power_query_missing_console_fails_closed(monkeypatch):
+    monkeypatch.setattr(active.sys, "platform", "win32")
     monkeypatch.setattr(
         active.ctypes,
         "windll",

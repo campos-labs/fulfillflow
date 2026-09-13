@@ -24,7 +24,7 @@ from benchmarks.sensitivity_images import inventory as image_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "benchmarks/results"
-PACKAGE = RESULTS / "active-screen-mixed4-review-08"
+PACKAGE = RESULTS / "active-screen-mixed4-review-09"
 RELEASE = RESULTS / "active-screen-release-02"
 IDLE = RESULTS / "active-screen-idle-02"
 PARENT = "sha256:543c5756796ac4173aa57771ac846c060aa68ae1872184cc0bf42afb76b29431"
@@ -34,6 +34,8 @@ PROJECT = "fulfillflow-active-screen-mixed4-01-v11"
 
 def query_power_settings() -> str:
     """Decode native output using the inherited console, never replacement characters."""
+    if sys.platform != "win32":
+        raise ControlError("native power identity requires Windows")
     codepage = ctypes.windll.kernel32.GetConsoleOutputCP()
     if not codepage:
         raise ControlError("power query requires an identifiable console output code page")
