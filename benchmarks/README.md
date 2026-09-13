@@ -18,10 +18,14 @@ warm-up sensitivity observations are now complete and preserved.
 The released `scripts/Invoke-Comparison120.ps1` sequence is closed; do not rerun it.
 Commit `02fe942` produced one valid v1.0 mixed/4 repetition and stopped before the
 second warm-up because the coordinator compared differently shaped protocol metadata.
-The diagnostic correction and executable 59-measurement continuation are prepared
-for review, not execution. The new entry is `scripts/Invoke-Comparison120Continuation.ps1`.
-It references immutable r01, runs r02-r05 in a new destination, then the remaining
-eleven blocks. A separate release seal and exact-commit CI remain mandatory. `symmetric-warmup120-comparison-v1`
+The subsequently executed continuation is also closed: eight measurements passed
+the validators; v1.1 mixed/4 r04 stopped with HTTP 503 during measurement.
+Do not rerun `scripts/Invoke-Comparison120Continuation.ps1`.
+The current preparation is an isolated, nonofficial five-repetition active-screen
+diagnostic, pending review and a manual idle check. Its entry is
+`scripts/Invoke-ActiveScreenDiagnostic.ps1`; no execution release exists.
+See the current procedure at the top of [V11_REVIEW.md](V11_REVIEW.md).
+The historical `symmetric-warmup120-comparison-v1`
 uses a separate explicit loader, 120-second admission and proportional pacing, five
 repetitions per version/cell, 300-second stabilization and 300-second measurement.
 The original 60-second loader still rejects this protocol. The preparation manifest

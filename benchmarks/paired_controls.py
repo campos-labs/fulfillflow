@@ -285,7 +285,7 @@ def compose(step: Step) -> list[str]:
         str(step.source / filename),
         *(
             ["--file", str(PACKAGE / f"loadgen-{step.version}.json")]
-            if SERIES == "comparison120"
+            if SERIES in {"comparison120", "active-screen"}
             else []
         ),
     ]
@@ -357,6 +357,16 @@ def source_python(
 
 
 def preparation_argv(step: Step, *, setup_only: bool = False) -> list[str]:
+    if SERIES == "active-screen":
+        return [
+            str(ROOT / ".venv/Scripts/python.exe"),
+            "-X",
+            "utf8",
+            "-B",
+            "-m",
+            "benchmarks.active_screen_controls",
+            "--prepare-step",
+        ]
     if SERIES == "comparison120":
         return [
             str(ROOT / ".venv/Scripts/python.exe"),
@@ -432,6 +442,11 @@ def fingerprints() -> dict[str, str]:
 
 
 def verify_candidates() -> None:
+    if SERIES == "active-screen":
+        from benchmarks.active_screen_controls import verify_candidates as verify_active
+
+        verify_active()
+        return
     originals = original_documents()
     for step in STEPS:
         if read_json(step.candidate) != candidate_document(step, originals):
@@ -451,7 +466,7 @@ def diagnostics(step: Step, destination: Path, *, stop: bool) -> None:
                 evidence=destination / "stop-loadgen.txt",
             )
         except BaseException as exc:
-            failures.append(error_report(exc))
+            failures.append({"stage": "shutdown", **error_report(exc)})
     for filename, args in (
         ("containers.txt", ["ps", "--all", "--format", "json"]),
         ("logs.txt", ["logs", "--no-color", "--tail", "200"]),
@@ -464,7 +479,7 @@ def diagnostics(step: Step, destination: Path, *, stop: bool) -> None:
                 evidence=destination / filename,
             )
         except BaseException as exc:
-            failures.append(error_report(exc))
+            failures.append({"stage": "export", **error_report(exc)})
     # docker cp also works after stopping; failures must retain their runtime too.
     if not stop or SERIES != "historical":
         identifier = _run(
@@ -535,7 +550,7 @@ def cleanup(step: Step, evidence: Path) -> None:
 def prepare_step(step: Step, *, setup_only: bool) -> int:
     evidence = (PACKAGE / "setup" / step.version if setup_only else step.attempt) / "preparation"
     owner_index: Path | None = None
-    if SERIES in {"official", "comparison120"} and not setup_only:
+    if SERIES in {"official", "comparison120", "active-screen"} and not setup_only:
         evidence.mkdir(parents=True, exist_ok=True)
         previous = sorted(evidence.glob("r[0-9][0-9]"))
         expected_previous = [
@@ -556,6 +571,14 @@ def prepare_step(step: Step, *, setup_only: bool) -> int:
                 from benchmarks.comparison_controls import verify_repetition
 
                 verify_repetition(step, completed)
+            if SERIES == "active-screen":
+                from benchmarks.active_screen_controls import capture
+                from benchmarks.active_screen_controls import (
+                    verify_repetition as verify_active_repetition,
+                )
+
+                verify_active_repetition(completed)
+                capture(previous[-1] / "active-capture")
             diagnostics(step, previous[-1] / "diagnostics", stop=False)
             cleanup(step, previous[-1])
         owner_index = evidence / "owned.json"

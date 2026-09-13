@@ -36,8 +36,11 @@ e ritmo de admissão, com aplicação preservada. São 60 medições novas, sem 
 resultados anteriores. A execução liberada no commit `02fe942` preservou uma medição
 v1.0 mixed/4 válida e parou antes do segundo warm-up por incompatibilidade do
 verificador de metadados. `scripts/Invoke-Comparison120.ps1` está **encerrado; não repetir**.
-O pacote das 59 medições restantes usa `scripts/Invoke-Comparison120Continuation.ps1`,
-ainda sem liberação de carga. Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
+`scripts/Invoke-Comparison120Continuation.ps1` também encerrou: há oito medições
+aprovadas pelos validadores, e r04 v1.1 mixed/4 inválida por 503 na medição.
+A preparação atual é somente um bloco não oficial de cinco repetições v1.1 mixed/4
+com tela e sistema ativos, ainda sem liberação de carga e inelegível para a matriz.
+Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
 Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
 
 A política efetiva de logs das imagens é preservada. Os settings de logging não

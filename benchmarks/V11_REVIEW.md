@@ -10,7 +10,100 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Caminho atual — comparação de 120 s interrompida na coordenação
+## Caminho atual — diagnóstico com tela e sistema ativos, aguardando revisão
+
+A continuação encerrou com **8/60** medições aprovadas pelos validadores: cinco
+v1.0 mixed/4 (incluindo r01 original) e três v1.1 mixed/4. A r04 v1.1 permanece
+inválida por 503 durante a medição, após warm-up completo. Há 82 recibos APPLIED,
+80 finalizações e dois inboxes RECEIVED com efeitos no Core. As investigações
+`comparison120-r04-readonly-investigation-01`, `comparison120-energy-admin-review-01`
+e `comparison120-r04-recovery-assessment-01` permanecem seladas e intactas.
+Os relatórios administrativos registram Screen Off sem segmentos Sleep; não
+explicam os segundos do 503. Os testes funcionais passaram nos cenários examinados,
+sem identificar a causa histórica. Não repetir essas suítes ou os launchers encerrados.
+
+Pacote atual: `results/active-screen-mixed4-review-07`. Contrato:
+`active-screen-mixed4-diagnostic-v1`, cinco repetições não oficiais v1.1 mixed/4,
+inelegíveis para a matriz. O pacote 01 e sua primeira imagem derivados durante a
+preparação ficam preservados, não liberados: a revisão corrigiu a seleção necessária
+à exportação dos contadores finais de warm-up. Aplicação, dependências e imagens
+históricas não mudam. `image/audit.json` identifica parent, imagem, hashes e diferenças.
+A revisão 03 reutiliza a imagem da 02 e preserva esse pacote: acrescenta o fallback
+do relatório completo no stderr caso sua própria exportação falhe.
+A revisão 04 preserva as anteriores e a mesma imagem, limita a espera de encerramento
+do filho a 180 s e identifica o runner como
+`active-screen-warmup-and-measurement-not-matrix-eligible`. O rótulo anterior era
+um valor fixo herdado da ferramenta, não descrição da execução deste bloco.
+Se o filho não encerrar, preservam-se PID, início UTC e condição em
+`child-shutdown.json` e stderr, com saída 2 e inspeção manual obrigatória. Nenhum
+processo é terminado à força e nenhum recurso é removido por esse tratamento.
+No Windows, o PID acompanhado pode ser o redirector Python do venv, pai do
+interpretador; não se deve terminar processos por nome ou presumir ausência de filhos.
+O guard já estará liberado e inválido. Não repetir o comando após esse bloqueio.
+A revisão 05 preserva o selo 04 e incorpora somente a correção de lint do teste
+ocioso e os apontamentos para o pacote final; protocolo e imagem não mudam. A revisão 06 normaliza finais de linha dos arquivos
+Python após essa correção, preservando o pacote 05.
+A revisão 07 preserva o pacote 06, seleciona explicitamente o resultado ocioso 02
+para a futura liberação e permite criá-lo por `-IdleAttempt 2`, sem aceitar essa
+opção no modo de carga. A tentativa 01 permanece evidência inválida para esse gate.
+
+Destino novo: `results/reviewed-active-screen-mixed-4-win9445-01-screen-v11/run/`,
+com `mixed-4-users-r01` até `r05`; falhas conservam o sufixo `.partial`.
+Projeto: `fulfillflow-active-screen-mixed4-01-v11`. Preparação limpa por repetição,
+300/120/300 s, q430, demais condições congeladas. Piso de uma hora, além de
+preparação, verificações, drain e exportação. Qualquer falha encerra o bloco.
+
+Entrada preparada, **não liberada**: `scripts/Invoke-ActiveScreenDiagnostic.ps1`.
+O modo `IdleCheck` realiza uma única verificação manual de 960 s em
+`results/active-screen-idle-01`, sem benchmark. O modo `Execute` exige o selo
+separado `results/active-screen-release-01`, ainda inexistente, e produz o journal
+`results/active-screen-operation-01`. Ambos recusam destinos existentes e funcionam
+fora do diretório do repositório. A verificação ociosa deve usar os mesmos hashes
+do guard e launcher que serão liberados. Não fechar a janela PowerShell: Ctrl+C
+permite encerramento; término forçado perde parte dos diagnósticos, embora Windows
+remova a solicitação de energia quando o thread termina.
+`IdleCheck` não inicia Python, Docker ou qualquer comando de parada. Não exige
+administrador para o guard; `/requests` pode exigir elevação e seu erro é capturado
+como consulta inconclusiva. Não elevar todo o fluxo. Manter a sessão sem interação
+rotineira durante os 960 s para observar o comportamento além do timeout de tela.
+O selo de carga exige revisão do isolamento, commit limpo autorizado e CI aprovada
+para seu SHA exato, além do resultado ocioso aprovado e dos hashes correspondentes.
+Tentativas ociosas posteriores exigem `-IdleAttempt N` e criam destinos numerados
+novos, sem sobrescrever as anteriores. Esse parâmetro é recusado no modo `Execute`.
+
+Manter tomada, tampa aberta e sessão desbloqueada durante todo o procedimento.
+O guard usa solicitação temporária de tela/sistema e observações nativas a cada
+250 ms, sem alterar Samsung Mode, CPU máxima 99% ou plano. Tela Off/Dim, mudança
+de sessão, AC não confirmado, suspensão e heartbeat com lacuna superior a 3 s
+interrompem. A solicitação não bloqueia toda ação manual, screen saver ou política
+de sessão; não confiar nela com tampa fechada ou sessão bloqueada. Capturam-se
+powercfg antes/depois e `/requests` ativo/depois com códigos; falha/vazio não
+significa ausência de solicitações. A validação ociosa longa permanece manual.
+
+Captura adicional: logs com timestamps entre repetições/falha, stdout e stderr
+sanitizados separados do runner, códigos de processo, recursos parciais e horários
+reais. A exportação textual usa a sanitização existente, limitada aos últimos
+12.000 caracteres; não garante guardar toda a atividade. Nenhuma consulta SQL
+periódica adicional ou instrumento da aplicação é introduzido. Lacunas de coleta
+não são interpoladas. A exceção original e a correspondência entre respostas e
+eventos podem continuar desconhecidas se outro 503 ocorrer.
+
+Isolamento manual posterior à revisão: conferir IDs, imagens e labels do inventário
+do pacote; exportar logs finais sanitizados e inventário em destino novo antes de
+qualquer parada. Parar graciosamente primeiro Core/Tracking históricos, depois seu
+PostgreSQL, e o PostgreSQL de testes `fulfillflow-r04-recovery-tests-01`. Não usar
+down, rm, prune ou exclusão de volumes históricos. Divergência ou exportação falha
+bloqueia a parada. Containers e volumes históricos ficam preservados; estado
+volátil se perde, inclusive todo o banco sintético de testes em tmpfs. Nenhuma
+parada foi executada na preparação. O gate recusa quaisquer containers concorrentes
+ativos antes do bloco. Limpeza entre repetições atinge apenas o projeto novo próprio.
+A cópia independente das evidências ainda não foi confirmada.
+
+Cinco sucessos sustentam somente avaliar a próxima decisão. Novo 503 ou qualquer
+falha exige análise; condição ambiental insuficiente impede conclusão sobre a
+aplicação. Não há liberação, commit final, CI das mudanças ou nova matriz preparada.
+
+## Histórico — comparação de 120 s interrompida na coordenação
 
 A liberação do commit `02fe942b597f2e85e1bd2df5b9a3be6507561257` teve CI
 aprovada e foi executada manualmente. O primeiro bloco parou antes do segundo

@@ -9,8 +9,11 @@ bloqueadas na matriz original, sem repetição ou retomada automática. Uma camp
 separada de sensibilidade à política de warm-up foi concluída conforme §30.5.
 A comparação simétrica de 120 s foi liberada em `02fe942` e parou antes do
 segundo warm-up por falha de coordenação, preservando uma medição v1.0 mixed/4
-válida. A correção e o pacote de continuação das 59 medições estão em revisão, sem
-commit final ou liberação de carga.
+válida. A continuação depois executada encerrou na r04 v1.1 mixed/4, com um 503
+na medição: a campanha conserva oito medições válidas pelos validadores e permanece
+incompleta. Ambos os launchers estão encerrados. O procedimento atual prepara somente
+cinco repetições não oficiais v1.1 mixed/4 com tela e sistema ativos, conforme §30.5;
+aguarda revisão, verificação ociosa manual e isolamento do host, sem liberação de carga.
 
 ## 1. Referência e objetivo
 

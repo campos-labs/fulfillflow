@@ -555,9 +555,16 @@ def _initialize(environment: Environment, **_kwargs: object) -> None:
         raise RuntimeError("BENCHMARK_CAMPAIGN_MANIFEST is required")
     sensitivity = os.environ.get("BENCHMARK_WARMUP_SENSITIVITY")
     comparison = os.environ.get("BENCHMARK_COMPARISON_PROTOCOL")
-    if sensitivity and comparison:
+    active = os.environ.get("BENCHMARK_ACTIVE_SCREEN_PROTOCOL")
+    if sum(bool(value) for value in (sensitivity, comparison, active)) > 1:
         raise RuntimeError("choose one explicit protocol")
-    if comparison:
+    if active:
+        from benchmarks.active_screen_protocol import PROTOCOL, load_active_screen_campaign
+
+        if active != PROTOCOL or os.environ.get("BENCHMARK_PHASE") not in {"warmup", "measurement"}:
+            raise RuntimeError("active-screen diagnostic requires its explicit phase and protocol")
+        bundle = load_active_screen_campaign(Path(manifest_path))
+    elif comparison:
         from benchmarks.comparison_protocol import PROTOCOL, load_comparison_campaign
 
         if comparison != PROTOCOL or os.environ.get("BENCHMARK_PHASE") not in {
@@ -663,7 +670,10 @@ def _write_response_artifacts(environment: Environment, **_kwargs: object) -> No
         with final_path.open("w", encoding="utf-8", newline="") as stream:
             exporter.requests_csv(csv.writer(stream, lineterminator="\n"))
         if os.environ.get("BENCHMARK_WARMUP_SENSITIVITY") or (
-            os.environ.get("BENCHMARK_COMPARISON_PROTOCOL")
+            (
+                os.environ.get("BENCHMARK_COMPARISON_PROTOCOL")
+                or os.environ.get("BENCHMARK_ACTIVE_SCREEN_PROTOCOL")
+            )
             and os.environ.get("BENCHMARK_PHASE") == "warmup"
         ):
             runtime = _require_runtime()

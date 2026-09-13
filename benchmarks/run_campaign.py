@@ -24,6 +24,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, Literal
 
+from benchmarks.active_screen_energy import EnergyConditionError, require_energy
+from benchmarks.active_screen_protocol import (
+    PROTOCOL as ACTIVE_SCREEN_PROTOCOL,
+)
+from benchmarks.active_screen_protocol import (
+    ActiveScreenManifest,
+    load_active_screen_campaign,
+)
 from benchmarks.artifact import BENCHMARK_HASH_NAME, BENCHMARK_MANIFEST_NAME
 from benchmarks.campaign import (
     CampaignBundle,
@@ -74,6 +82,7 @@ from benchmarks.warmup_sensitivity import PROTOCOL, SensitivityManifest, load_se
 ProcessPhase = Literal["warmup", "measurement"]
 _SENSITIVE_ARGUMENT = re.compile(r"(?i)(://|password|secret|signature|raw[_-]?body|dsn)")
 _GIT_TIMEOUT_SECONDS = 10.0
+ACTIVE_SCREEN_RUNNER_MODE = "active-screen-warmup-and-measurement-not-matrix-eligible"
 
 
 class CampaignExecutionError(RuntimeError):
@@ -150,6 +159,7 @@ def main() -> int:
     parser.add_argument("--diagnostic-warmup-only", action="store_true")
     parser.add_argument("--warmup-sensitivity", action="store_true")
     parser.add_argument("--comparison-120", action="store_true")
+    parser.add_argument("--active-screen-diagnostic", action="store_true")
     parser.add_argument("--comparison-continuation", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
@@ -158,12 +168,24 @@ def main() -> int:
     args = parser.parse_args()
     if args.validate_only and args.execute:
         parser.error("choose either --validate-only or --execute")
-    if sum((args.warmup_sensitivity, args.diagnostic_warmup_only, args.comparison_120)) > 1:
+    if (
+        sum(
+            (
+                args.warmup_sensitivity,
+                args.diagnostic_warmup_only,
+                args.comparison_120,
+                args.active_screen_diagnostic,
+            )
+        )
+        > 1
+    ):
         parser.error("choose one explicit protocol")
     if args.comparison_continuation and not args.comparison_120:
         parser.error("continuation requires the explicit comparison protocol")
     loader = (
-        load_comparison_campaign
+        load_active_screen_campaign
+        if args.active_screen_diagnostic
+        else load_comparison_campaign
         if args.comparison_120
         else load_sensitivity_campaign
         if args.warmup_sensitivity
@@ -216,7 +238,9 @@ def _execute(
 ) -> int:
     sensitivity = isinstance(bundle.manifest, SensitivityManifest)
     mode = (
-        PROTOCOL
+        ACTIVE_SCREEN_PROTOCOL
+        if isinstance(bundle.manifest, ActiveScreenManifest)
+        else PROTOCOL
         if sensitivity
         else "diagnostic_warmup_only"
         if diagnostic_warmup_only
@@ -246,7 +270,12 @@ def _execute(
     if application_source is not None:
         if not (provenance.worktree_clean and provenance.staged_clean):
             raise CampaignExecutionError("separate application source must be clean")
-        host_runner = runner_provenance(runner_root, require_clean=True)
+        if isinstance(bundle.manifest, ActiveScreenManifest):
+            host_runner = runner_provenance(
+                runner_root, require_clean=True, diagnostic_mode=ACTIVE_SCREEN_RUNNER_MODE
+            )
+        else:
+            host_runner = runner_provenance(runner_root, require_clean=True)
     _validate_prepare_command(prepare_command)
     prefix: list[Path] = []
     if comparison_continuation:
@@ -284,7 +313,7 @@ def _execute(
         docker = DockerProbe(bundle, repository_root)
         host = HostProbe(
             bundle.manifest.host,
-            official=bundle.manifest.official,
+            official=bundle.manifest.official or isinstance(bundle.manifest, ActiveScreenManifest),
             timeout_seconds=bundle.manifest.timeouts.command_seconds,
         )
         try:
@@ -311,6 +340,8 @@ def _execute(
                     partial_directory / ".incomplete.json",
                     {"complete": False, "load": load.name, "repetition": repetition},
                 )
+                if isinstance(bundle.manifest, ActiveScreenManifest):
+                    require_energy()
                 _run_preparation(
                     prepare_command,
                     bundle.manifest.timeouts.preparation_seconds,
@@ -339,7 +370,12 @@ def _execute(
                     observed.container_ids["loadgen"],
                     partial_directory,
                 )
-                stabilization = _stabilize(bundle.manifest.stabilization_seconds)
+                if isinstance(bundle.manifest, ActiveScreenManifest):
+                    stabilization = _stabilize(
+                        bundle.manifest.stabilization_seconds, health_check=require_energy
+                    )
+                else:
+                    stabilization = _stabilize(bundle.manifest.stabilization_seconds)
                 preflight_metadata: dict[str, object] = {
                     "valid": False,
                     "mode": mode,
@@ -384,7 +420,7 @@ def _execute(
                     partial_directory,
                 )
                 after_warmup = database.snapshot("pre_measurement")
-                if isinstance(bundle.manifest, ComparisonManifest):
+                if isinstance(bundle.manifest, (ComparisonManifest, ActiveScreenManifest)):
                     verify_warmup_progress(partial_directory / "warmup", load.users)
                 pre_measurement_identity = _verify_warmup(
                     bundle, load, database, initial, after_warmup
@@ -458,6 +494,8 @@ def _execute(
                         host_runner=host_runner,
                     ),
                 )
+                if isinstance(bundle.manifest, ActiveScreenManifest):
+                    require_energy()
                 _require_repetition_artifacts(partial_directory)
                 if isinstance(database, SplitDatabaseProbe):
                     for artifact in (
@@ -624,12 +662,17 @@ def _stabilize(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     utc_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    health_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     started_at = utc_now()
     started = monotonic()
     deadline = started + seconds
     while (remaining := deadline - monotonic()) > 0:
-        sleep(remaining)
+        if health_check is not None:
+            health_check()
+        sleep(min(0.25, remaining) if health_check else remaining)
+    if health_check is not None:
+        health_check()
     return {
         "expected_seconds": seconds,
         "started_at": started_at.isoformat(),
@@ -672,6 +715,8 @@ def _run_phase(
         if phase != "warmup":
             raise CampaignExecutionError("sensitivity protocol forbids measurement")
         command[2:2] = ["--env", f"BENCHMARK_WARMUP_SENSITIVITY={PROTOCOL}"]
+    elif isinstance(bundle.manifest, ActiveScreenManifest):
+        command[2:2] = ["--env", f"BENCHMARK_ACTIVE_SCREEN_PROTOCOL={ACTIVE_SCREEN_PROTOCOL}"]
     elif isinstance(bundle.manifest, ComparisonManifest):
         command[2:2] = ["--env", f"BENCHMARK_COMPARISON_PROTOCOL={COMPARISON_PROTOCOL}"]
     process: ManagedProcess | None = None
@@ -684,6 +729,8 @@ def _run_phase(
     returncode: int | None = None
     stage = "process_start"
     try:
+        if isinstance(bundle.manifest, ActiveScreenManifest):
+            require_energy()
         process = ManagedProcess(command)
         stage = "phase_start"
         _wait_for_container_file(
@@ -709,13 +756,18 @@ def _run_phase(
             else bundle.manifest.timeouts.measurement_process_seconds
         )
         stage = "process_wait"
-        returncode = process.wait(timeout, sampler=sampler)
+        if isinstance(bundle.manifest, ActiveScreenManifest):
+            returncode = process.wait(timeout, sampler=sampler, health_check=require_energy)
+        else:
+            returncode = process.wait(timeout, sampler=sampler)
         if returncode != 0:
             stage = "process_exit"
             raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
     except BaseException as exc:
         primary = exc
-        if isinstance(exc, CollectionSupervisionError):
+        if isinstance(exc, EnergyConditionError):
+            stage = "environment"
+        elif isinstance(exc, CollectionSupervisionError):
             stage = "collector"
         elif isinstance(exc, ProcessTimeoutError):
             stage = "process_timeout"
@@ -907,11 +959,19 @@ class ManagedProcess:
         except OSError as exc:
             raise CampaignExecutionError("external process could not start") from exc
 
-    def wait(self, timeout_seconds: float, *, sampler: ResourceSampler | None = None) -> int:
-        if sampler is not None:
+    def wait(
+        self,
+        timeout_seconds: float,
+        *,
+        sampler: ResourceSampler | None = None,
+        health_check: Callable[[], None] | None = None,
+    ) -> int:
+        if sampler is not None or health_check is not None:
             deadline = time.monotonic() + timeout_seconds
             while True:
-                if sampler.failed.is_set():
+                if health_check is not None:
+                    health_check()
+                if sampler is not None and sampler.failed.is_set():
                     raise CollectionSupervisionError("mandatory resource sampling failed")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1288,6 +1348,11 @@ def _metadata(
     return {
         "campaign": bundle.manifest.name,
         "official": bundle.manifest.official,
+        **(
+            {"mode": ACTIVE_SCREEN_PROTOCOL, "matrix_eligible": False}
+            if isinstance(bundle.manifest, ActiveScreenManifest)
+            else {}
+        ),
         "valid": True,
         "release": bundle.manifest.release,
         "profile": bundle.manifest.profile,
@@ -1564,7 +1629,12 @@ def _read_result_counts(path: Path) -> dict[str, int]:
         raise CampaignExecutionError("operational result CSV is invalid") from exc
 
 
-def runner_provenance(repository_root: Path, *, require_clean: bool = True) -> dict[str, object]:
+def runner_provenance(
+    repository_root: Path,
+    *,
+    require_clean: bool = True,
+    diagnostic_mode: str = "explicit-warmup-only-not-matrix-eligible",
+) -> dict[str, object]:
     """Identify the host tool independently of the frozen measured application."""
     provenance = _git_provenance(repository_root)
     if require_clean and not (provenance.worktree_clean and provenance.staged_clean):
@@ -1585,7 +1655,7 @@ def runner_provenance(repository_root: Path, *, require_clean: bool = True) -> d
         "supervision_interval_seconds": 0.25,
         "collection_policy": "original-deltas-no-retry-failure-diagnostics-v1",
         "phase_diagnostics": "separate-process-collector-shutdown-export-v2",
-        "diagnostic_mode": "explicit-warmup-only-not-matrix-eligible",
+        "diagnostic_mode": diagnostic_mode,
     }
 
 

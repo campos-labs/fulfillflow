@@ -2044,6 +2044,69 @@ superioridade, teto físico universal, causa exclusiva ou ausência geral de def
 Os 60 s eram requisito do protocolo original, não um SLA. Nenhuma mudança funcional,
 de observabilidade ou de serviços integra esta etapa. Matriz e release permanecem pendentes.
 
+#### Diagnóstico delimitado com tela e sistema ativos
+
+A continuação de 120 s encerrou com oito medições aprovadas pelos validadores e
+r04 v1.1 mixed/4 inválida por 503 na medição. Preservam-se todas as classificações.
+A auditoria administrativa encontrou quatro sessões Screen Off, sem segmentos
+Sleep registrados; sua agregação não identifica a causa do 503. Os testes de
+recuperação sustentam os cenários examinados, sem demonstrar estabilidade sob carga.
+
+O protocolo separado `active-screen-mixed4-diagnostic-v1` é não oficial e inelegível
+para a matriz, limitado a cinco repetições v1.1 mixed/4. Conserva preparação limpa,
+300 s de estabilização, 120 s de admissão proporcional, q430 por usuário, 300 s de
+medição, coleta de 1 s, aplicações, recursos e demais limites da comparação de 120 s.
+Quota e conciliação completas continuam necessárias antes da medição. O loader
+histórico de 60 s e o comparativo oficial não aceitam esse contrato. Uma projeção
+somente em memória reaproveita integralmente as restrições do comparativo; nenhum
+manifest oficial é reclassificado ou substituído. A imagem derivada altera somente
+o contrato e sua seleção/exportação no loadgen, com inventário de arquivos e pacotes.
+
+Uma solicitação nativa temporária `SetThreadExecutionState` mantém sistema e tela
+ativos, no mesmo thread até a liberação em finally; não altera o plano persistente.
+Observam-se alimentação AC, desktop interativo desbloqueado, notificações de tela
+e sessão e heartbeat a cada 250 ms. Ausência de confirmação, tela diferente de On,
+transição de sessão, suspensão ou lacuna de heartbeat superior a 3 s interrompem.
+O usuário deve manter tampa aberta, tomada e sessão desbloqueada, sem suspensão
+manual. O mecanismo não impede todas as ações deliberadas nem garante condições
+durante Modern Standby ou sessão bloqueada; essas condições são recusadas.
+Samsung Mode e máximo de CPU de 99% permanecem sem alteração. Esse percentual não
+é interpretado como perda linear de capacidade ou comprovação de turbo desativado.
+
+O launcher bloqueante mantém a solicitação entre repetições, limita o bloco a duas
+horas operacionais e libera o mecanismo após sucesso ou falha. A espera final
+do filho é limitada a 180 s; ausência de
+encerramento confirmado gera saída 2, PID/início UTC e inspeção manual, sem kill
+indiscriminado ou remoção de recursos. O rótulo de proveniência deste diagnóstico
+explicita warm-up e medição, sem alterar seu protocolo. Prazos das fases e
+requisições não mudam. O runner verifica o heartbeat com espera de até 250 ms durante
+carga e estabilização; preparação em andamento conserva seu prazo de 120 s, e não
+autoriza iniciar carga após falha ambiental. A verificação ociosa manual dura 960 s,
+excede o timeout de tela de 15 minutos e deve anteceder a liberação do bloco.
+Capturam-se saída e código de powercfg; saída vazia ou acesso negado é inconclusivo.
+Repetições ociosas recebem número explícito e destino novo; essa seleção é recusada
+no modo de carga e não altera o destino operacional único.
+
+O custo adicional é a observação nativa e leitura/escrita de heartbeat no host a cada
+250 ms, além de exportação entre repetições e após falha. Não há novas consultas SQL
+periódicas nem instrumentação da aplicação. Logs com timestamps, stdout/stderr
+sanitizados e amostras parciais preservam os sinais disponíveis; lacunas permanecem
+nos horários reais, sem interpolação. A exceção interna de outro 503 pode continuar
+indeterminada, sem correlação inequívoca entre HTTP público e efeitos persistidos.
+
+Recursos novos têm propriedade verificada e preparação limpa por repetição. A
+parada graciosa dos concorrentes históricos só poderá ocorrer manualmente após
+exportação e nova conferência de identidade, sem remover containers ou volumes.
+Ela perde estado volátil; parar o PostgreSQL de testes em tmpfs perde seus dados
+sintéticos. Na preparação atual não se para nenhum desses recursos. A cópia
+independente das evidências permanece pendente de confirmação.
+
+Qualquer falha encerra sem retry, reposição ou sobrescrita. Cinco sucessos permitem
+avaliar uma campanha futura, sem provar causa da falha anterior ou estabilidade
+geral. Evidência ambiental insuficiente impede conclusão sobre a aplicação. Piso
+das fases: uma hora; preparação, drain e exportação são adicionais. Nenhum resultado
+desse bloco integra a matriz e nenhuma nova campanha completa está preparada aqui.
+
 ### 30.6 Estado funcional do incremento I
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`
