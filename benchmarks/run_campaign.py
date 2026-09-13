@@ -159,6 +159,7 @@ def main() -> int:
     parser.add_argument("--diagnostic-warmup-only", action="store_true")
     parser.add_argument("--warmup-sensitivity", action="store_true")
     parser.add_argument("--comparison-120", action="store_true")
+    parser.add_argument("--active-host-policy", action="store_true")
     parser.add_argument("--active-screen-diagnostic", action="store_true")
     parser.add_argument("--comparison-continuation", action="store_true")
     parser.add_argument(
@@ -166,6 +167,10 @@ def main() -> int:
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
     )
     args = parser.parse_args()
+    if args.active_host_policy:
+        if not args.comparison_120:
+            parser.error("active host policy requires the symmetric comparison contract")
+        os.environ["FULFILLFLOW_COMPARISON_ACTIVE"] = "1"
     if args.validate_only and args.execute:
         parser.error("choose either --validate-only or --execute")
     if (
@@ -270,7 +275,7 @@ def _execute(
     if application_source is not None:
         if not (provenance.worktree_clean and provenance.staged_clean):
             raise CampaignExecutionError("separate application source must be clean")
-        if isinstance(bundle.manifest, ActiveScreenManifest):
+        if requires_active_host(bundle.manifest):
             host_runner = runner_provenance(
                 runner_root, require_clean=True, diagnostic_mode=ACTIVE_SCREEN_RUNNER_MODE
             )
@@ -340,7 +345,7 @@ def _execute(
                     partial_directory / ".incomplete.json",
                     {"complete": False, "load": load.name, "repetition": repetition},
                 )
-                if isinstance(bundle.manifest, ActiveScreenManifest):
+                if requires_active_host(bundle.manifest):
                     require_energy()
                 _run_preparation(
                     prepare_command,
@@ -370,7 +375,7 @@ def _execute(
                     observed.container_ids["loadgen"],
                     partial_directory,
                 )
-                if isinstance(bundle.manifest, ActiveScreenManifest):
+                if requires_active_host(bundle.manifest):
                     stabilization = _stabilize(
                         bundle.manifest.stabilization_seconds, health_check=require_energy
                     )
@@ -494,7 +499,7 @@ def _execute(
                         host_runner=host_runner,
                     ),
                 )
-                if isinstance(bundle.manifest, ActiveScreenManifest):
+                if requires_active_host(bundle.manifest):
                     require_energy()
                 _require_repetition_artifacts(partial_directory)
                 if isinstance(database, SplitDatabaseProbe):
@@ -729,7 +734,7 @@ def _run_phase(
     returncode: int | None = None
     stage = "process_start"
     try:
-        if isinstance(bundle.manifest, ActiveScreenManifest):
+        if requires_active_host(bundle.manifest):
             require_energy()
         process = ManagedProcess(command)
         stage = "phase_start"
@@ -756,7 +761,7 @@ def _run_phase(
             else bundle.manifest.timeouts.measurement_process_seconds
         )
         stage = "process_wait"
-        if isinstance(bundle.manifest, ActiveScreenManifest):
+        if requires_active_host(bundle.manifest):
             returncode = process.wait(timeout, sampler=sampler, health_check=require_energy)
         else:
             returncode = process.wait(timeout, sampler=sampler)
@@ -1629,6 +1634,12 @@ def _read_result_counts(path: Path) -> dict[str, int]:
         raise CampaignExecutionError("operational result CSV is invalid") from exc
 
 
+def requires_active_host(manifest: object) -> bool:
+    return isinstance(manifest, ActiveScreenManifest) or (
+        os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+    )
+
+
 def runner_provenance(
     repository_root: Path,
     *,
@@ -1655,7 +1666,9 @@ def runner_provenance(
         "supervision_interval_seconds": 0.25,
         "collection_policy": "original-deltas-no-retry-failure-diagnostics-v1",
         "phase_diagnostics": "separate-process-collector-shutdown-export-v2",
-        "diagnostic_mode": diagnostic_mode,
+        "diagnostic_mode": "symmetric-comparison-active-host"
+        if os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+        else diagnostic_mode,
     }
 
 

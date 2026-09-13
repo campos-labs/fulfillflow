@@ -17,8 +17,9 @@ a verificação ociosa 02 está encerrada e aprovada. A operação 02 encerrou c
 medições não oficiais válidas e r05 interrompida na estabilização por falha de leitura
 do heartbeat, antes do warm-up. O critério de cinco sucessos não foi atendido.
 Corrigem-se somente transporte do heartbeat e captura de energia, sem nova carga.
-Uma comparação simétrica nova depende de aprovação específica da revisão da condição
-de avanço; não incorporar medições anteriores nem completar isoladamente a r05.
+A revisão da condição de avanço foi aprovada para preparar 60 medições novas com
+host ativo nos dois lados, sem incorporar resultados anteriores nem completar r05.
+O diagnóstico permanece incompleto. A carga exige pacote próprio, CI e isolamento.
 
 ## 1. Referência e objetivo
 

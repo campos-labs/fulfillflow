@@ -21,6 +21,10 @@ second warm-up because the coordinator compared differently shaped protocol meta
 The subsequently executed continuation is also closed: eight measurements passed
 the validators; v1.1 mixed/4 r04 stopped with HTTP 503 during measurement.
 Do not rerun `scripts/Invoke-Comparison120Continuation.ps1`.
+The revised advancement condition authorizes a new symmetric 60-measurement
+comparison, excluding all earlier results. Entry: `scripts/Invoke-ActiveComparison.ps1`,
+requiring its own sealed release and isolated resources. Both versions use the same
+active-host policy, preserved images and the frozen 120-second protocol.
 The active-screen block is now closed: four nonofficial measurements passed and r05
 stopped during stabilization because heartbeat evidence could not be read. Do not
 rerun its launcher or fill r05 separately. Host-only transport/capture corrections

@@ -10,7 +10,22 @@ v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a qu
 incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
 seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
 
-## Caminho atual — bloco encerrado; correção operacional sem carga
+## Caminho atual — nova comparação simétrica com host ativo
+
+A revisão da condição de avanço foi aprovada para preparar 60 medições novas, sem
+incorporar resultados anteriores. Entrada: `scripts/Invoke-ActiveComparison.ps1`.
+Pacote: `results/comparison-active-review-01`; selo:
+`results/comparison-active-release-01`; journals `comparison-active-operation-01`
+e `comparison-active-execution-01`. O inventário completo consta de `review.json`.
+Projetos novos `fulfillflow-comparison-active-01-v10` e `-v11`; mesma política de
+tela/sessão/AC e I/O nos dois lados. Imagens comparativas preservadas reutilizadas.
+12 blocos de cinco, ordem conforme DESIGN §30.5, piso 12 h, limite operacional 24 h.
+Nenhum retry, reposição ou reexecução automática. Antes da carga, os três containers
+ativos do diagnóstico encerrado exigem parada graciosa manual, com propriedade
+conferida e exportação final, sem remover containers ou volumes. Bancos históricos
+não são iniciados, restaurados ou reutilizados. Integridade/WAL e backup pendentes.
+
+### Referência preservada: diagnóstico e correção de I/O
 
 A operação `active-screen-operation-02` encerrou com quatro medições não oficiais
 válidas; r05 parou na estabilização por acesso negado ao heartbeat. Preservam-se

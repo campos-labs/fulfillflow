@@ -374,7 +374,9 @@ def preparation_argv(step: Step, *, setup_only: bool = False) -> list[str]:
             "utf8",
             "-B",
             "-m",
-            "benchmarks.comparison_continuation"
+            "benchmarks.active_comparison_controls"
+            if os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+            else "benchmarks.comparison_continuation"
             if step.continuation
             else "benchmarks.comparison_controls",
             "--prepare-step",
@@ -1115,6 +1117,11 @@ def run_step(step: Step, launcher: Mapping[str, Any]) -> int:
                 else str(step.candidate),
                 "--execute",
                 *(["--comparison-120"] if SERIES == "comparison120" else []),
+                *(
+                    ["--active-host-policy"]
+                    if os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+                    else []
+                ),
                 *(["--comparison-continuation"] if step.continuation else []),
                 *(["--diagnostic-warmup-only"] if SERIES == "warmup" else []),
                 "--confirm-campaign",

@@ -2046,6 +2046,18 @@ de observabilidade ou de serviços integra esta etapa. Matriz e release permanec
 
 #### Diagnóstico delimitado com tela e sistema ativos
 
+A revisão da condição de avanço foi aprovada após quatro medições não oficiais e
+testes sem carga de I/O: prepara-se uma campanha simétrica nova de 60 medições, sem
+incorporar resultados anteriores. O critério original de cinco sucessos continua
+não atendido e o 503 histórico permanece sem causa determinada. Mantêm-se os 12
+blocos de cinco na ordem já fixada para a comparação de 120 s. A ordem não é
+randomizada e não elimina variação temporal. Ambas as versões usam a política
+operacional explícita `--active-host-policy`, identificada no runner, com guard
+durante toda a sequência, inclusive preparação e intervalos entre blocos. Nenhuma
+imagem, workload, quota ou prazo de fase muda. O limite operacional do launcher é
+24 h para um piso de 12 h de fases temporizadas, além dos demais custos. A primeira
+falha encerra a sequência, sem reposição. Projetos, volumes e destinos são novos.
+
 A continuação de 120 s encerrou com oito medições aprovadas pelos validadores e
 r04 v1.1 mixed/4 inválida por 503 na medição. Preservam-se todas as classificações.
 A auditoria administrativa encontrou quatro sessões Screen Off, sem segmentos

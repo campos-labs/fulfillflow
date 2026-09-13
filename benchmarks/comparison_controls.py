@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +43,10 @@ def inputs() -> dict[str, str]:
         *ROOT.glob("tests/unit/test_*comparison*.py"),
         ROOT / "scripts/Invoke-Comparison120.ps1",
         ROOT / "scripts/Invoke-Comparison120Continuation.ps1",
+        ROOT / "scripts/Invoke-ActiveComparison.ps1",
+        ROOT / "scripts/ActiveScreenIO.cs",
+        ROOT / "scripts/ActiveScreenIO.ps1",
+        ROOT / "scripts/ActiveScreenGuard.cs",
         ROOT / "scripts/prepare_paired_control.py",
         ROOT / "uv.lock",
         ROOT / "pyproject.toml",
@@ -97,6 +102,10 @@ def verify_release() -> dict[str, Any]:
         raise ControlError("independent review, final clean commit and its CI are required")
     if ready["runner"]["components"] != draft["runner"]["components"]:
         raise ControlError("final runner components differ from reviewed files")
+    if os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1":
+        from benchmarks.active_comparison_controls import verify_host_policy
+
+        verify_host_policy()
     return ready
 
 

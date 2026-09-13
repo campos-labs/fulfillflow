@@ -41,7 +41,9 @@ aprovadas pelos validadores, e r04 v1.1 mixed/4 inválida por 503 na medição.
 O bloco não oficial com tela ativa encerrou com quatro medições válidas e r05
 interrompida na estabilização por falha de leitura do heartbeat. Corrigem-se apenas
 as ferramentas do host, sem completar r05 ou liberar outra execução. A condição de
-cinco sucessos não foi atendida; qualquer nova comparação exige decisão específica.
+cinco sucessos não foi atendida. A revisão da condição de avanço foi aprovada para
+preparar 60 medições novas com host ativo e sem incorporar resultados anteriores.
+Entrada atual: `scripts/Invoke-ActiveComparison.ps1`, condicionada a selo e isolamento.
 Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
 Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
 
