@@ -11,6 +11,7 @@ from benchmarks import comparison_controls as comparison
 from benchmarks import paired_controls as controls
 from benchmarks.active_screen_controls import query_power_settings
 from benchmarks.active_screen_energy import require_energy
+from benchmarks.comparison_isolation import isolate, prepare_isolation
 from benchmarks.comparison_protocol import PROTOCOL
 from benchmarks.controls_v10 import ControlError, _run, _sha256, _write_checksums
 from benchmarks.operational_errors import error_report, write_report
@@ -18,9 +19,9 @@ from benchmarks.run_campaign import runner_provenance
 from benchmarks.sensitivity_controls import PWSH
 
 ROOT = comparison.ROOT
-PACKAGE = ROOT / "benchmarks/results/comparison-active-review-01"
-RELEASE = ROOT / "benchmarks/results/comparison-active-release-01"
-OPERATION = ROOT / "benchmarks/results/comparison-active-operation-01"
+PACKAGE = ROOT / "benchmarks/results/comparison-active-review-02"
+RELEASE = ROOT / "benchmarks/results/comparison-active-release-02"
+OPERATION = ROOT / "benchmarks/results/comparison-active-operation-02"
 PREVIOUS = ROOT / "benchmarks/results/reviewed-comparison120-win9445-review-01"
 
 
@@ -28,9 +29,9 @@ def configure() -> None:
     os.environ["FULFILLFLOW_COMPARISON_ACTIVE"] = "1"
     comparison.configure()
     controls.PACKAGE = PACKAGE
-    controls.JOURNAL = ROOT / "benchmarks/results/comparison-active-execution-01"
-    controls.PROJECTS = {v: f"fulfillflow-comparison-active-01-{v}" for v in ("v10", "v11")}
-    controls.STEPS = tuple(replace(s, label="active-" + s.label) for s in controls.STEPS)
+    controls.JOURNAL = ROOT / "benchmarks/results/comparison-active-execution-02"
+    controls.PROJECTS = {v: f"fulfillflow-comparison-active-02-{v}" for v in ("v10", "v11")}
+    controls.STEPS = tuple(replace(s, label="active02-" + s.label) for s in controls.STEPS)
     comparison.RELEASE = RELEASE
 
 
@@ -96,6 +97,7 @@ def prepare() -> None:
             "images_parent_package_sha256": _sha256(PREVIOUS / "checksums.sha256"),
         },
     )
+    prepare_isolation(PACKAGE)
     _write_checksums(PACKAGE)
 
 
@@ -115,6 +117,10 @@ def main() -> int:
             comparison.verify_release()
             step = next(s for s in controls.STEPS if s.label == args.prepare_step)
             return controls.prepare_step(step, setup_only=False)
+        comparison.verify_release()
+        controls.require_new_execution()
+        controls.assert_projects_absent()
+        isolate(PACKAGE, OPERATION / "isolation")
         require_energy()
         if _run(["docker", "ps", "--quiet"], cwd=ROOT).stdout.strip():
             raise ControlError("running competing containers; isolated manual shutdown required")

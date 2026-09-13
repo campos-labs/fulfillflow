@@ -1,5 +1,18 @@
 # FulfillFlow benchmark harness
 
+A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
+`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
+validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
+nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
+inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
+Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
+operação `comparison-active-operation-02`; o launcher atual é
+`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
+containers inventariados da execução 01 e os para graciosamente antes de qualquer
+preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
+processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
+históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
+
 This directory defines reproducible data and workload artifacts. The accepted v1.0 baseline has
 30 valid official repetitions: mixed/timeline/ingestion, 4/12 users, five repetitions per point.
 See [the portable baseline publication](baselines/v1.0/README.md) for reports, immutable manifests,

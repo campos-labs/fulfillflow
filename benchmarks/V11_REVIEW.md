@@ -1,5 +1,18 @@
 # Incremento II — pacote de revisão
 
+A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
+`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
+validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
+nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
+inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
+Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
+operação `comparison-active-operation-02`; o launcher atual é
+`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
+containers inventariados da execução 01 e os para graciosamente antes de qualquer
+preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
+processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
+históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
+
 Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 mixed/4,
 q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
 conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e

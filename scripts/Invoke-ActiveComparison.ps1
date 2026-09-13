@@ -23,7 +23,7 @@ $PSNativeCommandUseErrorActionPreference=$false
 $root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'ActiveScreenIO.ps1')
 $base=Join-Path $root 'benchmarks/results'
-$destination=Join-Path $base $(if($Mode -eq 'IdleCheck'){"active-screen-idle-$($IdleAttempt.ToString('00'))"}else{'comparison-active-operation-01'})
+$destination=Join-Path $base $(if($Mode -eq 'IdleCheck'){"active-screen-idle-$($IdleAttempt.ToString('00'))"}else{'comparison-active-operation-02'})
 $guard=$null
 $child=$null
 $exitCode=2
@@ -37,7 +37,7 @@ try {
     if($Mode -ne 'Execute'){throw 'This campaign does not authorize another idle check.'}
     if($Mode -eq 'Execute' -and $IdleAttempt -ne 1){throw 'IdleAttempt is valid only for IdleCheck.'}
     if(Test-Path -LiteralPath $destination){throw 'Destination exists; no retry or overwrite.'}
-    if($Mode -eq 'Execute' -and -not(Test-Path -LiteralPath (Join-Path $base 'comparison-active-release-01/ready.json'))){throw 'Execution awaits review and explicit release.'}
+    if($Mode -eq 'Execute' -and -not(Test-Path -LiteralPath (Join-Path $base 'comparison-active-release-02/ready.json'))){throw 'Execution awaits review and explicit release.'}
     New-Item -ItemType Directory -Path $destination | Out-Null
     $created=$true
     Add-Type -Path (Join-Path $PSScriptRoot 'ActiveScreenGuard.cs')

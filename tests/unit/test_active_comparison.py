@@ -105,14 +105,14 @@ public class ActiveScreenGuard : IDisposable {
         " with Path('sequence.txt').open('a') as f: f.write(str(n)+'\\n')\n"
         f" if n=={fail_at}:sys.exit(2)\n"
     )
-    release = module / "results/comparison-active-release-01"
+    release = module / "results/comparison-active-release-02"
     release.mkdir(parents=True)
     (release / "ready.json").write_text("{}")
     args = [str(PWSH), "-NoProfile", "-File", str(scripts / "Invoke-ActiveComparison.ps1")]
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, timeout=30)
     assert r.returncode == (2 if fail_at else 0), r.stderr
     assert len((root / "sequence.txt").read_text().splitlines()) == (fail_at or 60)
-    report = module / "results/comparison-active-operation-01/result.json"
+    report = module / "results/comparison-active-operation-02/result.json"
     before = report.read_bytes()
     assert json.loads(before)["released"] is True
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, timeout=30)
