@@ -2,11 +2,15 @@
 
 import argparse
 import copy
+import ctypes
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from benchmarks import paired_controls as controls
 from benchmarks.active_screen_energy import require_energy
@@ -20,12 +24,45 @@ from benchmarks.sensitivity_images import inventory as image_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "benchmarks/results"
-PACKAGE = RESULTS / "active-screen-mixed4-review-07"
-RELEASE = RESULTS / "active-screen-release-01"
+PACKAGE = RESULTS / "active-screen-mixed4-review-08"
+RELEASE = RESULTS / "active-screen-release-02"
 IDLE = RESULTS / "active-screen-idle-02"
 PARENT = "sha256:543c5756796ac4173aa57771ac846c060aa68ae1872184cc0bf42afb76b29431"
 ORIGINAL = RESULTS / "comparison120-continuation-review-02"
 PROJECT = "fulfillflow-active-screen-mixed4-01-v11"
+
+
+def query_power_settings() -> str:
+    """Decode native output using the inherited console, never replacement characters."""
+    codepage = ctypes.windll.kernel32.GetConsoleOutputCP()
+    if not codepage:
+        raise ControlError("power query requires an identifiable console output code page")
+    result = subprocess.run(
+        ["powercfg", "/query"], capture_output=True, cwd=ROOT, timeout=30, check=False
+    )
+    guard = os.environ.get("FULFILLFLOW_ACTIVE_GUARD")
+    evidence = {"codepage": codepage, "exit_code": result.returncode}
+    if result.returncode:
+        raise ControlError(f"power query exited {result.returncode}; code page {codepage}")
+    try:
+        output = result.stdout.decode(f"cp{codepage}").replace("\r\n", "\n")
+    except UnicodeError as exc:
+        raise ControlError(f"power query decoding failed; code page {codepage}") from exc
+    if guard:
+        write_report(
+            Path(guard).parent / "power-query" / f"{uuid4()}.json",
+            {**evidence, "settings": output},
+        )
+    return output
+
+
+def coordinator_status(stage: str, load_executed: bool | None) -> None:
+    guard = os.environ.get("FULFILLFLOW_ACTIVE_GUARD")
+    if guard:
+        write_report(
+            Path(guard).parent / "coordinator-status.json",
+            {"stage": stage, "load_executed": load_executed},
+        )
 
 
 def configure() -> controls.Step:
@@ -113,13 +150,12 @@ def require_release() -> None:
         or idle.get("duration_seconds", 0) < 960
         or idle.get("load_executed") is not False
         or idle.get("guard_sha256") != review["inputs"]["scripts/ActiveScreenGuard.cs"]
-        or idle.get("launcher_sha256")
-        != review["inputs"]["scripts/Invoke-ActiveScreenDiagnostic.ps1"]
+        or idle.get("launcher_sha256") != review["idle_validation"]["launcher_sha256"]
         or ready.get("idle_result_sha256") != _sha256(IDLE / "result.json")
     ):
         raise ControlError("explicit review release and successful 960-second idle check required")
     runner_provenance(ROOT, require_clean=True, diagnostic_mode=ACTIVE_SCREEN_RUNNER_MODE)
-    current_power = _run(["powercfg", "/query"], cwd=ROOT).stdout
+    current_power = query_power_settings()
     if current_power != review["power_settings"]:
         raise ControlError("persistent power settings differ from prepared identity")
 
@@ -248,7 +284,7 @@ def prepare_review() -> None:
             "matrix_eligible": False,
             "inputs": inputs(),
             "host": identity,
-            "power_settings": _run(["powercfg", "/query"], cwd=ROOT).stdout,
+            "power_settings": query_power_settings(),
             "runner": runner_provenance(
                 ROOT, require_clean=False, diagnostic_mode=ACTIVE_SCREEN_RUNNER_MODE
             ),
@@ -256,6 +292,9 @@ def prepare_review() -> None:
             "destination": str(step.attempt),
             "repetitions": [f"mixed-4-users-r{n:02d}" for n in range(1, 6)],
             "manual_idle_check_pending": True,
+            "idle_validation": {
+                "launcher_sha256": inputs()["scripts/Invoke-ActiveScreenDiagnostic.ps1"]
+            },
             "released": False,
             "load_executed": False,
         },
@@ -264,6 +303,7 @@ def prepare_review() -> None:
 
 
 def execute() -> int:
+    coordinator_status("preflight", False)
     step = configure()
     require_release()
     require_energy()
@@ -301,6 +341,7 @@ def execute() -> int:
             "--prepare-command-json",
             json.dumps(controls.preparation_argv(step)),
         ]
+        coordinator_status("runner_dispatched", None)
         result = _run_runner(
             args, ROOT, controls.runner_environment(step, document), step.attempt / "runner.txt"
         )
@@ -318,6 +359,7 @@ def execute() -> int:
         for n in range(1, 6):
             verify_repetition(step.attempt / f"run/mixed-4-users-r{n:02d}")
         report["complete"] = True
+        coordinator_status("completed", True)
     except BaseException as exc:
         code = 2
         report["primary"] = error_report(exc)

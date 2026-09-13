@@ -22,7 +22,7 @@ Os relatórios administrativos registram Screen Off sem segmentos Sleep; não
 explicam os segundos do 503. Os testes funcionais passaram nos cenários examinados,
 sem identificar a causa histórica. Não repetir essas suítes ou os launchers encerrados.
 
-Pacote atual: `results/active-screen-mixed4-review-07`. Contrato:
+Pacote atual: `results/active-screen-mixed4-review-08`. Contrato:
 `active-screen-mixed4-diagnostic-v1`, cinco repetições não oficiais v1.1 mixed/4,
 inelegíveis para a matriz. O pacote 01 e sua primeira imagem derivados durante a
 preparação ficam preservados, não liberados: a revisão corrigiu a seleção necessária
@@ -54,23 +54,31 @@ Projeto: `fulfillflow-active-screen-mixed4-01-v11`. Preparação limpa por repet
 preparação, verificações, drain e exportação. Qualquer falha encerra o bloco.
 
 Entrada preparada, **não liberada**: `scripts/Invoke-ActiveScreenDiagnostic.ps1`.
-O modo `IdleCheck` realiza uma única verificação manual de 960 s em
-`results/active-screen-idle-01`, sem benchmark. O modo `Execute` exige o selo
-separado `results/active-screen-release-01`, ainda inexistente, e produz o journal
-`results/active-screen-operation-01`. Ambos recusam destinos existentes e funcionam
-fora do diretório do repositório. A verificação ociosa deve usar os mesmos hashes
-do guard e launcher que serão liberados. Não fechar a janela PowerShell: Ctrl+C
-permite encerramento; término forçado perde parte dos diagnósticos, embora Windows
-remova a solicitação de energia quando o thread termina.
-`IdleCheck` não inicia Python, Docker ou qualquer comando de parada. Não exige
-administrador para o guard; `/requests` pode exigir elevação e seu erro é capturado
-como consulta inconclusiva. Não elevar todo o fluxo. Manter a sessão sem interação
-rotineira durante os 960 s para observar o comportamento além do timeout de tela.
-O selo de carga exige revisão do isolamento, commit limpo autorizado e CI aprovada
-para seu SHA exato, além do resultado ocioso aprovado e dos hashes correspondentes.
-Tentativas ociosas posteriores exigem `-IdleAttempt N` e criam destinos numerados
-novos, sem sobrescrever as anteriores. Esse parâmetro é recusado no modo `Execute`.
+A verificação ociosa 02 foi aprovada e permanece encerrada; não a repetir.
+O commit `8f73941` e a CI correspondente liberaram o pacote 07, preservado com
+`active-screen-release-01`. A operação `active-screen-operation-01` parou em 2,3 s
+no gate de energia, antes de criar o destino de benchmark. O campo histórico
+`load_executed: true` indicava somente criação do coordenador; não prova carga.
+As capturas PowerShell antes/depois coincidem com o pacote. A leitura UTF-8 de
+saída nativa CP850 reproduz a divergência; faltam os bytes do subprocesso original
+para confirmar diretamente sua codificação naquela execução.
 
+A revisão 08 decodifica `powercfg /query` estritamente pela página do console
+herdado, sem substituir caracteres, remover campos ou flexibilizar valores.
+Ausência de console identificável ou erro de leitura bloqueia. A captura adicional de código de página e configurações ocorre somente nos gates, em arquivos novos no journal, sem coleta periódica adicional. Distingue criação
+do coordenador de carga: false no preflight, null após despacho do runner sem
+confirmação, true somente após cinco resultados validados. Não altera o guard,
+protocolo, imagens ou configuração persistente. O reaproveitamento da verificação
+ociosa 02 registra seu launcher original separadamente e exige o mesmo hash do
+guard; os ajustes de host são validados com PowerShell e processos simulados.
+
+O novo journal será `results/active-screen-operation-02`, dependente do selo novo
+`results/active-screen-release-02`, ainda não liberado. O destino de benchmark e o
+volume novos do projeto acima nunca foram criados pela operação 01. Permanecem
+isolados dos volumes históricos. A revisão e CI do novo SHA são necessárias antes
+da execução. Não apagar ou sobrescrever a operação encerrada. Não repetir ocioso.
+O guard não exige administrador; `/requests` sem permissão continua inconclusivo.
+Integridade/WAL do PostgreSQL histórico e cópia independente permanecem pendentes.
 Manter tomada, tampa aberta e sessão desbloqueada durante todo o procedimento.
 O guard usa solicitação temporária de tela/sistema e observações nativas a cada
 250 ms, sem alterar Samsung Mode, CPU máxima 99% ou plano. Tela Off/Dim, mudança

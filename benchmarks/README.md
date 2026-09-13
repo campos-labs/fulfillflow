@@ -22,8 +22,8 @@ The subsequently executed continuation is also closed: eight measurements passed
 the validators; v1.1 mixed/4 r04 stopped with HTTP 503 during measurement.
 Do not rerun `scripts/Invoke-Comparison120Continuation.ps1`.
 The current preparation is an isolated, nonofficial five-repetition active-screen
-diagnostic, pending review and a manual idle check. Its entry is
-`scripts/Invoke-ActiveScreenDiagnostic.ps1`; no execution release exists.
+diagnostic. Idle check 02 is complete and accepted; operation 01 stopped before load at the power identity gate. Revision 08 fixes native console decoding and dispatch reporting, pending review and a new release. Its entry is
+`scripts/Invoke-ActiveScreenDiagnostic.ps1`; the previous execution release is closed; do not repeat the idle check or operation 01.
 See the current procedure at the top of [V11_REVIEW.md](V11_REVIEW.md).
 The historical `symmetric-warmup120-comparison-v1`
 uses a separate explicit loader, 120-second admission and proportional pacing, five

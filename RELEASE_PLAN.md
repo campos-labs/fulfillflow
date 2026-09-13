@@ -13,7 +13,7 @@ válida. A continuação depois executada encerrou na r04 v1.1 mixed/4, com um 5
 na medição: a campanha conserva oito medições válidas pelos validadores e permanece
 incompleta. Ambos os launchers estão encerrados. O procedimento atual prepara somente
 cinco repetições não oficiais v1.1 mixed/4 com tela e sistema ativos, conforme §30.5;
-aguarda revisão, verificação ociosa manual e isolamento do host, sem liberação de carga.
+a verificação ociosa 02 está encerrada e aprovada. A operação 01 parou no gate de energia antes da carga. A revisão 08 corrige a decodificação nativa e o diagnóstico; aguarda revisão e nova liberação, sem repetir o teste ocioso.
 
 ## 1. Referência e objetivo
 

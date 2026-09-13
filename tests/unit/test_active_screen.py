@@ -172,7 +172,13 @@ def test_release_requires_exact_ci_and_isolation_review(monkeypatch, defect):
         "scripts/Invoke-ActiveScreenDiagnostic.ps1": "hash",
     }
     monkeypatch.setattr(
-        active, "verify_package", lambda: {"inputs": fingerprints, "power_settings": "power"}
+        active,
+        "verify_package",
+        lambda: {
+            "inputs": fingerprints,
+            "power_settings": "power",
+            "idle_validation": {"launcher_sha256": "hash"},
+        },
     )
     ready = {
         "package_sha256": "hash",
@@ -201,6 +207,7 @@ def test_release_requires_exact_ci_and_isolation_review(monkeypatch, defect):
     monkeypatch.setattr(active, "_git", lambda *a: "sha")
     monkeypatch.setattr(active, "runner_provenance", lambda *a, **k: {})
     monkeypatch.setattr(active, "_run", lambda *a, **k: SimpleNamespace(stdout="power"))
+    monkeypatch.setattr(active, "query_power_settings", lambda: "power")
     if defect:
         with pytest.raises(controls.ControlError):
             active.require_release()
@@ -249,7 +256,7 @@ def test_real_preparation_sequence_reviews_before_cleaning(tmp_path, monkeypatch
 
 
 @pytest.mark.skipif(os.name != "nt", reason="real Windows PowerShell host required")
-@pytest.mark.parametrize("fail_at", [0, 3, "uncooperative", "deadline", "idle"])
+@pytest.mark.parametrize("fail_at", [0, 3, "preflight", "uncooperative", "deadline", "idle"])
 def test_real_powershell_simulated_five_children_and_no_overwrite(tmp_path, fail_at):
     root = tmp_path / "path with spaces"
     scripts = root / "scripts"
@@ -299,7 +306,14 @@ public class ActiveScreenGuard : IDisposable {
             "Path('child-parent.txt').write_text(str(os.getppid()))\n"
             "Path('child-pid.txt').write_text(str(os.getpid()))\ntime.sleep(60)\n"
         )
-    release = module / "results/active-screen-release-01"
+    if fail_at == "preflight":
+        (module / "active_screen_controls.py").write_text(
+            "import os,json,sys\nfrom pathlib import Path\n"
+            "p=Path(os.environ['FULFILLFLOW_ACTIVE_GUARD']).parent\n"
+            "(p/'coordinator-status.json').write_text(json.dumps("
+            "{'stage':'preflight','load_executed':False}))\nsys.exit(2)\n"
+        )
+    release = module / "results/active-screen-release-02"
     release.mkdir(parents=True)
     (release / "ready.json").write_text("{}")
     args = [str(PWSH), "-NoProfile", "-File", str(scripts / "Invoke.ps1")]
@@ -321,7 +335,7 @@ public class ActiveScreenGuard : IDisposable {
         assert report["released"] is True
         assert not (root / "sequence.txt").exists()
         assert not (module / "results/active-screen-idle-01").exists()
-        assert not (module / "results/active-screen-operation-01").exists()
+        assert not (module / "results/active-screen-operation-02").exists()
         rejected = subprocess.run(
             [*args, "-Mode", "Execute", "-IdleAttempt", "2"],
             cwd=tmp_path,
@@ -331,7 +345,7 @@ public class ActiveScreenGuard : IDisposable {
         )
         assert rejected.returncode == 2
         assert "valid only for IdleCheck" in rejected.stderr
-        assert not (module / "results/active-screen-operation-01").exists()
+        assert not (module / "results/active-screen-operation-02").exists()
         return
     if fail_at in {"uncooperative", "deadline"}:
         try:
@@ -342,7 +356,7 @@ public class ActiveScreenGuard : IDisposable {
                 )
             assert result.returncode == 2
             report = json.loads(
-                (module / "results/active-screen-operation-01/result.json").read_text()
+                (module / "results/active-screen-operation-02/result.json").read_text()
             )
             assert report["released"] is True
             assert report["child_shutdown"]["exited"] is False
@@ -358,12 +372,103 @@ public class ActiveScreenGuard : IDisposable {
         return
     result = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == (2 if fail_at else 0), result.stderr
+    if fail_at == "preflight":
+        report = json.loads((module / "results/active-screen-operation-02/result.json").read_text())
+        assert report["coordinator_started"] is True
+        assert report["load_executed"] is False
+        assert report["released"] is True
+        assert not (root / "sequence.txt").exists()
+        return
     assert (root / "sequence.txt").read_text().splitlines() == [
         str(n) for n in range(1, (fail_at or 5) + 1)
     ]
-    report = module / "results/active-screen-operation-01/result.json"
+    report = module / "results/active-screen-operation-02/result.json"
     before = report.read_bytes()
     assert json.loads(before.decode("utf-8-sig"))["released"] is True
+    assert json.loads(before.decode("utf-8-sig"))["load_executed"] is None
     repeated = subprocess.run(args, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert repeated.returncode == 2
     assert report.read_bytes() == before
+
+
+@pytest.mark.parametrize("codepage", [850, 65001])
+def test_power_query_native_encoding_and_exact_values(tmp_path, monkeypatch, codepage):
+    monkeypatch.setenv("FULFILLFLOW_ACTIVE_GUARD", str(tmp_path / "guard.json"))
+    expected = "Índice de Configurações Atuais: 0x00000063\n"
+    raw = expected.replace("\n", "\r\n").encode(f"cp{codepage}")
+    monkeypatch.setattr(
+        active.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=SimpleNamespace(GetConsoleOutputCP=lambda: codepage)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        active.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=raw)
+    )
+    assert active.query_power_settings() == expected
+    assert active.query_power_settings() != expected.replace("63", "64")
+    reports = list((tmp_path / "power-query").glob("*.json"))
+    assert len(reports) == 2
+    assert all(json.loads(p.read_text(encoding="utf-8"))["settings"] == expected for p in reports)
+    if codepage == 850:
+        assert raw.decode("utf-8", errors="replace") != expected
+
+
+def test_power_query_missing_console_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        active.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=SimpleNamespace(GetConsoleOutputCP=lambda: 0)),
+        raising=False,
+    )
+    with pytest.raises(active.ControlError, match="identifiable console"):
+        active.query_power_settings()
+
+
+def test_coordinator_preflight_failure_records_no_load(tmp_path, monkeypatch):
+    monkeypatch.setenv("FULFILLFLOW_ACTIVE_GUARD", str(tmp_path / "guard.json"))
+    monkeypatch.setattr(active, "configure", lambda: None)
+
+    def blocked():
+        raise active.ControlError("simulated preflight failure")
+
+    monkeypatch.setattr(active, "require_release", blocked)
+    with pytest.raises(active.ControlError, match="simulated preflight"):
+        active.execute()
+    assert json.loads((tmp_path / "coordinator-status.json").read_text()) == {
+        "stage": "preflight",
+        "load_executed": False,
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows console required")
+def test_power_query_real_isolated_console_encodings(tmp_path):
+    import sys
+
+    script = tmp_path / "power query.py"
+    root = Path(__file__).resolve().parents[2]
+    script.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(root)!r})\n"
+        "from benchmarks.active_screen_controls import query_power_settings\n"
+        'print(query_power_settings(), end="")\n'
+    )
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0
+    command = subprocess.list2cmdline([sys.executable, "-X", "utf8", str(script)])
+    outputs = []
+    for codepage in (850, 65001):
+        result = subprocess.run(
+            f'cmd.exe /d /s /c "chcp {codepage} >nul & {command}"',
+            startupinfo=startup,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.append(result.stdout)
+    assert outputs[0] == outputs[1]
+    assert "0x" in outputs[0]
