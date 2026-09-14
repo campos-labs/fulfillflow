@@ -8,7 +8,8 @@ from benchmarks.controls_v10 import ControlError
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "identity", "export", "shutdown", "environment", "concurrency"]
+    "failure",
+    [None, "identity", "export", "shutdown", "environment", "concurrency", "already_stopped"],
 )
 def test_manual_isolation_preserves_and_stops_first_failure(tmp_path, monkeypatch, failure):
     rows = [
@@ -18,7 +19,7 @@ def test_manual_isolation_preserves_and_stops_first_failure(tmp_path, monkeypatc
             "image": "frozen",
             "project": "prior",
             "mounts": [],
-            "running": True,
+            "running": failure != "already_stopped",
             "exit_code": 0,
             "oom": False,
         }
@@ -40,7 +41,11 @@ def test_manual_isolation_preserves_and_stops_first_failure(tmp_path, monkeypatc
         commands.append(args)
         output = ""
         if args[0] == "ps":
-            output = "0\n1\n" + ("unexpected\n" if failure == "concurrency" else "")
+            output = (
+                ""
+                if failure == "already_stopped"
+                else "0\n1\n" + ("unexpected\n" if failure == "concurrency" else "")
+            )
         if args[0] == "logs":
             if failure == "export" and not stopped:
                 raise subprocess.CalledProcessError(1, ["docker", *args], stderr="export failed")
@@ -58,14 +63,16 @@ def test_manual_isolation_preserves_and_stops_first_failure(tmp_path, monkeypatc
     monkeypatch.setattr(isolation, "inspect", inspect)
     monkeypatch.setattr(isolation, "require_energy", energy)
     destination = tmp_path / "new output"
-    if failure:
+    if failure not in (None, "already_stopped"):
         with pytest.raises((ControlError, subprocess.CalledProcessError)):
             isolation.isolate(tmp_path, destination)
     else:
         isolation.isolate(tmp_path, destination)
     assert len(stopped) == (2 if failure is None else 1 if failure == "shutdown" else 0)
     assert not any(c[0] in ("rm", "start", "restart", "compose") for c in commands)
-    assert json.loads((destination / "result.json").read_text())["complete"] == (failure is None)
+    assert json.loads((destination / "result.json").read_text())["complete"] == (
+        failure in (None, "already_stopped")
+    )
     before = len(commands)
     with pytest.raises(ControlError, match="no retry"):
         isolation.isolate(tmp_path, destination)

@@ -79,7 +79,7 @@ def test_active_policy_is_explicit_and_failure_is_not_ignored(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell required")
-@pytest.mark.parametrize("fail_at", [0, 17])
+@pytest.mark.parametrize("fail_at", [0, 17, -1])
 def test_real_powershell_sixty_simulated_repetitions(tmp_path, fail_at):
     root = tmp_path / "path with spaces"
     scripts = root / "scripts"
@@ -101,18 +101,23 @@ public class ActiveScreenGuard : IDisposable {
     (module / "__init__.py").write_text("")
     (module / "active_comparison_controls.py").write_text(
         "from pathlib import Path\nimport sys\n"
+        f"if '--preflight' in sys.argv: sys.exit({2 if fail_at == -1 else 0})\n"
         "for n in range(1,61):\n"
         " with Path('sequence.txt').open('a') as f: f.write(str(n)+'\\n')\n"
         f" if n=={fail_at}:sys.exit(2)\n"
     )
-    release = module / "results/comparison-active-release-02"
+    release = module / "results/comparison-active-release-03"
     release.mkdir(parents=True)
     (release / "ready.json").write_text("{}")
     args = [str(PWSH), "-NoProfile", "-File", str(scripts / "Invoke-ActiveComparison.ps1")]
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, timeout=30)
     assert r.returncode == (2 if fail_at else 0), r.stderr
+    if fail_at == -1:
+        assert not (module / "results/comparison-active-operation-03").exists()
+        assert not (root / "sequence.txt").exists()
+        return
     assert len((root / "sequence.txt").read_text().splitlines()) == (fail_at or 60)
-    report = module / "results/comparison-active-operation-02/result.json"
+    report = module / "results/comparison-active-operation-03/result.json"
     before = report.read_bytes()
     assert json.loads(before)["released"] is True
     r = subprocess.run(args, cwd=tmp_path, capture_output=True, timeout=30)

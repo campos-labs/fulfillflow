@@ -38,6 +38,12 @@ class ControlError(RuntimeError):
     """Fail closed without rendering command arguments or unfiltered process output."""
 
 
+class ExternalCommandError(ControlError):
+    def __init__(self, diagnostic: dict[str, Any]) -> None:
+        self.command_diagnostic = diagnostic
+        super().__init__(json.dumps(diagnostic, ensure_ascii=False))
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -73,6 +79,7 @@ def _run(
     timeout: float | None = 30,
     evidence: Path | None = None,
     required: bool = True,
+    stage: str = "external_command",
 ) -> subprocess.CompletedProcess[str]:
     try:
         completed = subprocess.run(
@@ -88,16 +95,32 @@ def _run(
             shell=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
+        diagnostic = {
+            "stage": stage,
+            "executable": sanitize(str(argv[0])),
+            "exit_code": None,
+            "exception": type(exc).__name__,
+            "native_code": getattr(exc, "winerror", None),
+            "details": error_report(exc),
+        }
         if evidence is not None:
             write_report(evidence.with_suffix(".error.json"), error_report(exc))
         detail = f"; diagnostics: {evidence.with_suffix('.error.json')}" if evidence else ""
-        raise ControlError(f"required external command did not complete{detail}") from None
+        raise ExternalCommandError({**diagnostic, "diagnostics": detail}) from None
     if evidence is not None:
         evidence.parent.mkdir(parents=True, exist_ok=True)
         evidence.write_text(sanitize(completed.stdout + completed.stderr), encoding="utf-8")
     if required and completed.returncode != 0:
         detail = f"; diagnostics: {evidence}" if evidence else ""
-        raise ControlError(f"external command exited {completed.returncode}{detail}")
+        raise ExternalCommandError(
+            {
+                "stage": stage,
+                "executable": sanitize(str(argv[0])),
+                "exit_code": completed.returncode,
+                "stderr": sanitize(completed.stderr),
+                "diagnostics": detail,
+            }
+        )
     return completed
 
 

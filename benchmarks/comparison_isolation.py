@@ -55,7 +55,7 @@ def prepare_isolation(package: Path) -> None:
         .splitlines()
         if line.strip()
     ]
-    ids = capture(["ps", "--quiet", "--no-trunc"]).stdout.split()
+    ids = [old["ID"] for old in recorded if old.get("Service") in ("app", "db")]
     rows = [inspect(i) for i in ids]
     if len(rows) != 2 or any(r["project"] != PROJECT for r in rows):
         raise ControlError("expected exactly the two preserved prior campaign resources")
@@ -71,6 +71,10 @@ def prepare_isolation(package: Path) -> None:
             != 1
         ):
             raise ControlError("container differs from the preserved execution inventory")
+    if set(capture(["ps", "--quiet", "--no-trunc"]).stdout.split()) != {
+        row["id"] for row in rows if row["running"]
+    }:
+        raise ControlError("unexpected concurrent resources")
     write_report(
         package / "isolation.json",
         {
@@ -96,7 +100,9 @@ def isolate(package: Path, destination: Path) -> None:
         write_report(destination / "before.json", rows)
         if rows != plan["containers"]:
             raise ControlError("prior container identity or state changed; no stop performed")
-        if set(capture(["ps", "--quiet", "--no-trunc"]).stdout.split()) != {r["id"] for r in rows}:
+        if set(capture(["ps", "--quiet", "--no-trunc"]).stdout.split()) != {
+            r["id"] for r in rows if r["running"]
+        }:
             raise ControlError("unexpected concurrent resources; no stop performed")
         for i, row in enumerate(rows):
             require_energy()
@@ -113,13 +119,14 @@ def isolate(package: Path, destination: Path) -> None:
             require_energy()
             if inspect(row["id"]) != row:
                 raise ControlError("resource changed after export; stop sequence interrupted")
-            stopped = capture(["stop", "--time", "30", row["id"]])
+            stopped = capture(["stop", "--time", "30", row["id"]]) if row["running"] else None
             after = inspect(row["id"])
             logs = capture(["logs", "--timestamps", "--tail", "100", row["id"]])
             write_report(
                 destination / f"stop-{i}.json",
                 {
-                    "exit_code": stopped.returncode,
+                    "exit_code": stopped.returncode if stopped else None,
+                    "already_stopped": stopped is None,
                     "state": after,
                     "stdout": sanitize(logs.stdout),
                     "stderr": sanitize(logs.stderr),

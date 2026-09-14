@@ -276,7 +276,7 @@ def test_execute_requires_actual_preparation_and_stops_after_first_failure(tmp_p
 
 def test_external_command_failure_keeps_diagnostic_and_specific_exit_code(tmp_path):
     evidence = tmp_path / "failure.txt"
-    with pytest.raises(controls.ControlError, match="exited 7; diagnostics:"):
+    with pytest.raises(controls.ExternalCommandError) as error:
         controls._run(
             [
                 sys.executable,
@@ -286,6 +286,9 @@ def test_external_command_failure_keeps_diagnostic_and_specific_exit_code(tmp_pa
             cwd=tmp_path,
             evidence=evidence,
         )
+    assert error.value.command_diagnostic["exit_code"] == 7
+    assert error.value.command_diagnostic["stderr"] == "expected failure"
+    assert str(evidence) in error.value.command_diagnostic["diagnostics"]
     assert evidence.read_text() == "expected failure"
 
 

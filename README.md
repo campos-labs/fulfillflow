@@ -1,5 +1,13 @@
 # FulfillFlow
 
+Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
+Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
+e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,
+imagens e identidade de energia antes de criar o destino. Recursos anteriores
+já parados são conferidos e preservados, sem reinício. Erros externos registram
+etapa, executável, código e stderr sanitizado. Os pacotes 01/02 são históricos;
+o contrato de brilho fixo e todos os demais parâmetros permanecem iguais.
+
 A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
 `VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
 validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na

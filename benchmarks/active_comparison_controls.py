@@ -19,9 +19,9 @@ from benchmarks.run_campaign import runner_provenance
 from benchmarks.sensitivity_controls import PWSH
 
 ROOT = comparison.ROOT
-PACKAGE = ROOT / "benchmarks/results/comparison-active-review-02"
-RELEASE = ROOT / "benchmarks/results/comparison-active-release-02"
-OPERATION = ROOT / "benchmarks/results/comparison-active-operation-02"
+PACKAGE = ROOT / "benchmarks/results/comparison-active-review-03"
+RELEASE = ROOT / "benchmarks/results/comparison-active-release-03"
+OPERATION = ROOT / "benchmarks/results/comparison-active-operation-03"
 PREVIOUS = ROOT / "benchmarks/results/reviewed-comparison120-win9445-review-01"
 
 
@@ -29,9 +29,9 @@ def configure() -> None:
     os.environ["FULFILLFLOW_COMPARISON_ACTIVE"] = "1"
     comparison.configure()
     controls.PACKAGE = PACKAGE
-    controls.JOURNAL = ROOT / "benchmarks/results/comparison-active-execution-02"
-    controls.PROJECTS = {v: f"fulfillflow-comparison-active-02-{v}" for v in ("v10", "v11")}
-    controls.STEPS = tuple(replace(s, label="active02-" + s.label) for s in controls.STEPS)
+    controls.JOURNAL = ROOT / "benchmarks/results/comparison-active-execution-03"
+    controls.PROJECTS = {v: f"fulfillflow-comparison-active-03-{v}" for v in ("v10", "v11")}
+    controls.STEPS = tuple(replace(s, label="active03-" + s.label) for s in controls.STEPS)
     comparison.RELEASE = RELEASE
 
 
@@ -42,7 +42,29 @@ def verify_host_policy() -> None:
         raise ControlError("persistent power settings differ from the prepared active policy")
 
 
+def engine_preflight() -> None:
+    context = _run(["docker", "context", "show"], cwd=ROOT, stage="docker_context").stdout.strip()
+    engine = _run(
+        ["docker", "info", "--format", "{{.OSType}}"], cwd=ROOT, stage="docker_engine_availability"
+    ).stdout.strip()
+    if context != "desktop-linux" or engine != "linux":
+        raise ControlError("Docker desktop-linux context and available Linux engine required")
+
+
+def preflight() -> None:
+    engine_preflight()
+    comparison.verify_draft()
+    controls.require_new_execution()
+    controls.assert_projects_absent()
+    for step in controls.STEPS[:2]:
+        controls.verify_source(step)
+        controls.image_preflight(step, controls.read_json(step.candidate))
+    if query_power_settings() != controls.read_json(PACKAGE / "host-policy.json")["power_settings"]:
+        raise ControlError("persistent power settings differ from the prepared active policy")
+
+
 def prepare() -> None:
+    engine_preflight()
     controls.require_new_execution()
     controls.assert_projects_absent()
     if PACKAGE.exists() or RELEASE.exists() or OPERATION.exists():
@@ -106,6 +128,7 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prepare", action="store_true")
     mode.add_argument("--execute", action="store_true")
+    mode.add_argument("--preflight", action="store_true")
     mode.add_argument("--prepare-step")
     args = parser.parse_args()
     try:
@@ -113,10 +136,15 @@ def main() -> int:
         if args.prepare:
             prepare()
             return 0
+        if args.preflight:
+            preflight()
+            return 0
         if args.prepare_step:
+            engine_preflight()
             comparison.verify_release()
             step = next(s for s in controls.STEPS if s.label == args.prepare_step)
             return controls.prepare_step(step, setup_only=False)
+        preflight()
         comparison.verify_release()
         controls.require_new_execution()
         controls.assert_projects_absent()
