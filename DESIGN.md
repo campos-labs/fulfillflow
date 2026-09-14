@@ -1,13 +1,13 @@
-# FulfillFlow — Design Architecture: v1.0.0 e alvo v1.1
+# FulfillFlow — contratos de arquitetura v1.0.0 e v1.1
 
 | Campo | Valor |
 |---|---|
-| Status | v1.0.0 publicada; incremento I funcional da v1.1 implementado localmente, sem release |
+| Status | v1.0.0 publicada; incrementos I e II da v1.1 concluídos; comparação e release pendentes |
 | Arquitetura vigente | Core + Tracking no checkout v1.1; monólito preservado na tag v1.0.0 |
 | Escopo | Contrato histórico v1.0.0 e extração delimitada de Tracking na v1.1 (§30) |
 | Runtime principal | Python 3.13 / FastAPI |
 | Persistência | PostgreSQL 18 |
-| Última revisão | 2026-09-09 |
+| Última revisão documental | 2026-09-14 |
 
 As seções 1–29 preservam a descrição e as restrições da v1.0.0. A seção 30 registra
 as substituições aprovadas e os invariantes da arquitetura v1.1, distinguindo o
@@ -1773,6 +1773,11 @@ Import Linter e demais gates são adaptados à fronteira aprovada, nunca enfraqu
 
 ### 30.5 Comparabilidade e pendência experimental
 
+Os protocolos abaixo registram contratos aprovados em campanhas distintas, não
+autorização vigente para executá-las. Todas estão suspensas; estado e índice de
+evidências constam de `RELEASE_PLAN.md` e `benchmarks/V11_REVIEW.md`. A cronologia
+não modifica retroativamente os contratos históricos.
+
 A campanha v1.1 terá identidade própria; nenhum diagnóstico ou resultado v1.0
 conta como repetição v1.1. Preservar o protocolo publicado em `benchmarks/baselines/v1.0/`
 e os manifests oficiais em `benchmarks/campaigns/`, incluindo workload, contratos externos, dataset lógico,
@@ -2127,7 +2132,7 @@ geral. Evidência ambiental insuficiente impede conclusão sobre a aplicação. 
 das fases: uma hora; preparação, drain e exportação são adicionais. Nenhum resultado
 desse bloco integra a matriz e nenhuma nova campanha completa está preparada aqui.
 
-### 30.6 Estado funcional do incremento I
+### 30.6 Contratos funcionais implementados
 
 O Compose usa o projeto `fulfillflow-v11`, volume novo e bancos `fulfillflow_core`
 e `fulfillflow_tracking`. As roles não possuem privilégios administrativos nem

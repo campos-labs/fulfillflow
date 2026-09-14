@@ -1,54 +1,17 @@
-# FulfillFlow — Release Plan
+# FulfillFlow — etapas e aceite da v1.1
 
-Estado atual: campanhas suspensas por decisão explícita. A execução ativa 03
-encerrou com nove repetições aprovadas pelos validadores (5 v1.0, 4 v1.1); r05
-v1.1 inválida por falha obrigatória do coletor, sem causa nativa recuperável.
-Não repetir launchers nem preparar continuação. A proposta de congelamento
-funcional da v1.1 mantém comparação e release pendentes; v1.2 Tracking assíncrono
-requer contrato e aprovação próprios. Notifications permanece fora dessa evolução.
-A análise adicional está em `benchmarks/results/active03-r05-final-analysis-01`.
+## Estado atual e aceite pendente
 
-Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
-Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
-e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,
-imagens e identidade de energia antes de criar o destino. Recursos anteriores
-já parados são conferidos e preservados, sem reinício. Erros externos registram
-etapa, executável, código e stderr sanitizado. Os pacotes 01/02 são históricos;
-o contrato de brilho fixo e todos os demais parâmetros permanecem iguais.
+Incrementos I e II concluídos; comparação e release pendentes. Campanhas suspensas:
+não repetir launchers nem preparar continuação. O histórico de execução fica em
+[benchmarks/V11_REVIEW.md](benchmarks/V11_REVIEW.md).
 
-A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
-`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
-validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
-nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
-inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
-Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
-operação `comparison-active-operation-02`; o launcher atual é
-`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
-containers inventariados da execução 01 e os para graciosamente antes de qualquer
-preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
-processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
-históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
-
-Incrementos I e II concluídos; comparação oficial e release v1.1 pendentes.
-Piloto, dois controles e novo ABBA válido preservados. A matriz contemporânea
-concluiu dez repetições mixed/4 (cinco por versão), mas parou no primeiro warm-up
-v1.1 mixed/12, antes da medição. A única verificação manual limitada ao warm-up
-reproduziu quota incompleta. Os launchers estão encerrados; células de 12 usuários
-bloqueadas na matriz original, sem repetição ou retomada automática. Uma campanha
-separada de sensibilidade à política de warm-up foi concluída conforme §30.5.
-A comparação simétrica de 120 s foi liberada em `02fe942` e parou antes do
-segundo warm-up por falha de coordenação, preservando uma medição v1.0 mixed/4
-válida. A continuação depois executada encerrou na r04 v1.1 mixed/4, com um 503
-na medição: a campanha conserva oito medições válidas pelos validadores e permanece
-incompleta. Ambos os launchers estão encerrados. O procedimento atual prepara somente
-cinco repetições não oficiais v1.1 mixed/4 com tela e sistema ativos, conforme §30.5;
-a verificação ociosa 02 está encerrada e aprovada. A operação 02 encerrou com quatro
-medições não oficiais válidas e r05 interrompida na estabilização por falha de leitura
-do heartbeat, antes do warm-up. O critério de cinco sucessos não foi atendido.
-Corrigem-se somente transporte do heartbeat e captura de energia, sem nova carga.
-A revisão da condição de avanço foi aprovada para preparar 60 medições novas com
-host ativo nos dois lados, sem incorporar resultados anteriores nem completar r05.
-O diagnóstico permanece incompleto. A carga exige pacote próprio, CI e isolamento.
+Para formalizar a candidata funcional, consolidar a rastreabilidade dos contratos
+aprovados aos testes existentes e às identidades de aplicação/imagens examinadas.
+O aceite deve distinguir recuperação funcional, desempenho e observabilidade.
+As lacunas de logging estruturado, métricas e tracing previstas no DESIGN continuam
+explícitas. A cópia independente das evidências e a integridade/WAL dos bancos
+históricos não estão confirmadas. Não há autorização de tag ou publicação.
 
 ## 1. Referência e objetivo
 
@@ -97,7 +60,7 @@ Entre commits pode haver Core atualizado e timeline pendente. A v1.1 não oferec
 
 Referências: DESIGN.md, benchmarks/README.md e benchmarks/baselines/v1.0/RELATORIO.md, além dos manifests oficiais publicados. A baseline não identifica Tracking como causa exclusiva de contenção.
 
-Preservar workload, contratos externos, dataset lógico, coortes, pesos, q=430, spawn rate 16 users/s, matriz 4/12 users × mixed/timeline/ingestion × cinco repetições válidas por ponto. O protocolo original conserva warm-up de 60 s. A nova campanha simétrica de §30.5 mantém estabilização de 300 s após preparação, warm-up de 120 s com ritmo proporcional, measurement de 300 s, coleta de 1 s e as regras congeladas de admissão, drain, timeouts e energia. Logging, tracing/sampling, timeouts de pool/SQL e healthcheck do loadgen permanecem conforme os manifests e Compose publicados.
+Preservar workload, contratos externos, dataset lógico, coortes, pesos, q=430, spawn rate 16 users/s, matriz 4/12 users × mixed/timeline/ingestion × cinco repetições válidas por ponto. O protocolo original conserva warm-up de 60 s. O contrato simétrico de §30.5 mantém estabilização de 300 s após preparação, warm-up de 120 s com ritmo proporcional, measurement de 300 s, coleta de 1 s e as regras congeladas de admissão, drain, timeouts e energia. Logging, tracing/sampling, timeouts de pool/SQL e healthcheck do loadgen permanecem conforme os manifests e Compose publicados.
 
 | Componente | CPU | Memória | Pool |
 | --- | --- | --- | --- |
@@ -154,7 +117,7 @@ Aceite: regras de recuperação comprovadas, nenhum efeito duplicado, efeitos pr
 ### III — Comparação e release
 
 - Após autorização específica e preparação do host, realizar validação prévia sob carga estritamente necessária e congelar a identidade candidata.
-- Obter as 30 repetições oficiais válidas previstas, com destino novo, preservação dos artefatos e interrupção em falhas. Não contar diagnósticos ou tentativas inválidas como oficiais nem repetir execuções válidas sem justificativa.
+- Obter as 30 repetições válidas por versão previstas no contrato simétrico (60 no conjunto), com destino novo, preservação dos artefatos e interrupção em falhas. Não contar diagnósticos ou tentativas inválidas como oficiais nem repetir execuções válidas sem justificativa.
 - Consolidar v1.1 e comparação com v1.0, relatando dispersão, limitações, diferenças de arquitetura e ausência de garantia causal fora do desenho observado.
 - Arquivar evidências, verificar cópia independente e publicar seletivamente documentação, manifests e índice; manter arquivos brutos fora do Git.
 - Preparar integração final, tag v1.1.0 e notas para autorização. Não mover v1.0.0.
@@ -167,18 +130,26 @@ Aceite: matriz concluída sem duplicação, contagens e checksums íntegros, rel
 - DESIGN.md distingue o incremento funcional implementado da preparação experimental planejada. Não reescrever decisões históricas como se a v1.0 já fosse distribuída.
 - README.md descreve o que funciona e seus comandos; não apresenta incrementos pendentes como entregues.
 - Ler AGENTS.md existente e instruções aplicáveis. Corrigir somente orientações obsoletas que conflitem com a separação aprovada; não duplicar o plano, criar regras genéricas ou enfraquecer gates.
-- Sem HANDOFF.md permanente. Ao fim de cada incremento, fornecer resumo curto para o próximo chat: branch/commit, mudanças, validações, pendências, estado local e próxima ação.
+- Sem HANDOFF.md permanente. Ao fim de cada incremento, fornecer resumo operacional curto: branch/commit, mudanças, validações, pendências, estado local e próxima ação.
 - Preservar .vscode/settings.json e artefatos locais preexistentes fora do trabalho autorizado.
 
 Este plano não autoriza por si só push, merge, publicação, cargas oficiais ou operações destrutivas. O prompt de cada incremento define as ações autorizadas. Leituras, implementação e verificações pertinentes ao incremento autorizado não exigem aprovações repetidas.
 
-## 7. Limite da release e evolução futura
+## 7. Limite da release
 
-A v1.1 termina com Core + Tracking, contratos estáveis, consistência explicitada e comparação concluída. Extrações adicionais, mensageria e operação Kubernetes/AKS ficam fora deste plano; qualquer evolução posterior depende de planejamento próprio, sem compromisso antecipado com versão ou arquitetura.
+O aceite de release prevê Core + Tracking, contratos estáveis, consistência explicitada e comparação concluída. Esse aceite ainda não foi atingido. O congelamento como candidata funcional não equivale à publicação da release.
 
-## Situação ao concluir o incremento I
+Evolução futura: uma eventual v1.2 exige proposta e aprovação próprias; não está autorizada por este plano.
 
-Registro histórico do primeiro incremento; a situação atual está abaixo.
+## Histórico encerrado — implementação e preparação
+
+Os registros abaixo preservam decisões e aceites anteriores. Datas, autorizações
+e comandos descrevem o estado daquele momento; não são instruções atuais.
+A síntese de campanhas e os artefatos estão em [V11_REVIEW](benchmarks/V11_REVIEW.md).
+
+### Situação ao concluir o incremento I
+
+Registro histórico do primeiro incremento; o estado atual consta no início deste plano.
 
 - v1.0 publicada e main integrada, com referências locais/remotas conferidas nesta auditoria.
 - Branch local `codex/v1.1-tracking`, com implementação, testes e documentação do incremento I.
@@ -215,9 +186,9 @@ Nenhuma nova carga foi executada na análise e nenhum resultado histórico foi a
 - Pacote de revisão: `benchmarks/V11_REVIEW.md`. Manifests e relatórios observados ficam
   em destino novo sob `benchmarks/results`, com checksums, sem fingir congelamento experimental.
 - Verificações executáveis: testes funcionais/integração, gates estáticos, CI, restauração
-  repetida e smoke de telemetria ociosa. O relatório final do chat informa resultados e commits.
+  repetida e smoke de telemetria ociosa. Os relatórios de validação preservam resultados e commits.
 - A matriz oficial do incremento III não foi executada; o piloto não a substitui.
-  A entrada PowerShell original foi preparada sem carga no chat 11; a execução posterior
+  A entrada PowerShell original foi preparada sem carga; a execução posterior
   e a revisão atual estão distinguidas no pacote. Não houve merge, tag ou release v1.1.
 
 ## Correção auditada e referência contemporânea

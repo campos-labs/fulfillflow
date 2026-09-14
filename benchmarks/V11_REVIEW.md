@@ -1,45 +1,46 @@
-# Incremento II — pacote de revisão
+# FulfillFlow v1.1 — síntese e índice das evidências
 
-Estado atual: campanhas suspensas por decisão explícita. A execução ativa 03
-encerrou com nove repetições aprovadas pelos validadores (5 v1.0, 4 v1.1); r05
-v1.1 inválida por falha obrigatória do coletor, sem causa nativa recuperável.
-Não repetir launchers nem preparar continuação. A proposta de congelamento
-funcional da v1.1 mantém comparação e release pendentes; v1.2 Tracking assíncrono
-requer contrato e aprovação próprios. Notifications permanece fora dessa evolução.
-A análise adicional está em `benchmarks/results/active03-r05-final-analysis-01`.
+## Estado atual
 
-Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
-Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
-e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,
-imagens e identidade de energia antes de criar o destino. Recursos anteriores
-já parados são conferidos e preservados, sem reinício. Erros externos registram
-etapa, executável, código e stderr sanitizado. Os pacotes 01/02 são históricos;
-o contrato de brilho fixo e todos os demais parâmetros permanecem iguais.
+Incrementos I e II concluídos; comparação e release pendentes. Todas as campanhas
+e launchers preparados estão encerrados. Nenhum comando de carga, preparação ou
+continuação está liberado. Instruções atuais da aplicação: [README](../README.md).
+Contratos: [DESIGN](../DESIGN.md). Etapas e aceite: [RELEASE_PLAN](../RELEASE_PLAN.md).
+Uso da ferramenta: [benchmarks/README](README.md).
 
-A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
-`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
-validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
-nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
-inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
-Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
-operação `comparison-active-operation-02`; o launcher atual é
-`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
-containers inventariados da execução 01 e os para graciosamente antes de qualquer
-preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
-processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
-históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
+A última campanha conservou nove repetições aprovadas pelos validadores (cinco
+v1.0 e quatro v1.1). A r05 v1.1 permanece inválida por falha obrigatória de coleta:
+helper de transporte com `OSError`, saída 2; a causa nativa não foi preservada.
+A conciliação somente leitura encontrou 3.296 comandos, recibos e finalizações,
+sem inbox `RECEIVED` pendente. Resultados HTTP parciais não são medição completa.
+O 503 de uma campanha anterior continua sem causa determinada. Não combinar
+campanhas nem inferir equivalência ou estabilidade a partir das tentativas parciais.
 
-Os incrementos I e II estão concluídos. O piloto posterior não oficial v1.1 mixed/4,
-q=430, no Windows 26200.9445 foi válido: 108,04 req/s, p95 82 ms, sem erros e com
-conciliação. Evidências: `results/v11-pilot-win9445-attempt-01` e
-`results/v11-pilot-win9445-analysis/metrics-summary.json`.
-A campanha oficial do incremento III permanece incompleta. O novo ABBA revisado foi
-válido; a matriz seguinte concluiu dez repetições mixed/4 e parou no primeiro warm-up
-v1.1 mixed/12. A única verificação manual limitada ao warm-up reproduziu a quota
-incompleta; células de 12 usuários permanecem bloqueadas. A baseline publicada em 26200.9278,
-seu dataset e manifests, e as evidências do piloto permanecem imutáveis.
+## Índice das evidências recentes
 
-## Caminho atual — nova comparação simétrica com host ativo
+Os links em `results/` apontam para artefatos locais preservados; não fazem parte
+da publicação Git. Cada pacote mantém seus inventários e identidades originais.
+
+| Registro | Evidência | Classificação |
+| --- | --- | --- |
+| Última campanha: nove válidas e r05 inválida | [Análise final](results/active03-r05-final-analysis-01/summary.json) | Comparação incompleta |
+| Correção de perda de códigos nativos | [CI e preservação](results/active03-r05-final-ci-01/report.json) | Ferramenta corrigida, sem nova carga |
+| Alteração manual de brilho na operação 01 | [Confirmação](results/comparison-active-brightness-confirmation-01/report.json) | r01 preservada com ressalva ambiental |
+| Operação 02 e pré-requisitos Docker | [Revisão](results/comparison-active03-preflight-review-01/report.json) | Causa histórica não comprovada |
+| Recuperação funcional e identidade examinada | [Identidade](results/comparison120-r04-recovery-assessment-01/application-identity.json) | Evidência funcional, não causalidade do 503 |
+| Estado persistido após o 503 anterior | [Investigação somente leitura](results/comparison120-r04-readonly-investigation-01/metrics-summary.json) | Histórico preservado |
+
+A cópia independente das evidências e a integridade/WAL históricos permanecem
+pendentes. As lacunas de observabilidade constam da seção de logs abaixo e do DESIGN.
+
+## Como ler os registros encerrados
+
+Todo o conteúdo a seguir é histórico: autorizações, comandos, expressões como
+“atual”, “próxima execução” e estados de preparação referem-se à data do registro.
+Não reutilizar os comandos ou pacotes. Os detalhes foram mantidos para preservar
+as decisões e evidências, sem convertê-los em instruções operacionais vigentes.
+
+## Histórico encerrado — comparação simétrica com host ativo
 
 A revisão da condição de avanço foi aprovada para preparar 60 medições novas, sem
 incorporar resultados anteriores. Entrada: `scripts/Invoke-ActiveComparison.ps1`.
@@ -338,7 +339,7 @@ estabilização/admissão, além de preparação, drain, exportação e revisõe
 `-PrepareOnly`; executar sem opção é erro. Cada chamada de execução faz somente
 uma tentativa, bloqueante e independente do diretório corrente. Usar exclusivamente
 o PowerShell verificado em
-`C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
+`${env:USERPROFILE}\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
 Comandos de carga são liberados individualmente após prontidão e revisão; não
 reexecutar comandos encerrados. A preparação do pacote verifica fontes, imagens,
 dataset, host e Compose sem carga; cada chamada manual prepara e verifica os bancos
@@ -538,7 +539,7 @@ observabilidade nem altera retroativamente os requisitos ou a publicação v1.0.
 O launcher das séries encerradas é `scripts/Invoke-ReviewedControls.ps1`. Ele exige PowerShell 7,
 usa caminhos absolutos a partir de seu próprio diretório e preserva stdout/stderr
 e o código do filho. O executável verificado neste host é:
-`C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
+`${env:USERPROFILE}\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe`.
 
 | Série | Estado | Pacote sob `results` | Resultado |
 | --- | --- | --- | --- |
@@ -691,7 +692,7 @@ continua vinculada ao commit nela registrado; não representa automaticamente um
 Os três manifests candidatos são derivados dos oficiais v1.0, com o mesmo host esperado,
 perfis, cargas, coortes, pesos, tempos e parâmetros comparativos. Eles não atualizam
 expectativas do host para acomodar divergências. O HostProbe completo continua obrigatório
-antes de qualquer execução; não é acionado como substituto de preparação do host neste chat.
+antes de qualquer execução; não substituía a preparação do host.
 
 Após revisão, qualquer novo commit requer reconstrução identificada das imagens e novos
 manifests. Não editar SHA manualmente. Para remover apenas o projeto preparado:
@@ -707,7 +708,7 @@ Reutilizar esse argv em `--prepare-command-json` e a confirmação literal da ca
 usar sempre um destino novo. A entrada operacional abaixo monta esses argumentos, sem
 alterar os gates do runner. Preparar o pacote não autoriza executar essa entrada sem `-PlanOnly`.
 
-## Entrada operacional do piloto — registro da preparação no chat 11
+## Entrada operacional do piloto — registro da preparação original
 
 O piloto no build atual já foi executado posteriormente, conforme o estado no início
 deste documento. Os comandos desta seção são históricos; não repetir destinos consumidos.
@@ -716,7 +717,7 @@ deste documento. Os comandos desta seção são históricos; não repetir destin
 caminhos relativos ao diretório do chamador; transmite JSON UTF-8 via stdin ao módulo
 `benchmarks.pilot_v11`, sem `Invoke-Expression`, shell intermediário ou escape manual de argv.
 Carrega o arquivo de ambiente sintético e restaura o ambiente do chamador ao terminar.
-Use o caminho do pacote materializado no HEAD revisado, indicado no relatório final do chat.
+Use o caminho do pacote materializado no HEAD revisado, indicado no relatório original de preparação.
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Invoke-V11Pilot.ps1 `
@@ -728,7 +729,7 @@ pwsh -NoProfile -File .\scripts\Invoke-V11Pilot.ps1 `
 
 `-PlanOnly` valida a derivação e exibe o JSON/argv; não consulta o host, cria infraestrutura
 ou executa carga. Sua aprovação **não** equivale à aprovação do preflight real. Após
-autorização específica no chat 12, remover apenas `-PlanOnly` executa uma única tentativa.
+autorização específica então concedida, a remoção de `-PlanOnly` executava uma única tentativa. Esse comando está encerrado e não deve ser repetido.
 O destino deve estar ausente. A entrada deriva mixed/4, q=430, uma repetição não oficial;
 pesos, coortes, spawn rate, budgets, deadlines, estabilização, warm-up, measurement e
 critérios de validade permanecem congelados. Não há repetição automática nem promoção a oficial.
@@ -922,15 +923,15 @@ ao runner congelado; encerramento forçado do host ainda exige inspeção manual
 Comando manual, somente depois da prontidão confirmada em `paired-win9445-review-01/ready.json`:
 
 ```powershell
-& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-PairedControls.ps1'
+& "${env:USERPROFILE}\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe" -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-PairedControls.ps1'
 ```
 
-O caminho é absoluto e funciona a partir de `C:\Users\natoc`. Executar uma vez, manter o
+O caminho é absoluto e funciona a partir de `${env:USERPROFILE}`. Executar uma vez, manter o
 terminal aberto e não iniciar outra carga simultânea. O comando antigo dos dois controles
 v1.0 já concluídos, preservado no registro abaixo, não deve ser repetido.
 
 Prontidão operacional verificada em 10/09/2026: `-PrepareOnly` terminou com código 0,
-chamado pelo caminho absoluto a partir de `C:\Users\natoc`, usando PowerShell 7.6.5.
+chamado pelo caminho absoluto a partir de `${env:USERPROFILE}`, usando PowerShell 7.6.5.
 Os quatro parsers aceitaram os candidatos; as imagens originais e o host conferiram.
 O seed/restauração e os probes originais verificaram PostgreSQL v1.0 e ambos os bancos
 v1.1 com o hash lógico `5897d744…a63bf`. Os dois projetos foram removidos após exportar
@@ -970,7 +971,7 @@ Todos esses bootstraps pararam antes de iniciar containers ou carga. Naquele mom
 destinos dos dois controles estavam ausentes. Os testes anteriores simulavam as partes que falharam, e
 `-PlanOnly` verificava apenas commit/destinos: nem esses testes nem a CI Linux demonstravam
 prontidão operacional no Windows. A instrução inicial com `-File .\scripts\…` também dependia
-do diretório corrente e falhava quando chamada de `C:\Users\natoc`; o comando abaixo é absoluto.
+do diretório corrente e falhava quando chamada de `${env:USERPROFILE}`; o comando abaixo é absoluto.
 
 Outros defeitos corrigidos antes da carga: a consulta `HostProbe.dynamic({})` antecedia a
 infraestrutura e recusaria containers vazios no probe congelado; agora a admissão dinâmica
@@ -1040,10 +1041,10 @@ a triagem é inconclusiva e exige revisão, sem execução adicional automática
 resultados não validam equivalência nem as seis células.
 
 Comando histórico dos dois controles já concluídos; **não executar novamente**. Usa o executável conferido neste terminal
-(PowerShell 7.6.5). Funciona também a partir de `C:\Users\natoc`, em uma linha:
+(PowerShell 7.6.5). Funciona também a partir de `${env:USERPROFILE}`, em uma linha:
 
 ```powershell
-& 'C:\Users\natoc\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe' -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-V10Controls.ps1'
+& "${env:USERPROFILE}\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe" -NoProfile -File 'C:\Projetos\campos-labs\fulfillflow\scripts\Invoke-V10Controls.ps1'
 ```
 
 `-PlanOnly` só exibe o plano. `-PrepareOnly` materializa e verifica sem carga, mas já foi

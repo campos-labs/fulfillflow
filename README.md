@@ -1,87 +1,20 @@
 # FulfillFlow
 
-Estado atual: campanhas suspensas por decisão explícita. A execução ativa 03
-encerrou com nove repetições aprovadas pelos validadores (5 v1.0, 4 v1.1); r05
-v1.1 inválida por falha obrigatória do coletor, sem causa nativa recuperável.
-Não repetir launchers nem preparar continuação. A proposta de congelamento
-funcional da v1.1 mantém comparação e release pendentes; v1.2 Tracking assíncrono
-requer contrato e aprovação próprios. Notifications permanece fora dessa evolução.
-A análise adicional está em `benchmarks/results/active03-r05-final-analysis-01`.
+FulfillFlow gerencia pedidos, remessas e eventos de transportadoras simuladas com
+FastAPI, PostgreSQL 18, API JSON e interface operacional renderizada no servidor.
 
-Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
-Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
-e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,
-imagens e identidade de energia antes de criar o destino. Recursos anteriores
-já parados são conferidos e preservados, sem reinício. Erros externos registram
-etapa, executável, código e stderr sanitizado. Os pacotes 01/02 são históricos;
-o contrato de brilho fixo e todos os demais parâmetros permanecem iguais.
+A v1.1 implementa Core + Tracking, com bancos, credenciais e migrações separados.
+Core mantém Orders, Shipments, Notifications e o cadastro de Carriers; Tracking
+mantém autenticação HMAC, adapters Alpha/Beta, inbox e timeline. A entrada pública
+e a interface permanecem no Core.
 
-A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
-`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
-validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
-nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
-inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
-Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
-operação `comparison-active-operation-02`; o launcher atual é
-`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
-containers inventariados da execução 01 e os para graciosamente antes de qualquer
-preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
-processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
-históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
+O processamento dos webhooks é síncrono. Recibos idempotentes no Core preservam os
+resultados e impedem duplicação de efeitos na reentrega idêntica. A recuperação de
+inboxes pendentes depende de reentrega; não há atomicidade global entre serviços.
 
-Incrementos I e II da v1.1: Core + Tracking, FastAPI e PostgreSQL 18 assíncrono,
-com bancos, credenciais e migrações separados. Core mantém Orders, Shipments,
-Notifications e cadastro de Carriers. Tracking autentica e normaliza os webhooks
-Alpha/Beta e mantém inbox e timeline. A entrada pública e a UI continuam no Core.
-
-O processamento continua síncrono. Um recibo idempotente no Core preserva o
-resultado original e impede efeitos duplicados após perda de resposta. A
-reentrega idêntica conclui o inbox pendente. Entre commits, o estado no Core pode
-estar atualizado antes da timeline; não há atomicidade global nem recuperação
-automática sem reentrega. Falhas de comunicação retornam 503, erros inesperados
-500, preservando o inbox recebido para retomada.
-
-A v1.0.0 publicada permanece na tag original. O incremento II prepara a comparação:
-loader dos dois bancos, manifests com identidades observadas, telemetria por serviço
-e agregada e conciliação de recibos/efeitos. O loadgen candidato deriva da imagem
-congelada; as revisões da ferramenta e dos protocolos têm identidades próprias. Workload,
-dependências e dataset permanecem iguais. O [pacote de revisão](benchmarks/V11_REVIEW.md)
-descreve comandos e limites; carga, congelamento experimental e release pertencem
-ao incremento III e ainda exigem autorização.
-O piloto não oficial mixed/4 foi executado no Windows `26200.9445`: 108,04 req/s,
-p95 82 ms, sem erros e com conciliação. Dois controles v1.0 posteriores também foram
-válidos. O bloco ABBA seguinte parou na primeira tentativa por falha da coleta,
-sem produzir uma comparação válida. A baseline histórica usa `26200.9278`.
-O novo ABBA com runner revisado foi válido. A matriz contemporânea concluiu dez
-repetições mixed/4 (cinco por versão) e parou no primeiro warm-up v1.1 mixed/12:
-3.722 aplicações de 5.160 exigidas, sem erros HTTP, Locust exit 2. O diagnóstico
-do runner foi corrigido sem alterar imagens ou resultados. A única verificação
-manual limitada ao warm-up também falhou: 3.497/5.160 aplicações, sem erros HTTP,
-Locust exit 2 e coleta completa. As células de 12 usuários permanecem bloqueadas.
-A sensibilidade posterior concluiu as oito observações: v1.0 completou ambas as
-quotas em cada política; v1.1 completou as duas de 120 s e ficou em 3.677 e 3.674
-nas de 60 s. A nova comparação simétrica adota 120 s para ambas, alterando duração
-e ritmo de admissão, com aplicação preservada. São 60 medições novas, sem incorporar
-resultados anteriores. A execução liberada no commit `02fe942` preservou uma medição
-v1.0 mixed/4 válida e parou antes do segundo warm-up por incompatibilidade do
-verificador de metadados. `scripts/Invoke-Comparison120.ps1` está **encerrado; não repetir**.
-`scripts/Invoke-Comparison120Continuation.ps1` também encerrou: há oito medições
-aprovadas pelos validadores, e r04 v1.1 mixed/4 inválida por 503 na medição.
-O bloco não oficial com tela ativa encerrou com quatro medições válidas e r05
-interrompida na estabilização por falha de leitura do heartbeat. Corrigem-se apenas
-as ferramentas do host, sem completar r05 ou liberar outra execução. A condição de
-cinco sucessos não foi atendida. A revisão da condição de avanço foi aprovada para
-preparar 60 medições novas com host ativo e sem incorporar resultados anteriores.
-Entrada atual: `scripts/Invoke-ActiveComparison.ps1`, condicionada a selo e isolamento.
-Consulte a [revisão atual](benchmarks/V11_REVIEW.md).
-Todos os launchers anteriores, incluindo sensibilidade e continuação 4–8, estão encerrados.
-
-A política efetiva de logs das imagens é preservada. Os settings de logging não
-configuram o logger da aplicação; access logs Uvicorn continuam INFO em texto.
-Logging estruturado, métricas Prometheus e tracing previstos no DESIGN permanecem
-pendências explícitas, sem declaração de conformidade integral de observabilidade.
-
-O roteiro reproduzível está em [docs/DEMO.md](docs/DEMO.md).
+Os incrementos funcionais I e II estão concluídos. A comparação de desempenho e a
+release v1.1 permanecem pendentes; as campanhas estão suspensas. A v1.0.0 publicada
+continua preservada em sua tag.
 
 ## Subida local com Docker Compose
 
@@ -283,59 +216,6 @@ uv run alembic -c alembic_tracking.ini check
 uv run python -m fulfillflow.tracking
 ```
 
-## Seeds sintéticos e benchmark histórico v1.0
-
-Os comandos desta seção pertencem à topologia monolítica da tag `v1.0.0`.
-`seed_demo.py` e o loader físico histórico não preparam os bancos v1.1.
-Os testes de regressão continuam verificando os hashes lógicos e estruturais
-congelados em um terceiro banco isolado. A relocação do import de normalização
-no gerador não altera o dataset. Para v1.1, use `benchmarks.seed_v11` e
-`benchmarks.prepare_v11`, conforme [V11_REVIEW.md](benchmarks/V11_REVIEW.md).
-Campanhas continuam dependendo de autorização específica do incremento III.
-
-Os seeds são fail-closed e aceitam somente PostgreSQL 18 via `postgresql+psycopg`.
-Eles exigem `APP_ENV` explícito, schema no head do Alembic e confirmação literal do
-nome do banco. Não limpam, substituem ou corrigem dados existentes: banco vazio é
-carregado atomicamente, repetição do dataset exato é no-op e qualquer divergência
-falha sem escrita.
-
-```powershell
-$env:APP_ENV = "local"
-$env:DATABASE_URL = "postgresql+psycopg://<user>:<password>@127.0.0.1:5432/fulfillflow_demo"
-uv run python scripts/seed_demo.py --confirm-database-name fulfillflow_demo
-```
-
-O documento lógico integral do benchmark e o SHA-256 dos mesmos bytes canônicos
-ficam em `benchmarks/datasets`. O documento contém metadata, coortes e todas as
-linhas usadas pelo seed; a campanha autentica o arquivo e o sidecar antes de
-expor qualquer slot ao loadgen. A documentação do contrato, das duas fases
-Locust, dos coletores externos e dos artefatos está em `benchmarks/README.md`.
-Os manifests oficiais históricos e a consolidação das 30 repetições v1.0 estão
-publicados em `benchmarks/campaigns` e `benchmarks/baselines/v1.0`. A fixture
-sintética abaixo serve apenas à validação de contratos e não representa a baseline.
-
-```powershell
-uv sync --frozen --all-groups
-uv run python -m benchmarks.dataset
-uv run python -m benchmarks.run_campaign `
-  --manifest benchmarks/fixtures/smoke-campaign.json `
-  --validate-only
-docker compose -f compose.benchmark.yaml config --quiet
-docker build --target loadgen --tag fulfillflow-loadgen:smoke .
-```
-
-O target Docker `runtime` continua sem Locust. O target separado `loadgen` instala
-o grupo `benchmark` e executa somente o cliente HTTP. Em uma execução aprovada,
-o runner usa processos Locust fisicamente distintos para warm-up e measurement,
-confere o ambiente Docker, o head Alembic e o digest estrutural específico da release,
-e compara integralmente o conteúdo PostgreSQL observado com o artefato autenticado
-antes do warm-up. Depois dele, valida cada evento e
-relação lógica esperada, preserva individualmente os 15.000 eventos iniciais,
-coleta recursos e
-mantém os resultados completos visíveis ao Git. A CI valida contratos, hashes,
-seeds, Compose e a imagem do loadgen, mas não executa warm-up de 60 segundos,
-measurement de 300 segundos ou campanha completa.
-
 ## Testes e qualidade
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
@@ -375,10 +255,11 @@ e `1101_tracking` (inbox e timeline), com metadados e graphs Alembic separados.
 Os testes verificam upgrade/check/downgrade/upgrade de ambos, ausência de FKs
 entre proprietários e rejeição de conexão com a credencial do outro serviço.
 
-No histórico v1.0, a revisão `0001_bootstrap` estabelece o baseline, `0002_orders_shipments` cria
-Orders, Shipments e o registro de Carriers, e `0003_carriers_tracking` instala os
-registros determinísticos Alpha/Beta e cria `carrier_event_inbox` e
-`tracking_events`. A revisão `0004_notifications` cria o registro persistente das
-notificações simuladas. O schema usa UUID/timestamptz nativos, JSONB/bytea para a
-projeção e os bytes externos, checks textuais nomeados, FKs restritivas e os
-índices do contrato.
+## Documentação
+
+- [Demonstração funcional](docs/DEMO.md): preparação e jornada pela API/UI.
+- [DESIGN](DESIGN.md): contratos e invariantes aprovados.
+- [RELEASE_PLAN](RELEASE_PLAN.md): etapas, aceite e pendências da v1.1.
+- [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
+- [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
+- [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.

@@ -1,78 +1,33 @@
-# FulfillFlow benchmark harness
+# FulfillFlow — benchmark tool
 
-Estado atual: campanhas suspensas por decisão explícita. A execução ativa 03
-encerrou com nove repetições aprovadas pelos validadores (5 v1.0, 4 v1.1); r05
-v1.1 inválida por falha obrigatória do coletor, sem causa nativa recuperável.
-Não repetir launchers nem preparar continuação. A proposta de congelamento
-funcional da v1.1 mantém comparação e release pendentes; v1.2 Tracking assíncrono
-requer contrato e aprovação próprios. Notifications permanece fora dessa evolução.
-A análise adicional está em `benchmarks/results/active03-r05-final-analysis-01`.
+Campaign execution is suspended. All prepared launchers are closed; the commands
+below document tool contracts and do not authorize a new run or a replay.
+See [V11_REVIEW.md](V11_REVIEW.md) for the current evidence index and closed campaigns.
 
-Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
-Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
-e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,
-imagens e identidade de energia antes de criar o destino. Recursos anteriores
-já parados são conferidos e preservados, sem reinício. Erros externos registram
-etapa, executável, código e stderr sanitizado. Os pacotes 01/02 são históricos;
-o contrato de brilho fixo e todos os demais parâmetros permanecem iguais.
+This directory contains deterministic datasets, manifest validation, host runners,
+loadgen contracts, collection and reconciliation tools. The published v1.0 baseline
+and its 30 repetitions remain in [baselines/v1.0](baselines/v1.0/README.md).
+Raw results and operational diagnostics are retained locally under `results/`.
 
-A execução ativa 01 encerrou na preparação da r02: alteração manual confirmada de
-`VIDEONORMALLEVEL` AC/DC de 100 para 0. A r01 mantém sua classificação pelos
-validadores, com ressalva ambiental sobre o horário da alteração, sem inclusão na
-nova execução ativa 02. Esta usa 60 medições novas e a mesma política integral,
-inclusive brilho fixo em 100, sem mudar suspensão ou parâmetros do benchmark.
-Pacote `comparison-active-review-02`, liberação `comparison-active-release-02` e
-operação `comparison-active-operation-02`; o launcher atual é
-`scripts/Invoke-ActiveComparison.ps1`. O comando manual exporta os logs dos dois
-containers inventariados da execução 01 e os para graciosamente antes de qualquer
-preparação nova. Preserva containers e volumes; perde-se o estado volátil dos
-processos. Divergências ou falhas interrompem sem retry. Não inicia bancos
-históricos. A integridade/WAL históricos e a cópia independente seguem pendentes.
+## Protocol selection and safe use
 
-This directory defines reproducible data and workload artifacts. The accepted v1.0 baseline has
-30 valid official repetitions: mixed/timeline/ingestion, 4/12 users, five repetitions per point.
-See [the portable baseline publication](baselines/v1.0/README.md) for reports, immutable manifests,
-artifact hashes, offline reconstruction and the distinction between measured and release commits.
-Raw results and private diagnostics are archived locally, not included in Git.
+The historical v1.0 loader accepts the original 60-second warm-up contract.
+The v1.1 schema-v2 loader adds explicit Core/Tracking ownership. The separate
+`symmetric-warmup120-comparison-v1` contract uses 120-second proportional admission,
+300-second stabilization and 300-second measurement; it does not weaken the
+historical validator. Application, runner, loadgen and coordinator identities are
+recorded separately. Approved contracts are in [DESIGN §30](../DESIGN.md#30-arquitetura-v11--extração-e-preparação-comparação-pendente).
 
-The v1.1 owner-aware preparation, candidate image audit, manifests, reconciliation,
-resource aggregation and review commands are documented in [V11_REVIEW.md](V11_REVIEW.md).
-The sections below retain the historical v1.0 contracts; v1.1 uses explicit schema-v2
-owner identities while preserving the workload and logical dataset. A later non-official
-pilot and two v1.0 controls are valid; the first ABBA stopped on mandatory resource
-collection failure. The subsequent reviewed matrix completed ten mixed/4 repetitions
-and stopped at the first v1.1/12 warm-up. That campaign remains incomplete. The eight
-warm-up sensitivity observations are now complete and preserved.
+Execution requires a new, reviewed package and destinations, matching images,
+source, host and resources, clean preparation and complete reconciliation.
+A failed mandatory check stops the sequence without retry or replacement.
+Do not run dataset generation, preparation or cleanup against preserved evidence.
+For v1.1 preparation, use the owner-aware modules `benchmarks.seed_v11` and
+`benchmarks.prepare_v11`; the historical v1.0 physical loader cannot initialize
+segregated service databases. Historical commands and packages are indexed in the review.
 
-The released `scripts/Invoke-Comparison120.ps1` sequence is closed; do not rerun it.
-Commit `02fe942` produced one valid v1.0 mixed/4 repetition and stopped before the
-second warm-up because the coordinator compared differently shaped protocol metadata.
-The subsequently executed continuation is also closed: eight measurements passed
-the validators; v1.1 mixed/4 r04 stopped with HTTP 503 during measurement.
-Do not rerun `scripts/Invoke-Comparison120Continuation.ps1`.
-The revised advancement condition authorizes a new symmetric 60-measurement
-comparison, excluding all earlier results. Entry: `scripts/Invoke-ActiveComparison.ps1`,
-requiring its own sealed release and isolated resources. Both versions use the same
-active-host policy, preserved images and the frozen 120-second protocol.
-The active-screen block is now closed: four nonofficial measurements passed and r05
-stopped during stabilization because heartbeat evidence could not be read. Do not
-rerun its launcher or fill r05 separately. Host-only transport/capture corrections
-do not satisfy the original five-success condition. A new symmetric comparison
-requires explicit approval of the revised advancement condition; none is prepared.
-The following describes the historical preparation of the nonofficial five-repetition active-screen
-diagnostic. Idle check 02 is complete and accepted; operation 01 stopped before load at the power identity gate. Revision 08 fixes native console decoding and dispatch reporting, pending review and a new release. Its entry is
-`scripts/Invoke-ActiveScreenDiagnostic.ps1`; the previous execution release is closed; do not repeat the idle check or operation 01.
-See the current procedure at the top of [V11_REVIEW.md](V11_REVIEW.md).
-The historical `symmetric-warmup120-comparison-v1`
-uses a separate explicit loader, 120-second admission and proportional pacing, five
-repetitions per version/cell, 300-second stabilization and 300-second measurement.
-The original 60-second loader still rejects this protocol. The preparation manifest
-is historical-shaped for frozen probes; the executable manifest differs only in
-protocol, admission and warm-up process timeout (90 to 150 seconds). Both use the
-same new loadgen identity. Applications, logical datasets and other limits remain
-frozen. Any failure stops the sequence without retry; incomplete quota never allows
-measurement or the next condition. None of the earlier results enter this new matrix.
-See [the current review](V11_REVIEW.md) for the fixed block order and evidence.
+The sections below specify the original tool contract unless an explicit protocol
+extension is named. They remain reference material, not a currently released campaign.
 
 ## Frozen logical datasets
 
