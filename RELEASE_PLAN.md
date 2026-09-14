@@ -1,5 +1,13 @@
 # FulfillFlow — Release Plan
 
+Estado atual: campanhas suspensas por decisão explícita. A execução ativa 03
+encerrou com nove repetições aprovadas pelos validadores (5 v1.0, 4 v1.1); r05
+v1.1 inválida por falha obrigatória do coletor, sem causa nativa recuperável.
+Não repetir launchers nem preparar continuação. A proposta de congelamento
+funcional da v1.1 mantém comparação e release pendentes; v1.2 Tracking assíncrono
+requer contrato e aprovação próprios. Notifications permanece fora dessa evolução.
+A análise adicional está em `benchmarks/results/active03-r05-final-analysis-01`.
+
 Operação ativa 02 encerrada sem diagnóstico suficiente para atribuir a falha ao
 Docker histórico. A última tentativa autorizada usa pacote/liberação/operação 03
 e 60 medições novas. O launcher verifica contexto `desktop-linux`, engine Linux,

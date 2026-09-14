@@ -42,6 +42,30 @@ def test_counter_projection_ignores_arbitrary_fields():
     assert counters({"cpu": 1, "read": "secret", "raw_body": "secret", "cpus": True}) == {"cpu": 1}
 
 
+def test_native_codes_survive_helper_and_parent_without_sensitive_fields():
+    error = OSError(5, "private transport path", "private filename")
+    error.winerror = 109
+    helper = failure(error, "transport", time.monotonic())
+    assert helper["errors"][0] == {"type": "OSError", "errno": 5, "winerror": 109}
+    helper["errors"][0]["message"] = "private payload"
+    helper["errors"].append({"type": "ValueError", "errno": True, "winerror": "private"})
+    parent = failure(
+        subprocess.CalledProcessError(2, ["private argv"], stderr=PREFIX + json.dumps(helper)),
+        "snapshot",
+        time.monotonic(),
+    )
+    assert parent["errors"][0]["helper_errors"] == [
+        {"type": "OSError", "errno": 5, "winerror": 109},
+        {"type": "ValueError"},
+    ]
+    assert "private" not in json.dumps(parent)
+
+
+def test_oserror_without_numeric_code_does_not_invent_cause():
+    report = failure(OSError("unknown private cause"), "transport", time.monotonic())
+    assert report["errors"] == [{"type": "OSError"}]
+
+
 @pytest.mark.parametrize("problem", ["snapshot", "connections", "delta", "output"])
 def test_sampler_retains_original_failure_and_notifies_supervisor(tmp_path, monkeypatch, problem):
     class Database:
