@@ -2,16 +2,20 @@
 
 ## Estado atual e aceite pendente
 
-Incrementos I e II concluídos; comparação e release pendentes. Campanhas suspensas:
-não repetir launchers nem preparar continuação. O histórico de execução fica em
-[benchmarks/V11_REVIEW.md](benchmarks/V11_REVIEW.md).
+| Estado | Situação e limite |
+| --- | --- |
+| Candidata funcional | Incrementos I e II implementados; aceite funcional autorizado para a pré-release v1.1.0-rc.1, com rastreabilidade na síntese e conferência UI/DEMO concluída. Não equivale à release final. |
+| Comparação suspensa | Matrizes incompletas e classificações preservadas por campanha. Nenhuma retomada, carga ou continuação autorizada. |
+| Release final pendente | Mantém o aceite do incremento III: matriz, relatório reproduzível, checksums, gates e autorização de publicação. |
 
-Para formalizar a candidata funcional, consolidar a rastreabilidade dos contratos
-aprovados aos testes existentes e às identidades de aplicação/imagens examinadas.
-O aceite deve distinguir recuperação funcional, desempenho e observabilidade.
-As lacunas de logging estruturado, métricas e tracing previstas no DESIGN continuam
-explícitas. A cópia independente das evidências e a integridade/WAL dos bancos
-históricos não estão confirmadas. Não há autorização de tag ou publicação.
+A matriz incompleta não autoriza retomar campanhas nem impede, por si, propor
+uma evolução seguinte. Qualquer evolução exige proposta e aprovação próprias;
+este fechamento não implementa nem aprova novos contratos.
+
+A rastreabilidade está em [V11_REVIEW](benchmarks/V11_REVIEW.md). Recuperação
+funcional, desempenho e observabilidade são aceites distintos. Logging estruturado,
+métricas e tracing continuam lacunas; cópia independente e integridade/WAL dos
+bancos históricos não estão confirmadas. O 503 histórico segue sem causa determinada.
 
 ## 1. Referência e objetivo
 
@@ -104,7 +108,7 @@ prepara e verifica os dois bancos, registra suas identidades e conta recibos, co
 recursos separados/agregados e concilia efeitos. O diff do loadgen foi apresentado e
 autorizado: imagem derivada com somente `campaign.py` alterado, sem mudar workload,
 dataset ou dependências. O pacote é `benchmarks/V11_REVIEW.md`. Piloto e controles
-posteriores não substituem a matriz oficial; sua situação está registrada abaixo.
+posteriores não substituem a matriz oficial; sua situação está registrada na síntese V11_REVIEW.
 
 - Completar testes reais de concorrência, rejeições, falhas em cada fronteira de commit, respostas perdidas, reentrega e ordenação.
 - Validar ausência de acessos cruzados aos bancos e de recursos SQL retidos durante HTTP.
@@ -141,122 +145,33 @@ O aceite de release prevê Core + Tracking, contratos estáveis, consistência e
 
 Evolução futura: uma eventual v1.2 exige proposta e aprovação próprias; não está autorizada por este plano.
 
-## Histórico encerrado — implementação e preparação
+## Histórico e notas da pré-release
 
-Os registros abaixo preservam decisões e aceites anteriores. Datas, autorizações
-e comandos descrevem o estado daquele momento; não são instruções atuais.
-A síntese de campanhas e os artefatos estão em [V11_REVIEW](benchmarks/V11_REVIEW.md).
+O [histórico encerrado](benchmarks/V11_HISTORY.md) preserva os registros anteriores;
+a [síntese da candidata](benchmarks/V11_REVIEW.md) vincula contratos, testes,
+identidades e campanhas. Não reutilizar instruções históricas.
 
-### Situação ao concluir o incremento I
+### Pré-release funcional — v1.1.0-rc.1
 
-Registro histórico do primeiro incremento; o estado atual consta no início deste plano.
+**Aceite funcional aprovado; publicação como pré-release condicionada à CI do commit final.** Extração funcional síncrona
+Core + Tracking, com bancos/credenciais/migrações segregados, HMAC sobre os bytes
+originais, recibos idempotentes e recuperação por reentrega. API e UI preservam os
+contratos aprovados. Não há atomicidade global nem recuperação automática.
 
-- v1.0 publicada e main integrada, com referências locais/remotas conferidas nesta auditoria.
-- Branch local `codex/v1.1-tracking`, com implementação, testes e documentação do incremento I.
-- I: concluído. II: pendente. III: pendente de implementação e autorização de execução.
-- Gates locais: pytest completo com cobertura acima de 80%, testes estruturais históricos sem alteração de hashes, Ruff/format, Mypy, Import Linter, Alembic dos dois proprietários e build/smoke Docker com Alpha/Beta. CI adaptada, sem execução remota nesta tarefa.
-- Somente os imports necessários do gerador foram relocados; workload, protocolo, manifests publicados, imagem congelada do loadgen e evidências v1.0 preservados.
-- Preparação funcional não equivale a prontidão de benchmark. Não houve push, merge, tag, release ou campanha.
+Aprovados: contratos do DESIGN §30, implementação dos incrementos I/II,
+conferência UI/DEMO e incorporação dos dois cenários HTTP após commit. A CI exige
+explicitamente ambos sem skips. A aplicação e as imagens medidas permanecem
+preservadas; as mudanças de fechamento são testes, verificação CI e documentação.
+As lacunas de observabilidade, comparação suspensa, 503 desconhecido,
+integridade/WAL e cópia independente não confirmados acompanham a rc.
+Nenhuma alegação de estabilidade geral, equivalência ou ganho de desempenho.
 
-## Situação do incremento II
+Base do fechamento: `8786247ff52db3575eaff9246464df3d7d277310`. O commit final é
+identificado pela tag anotada `v1.1.0-rc.1` e por sua CI vinculada nas notas GitHub.
+A CI da base não substitui a validação do commit final.
 
-Incrementos I e II concluídos. O piloto posterior não oficial mixed/4, q=430, no Windows
-`26200.9445` foi válido: 108,04 req/s, p95 82 ms, sem erros e com conciliação. Evidências em
-`benchmarks/results/v11-pilot-win9445-attempt-01` e análise em
-`benchmarks/results/v11-pilot-win9445-analysis/metrics-summary.json`.
-A baseline `26200.9278` permanece histórica; não atribuir a diferença exclusivamente à
-arquitetura ou ao Windows. Campanha oficial e decisão sobre a comparação continuam pendentes.
-Os dois controles exploratórios v1.0 mixed/4 no host atual foram executados manualmente e
-verificados: 190,0128/189,8441 req/s, p95 35/35 ms, zero falhas e efeitos conciliados.
-Ambos ficaram dentro das margens práticas fixadas antes da execução; isso não prova
-equivalência nem valida seis células. Análise derivada em
-`benchmarks/results/v10-controls-win9445-analysis-01/metrics-summary.json`.
-`benchmarks/V11_REVIEW.md` registra a comparação descritiva e a preparação autorizada de
-dois pares AB/BA (quatro execuções novas), com fontes e imagens congelados por versão,
-destinos novos e regras de leitura prévias. A execução manual começou, mas A1 v1.0
-foi invalidado por coleta incompleta; B1/B2/A2 não começaram. O diagnóstico ocioso
-posterior não reproduziu a falha nem estabeleceu sua causa. DESIGN §30.5 delimita a extensão.
-Nenhuma nova carga foi executada na análise e nenhum resultado histórico foi alterado.
-
-- Branch autorizada: `codex/v1.1-tracking`; incremento I enviado e CI remota aprovada.
-- Implementados matriz adversa adicional, loader/restauração segregados, identidades v1.1,
-  deadlines internos compatíveis, telemetria separada/agregada, conciliação e geração de manifests candidatos.
-- Adaptação da imagem do loadgen revisada e autorizada: parent preservado e somente
-  `campaign.py` substituído. Dataset, locustfile, dependências e evidências v1.0 preservados.
-- Pacote de revisão: `benchmarks/V11_REVIEW.md`. Manifests e relatórios observados ficam
-  em destino novo sob `benchmarks/results`, com checksums, sem fingir congelamento experimental.
-- Verificações executáveis: testes funcionais/integração, gates estáticos, CI, restauração
-  repetida e smoke de telemetria ociosa. Os relatórios de validação preservam resultados e commits.
-- A matriz oficial do incremento III não foi executada; o piloto não a substitui.
-  A entrada PowerShell original foi preparada sem carga; a execução posterior
-  e a revisão atual estão distinguidas no pacote. Não houve merge, tag ou release v1.1.
-
-## Correção auditada e referência contemporânea
-
-Foi autorizada a correção do coletor/runner, com diagnóstico sanitizado e supervisão
-limitada a 250 ms, preservando consultas, cálculos, cadência e gates. A identidade da
-aplicação é validada em checkout separado; a ferramenta de host tem proveniência própria.
-As imagens e evidências medidas permanecem intactas. A política efetiva de observabilidade
-é preservada; suas lacunas de implementação continuam explícitas e não foram corrigidas
-por reescrita dos requisitos históricos.
-
-Preparar novo ABBA mixed/4 e, depois, uma referência no Windows `26200.9445` com 30
-execuções novas por versão. Cada célula possui dois blocos de cinco: mixed/4 v1.0→v1.1;
-mixed/12 v1.1→v1.0; timeline/4 v1.0→v1.1; timeline/12 v1.1→v1.0;
-ingestion/4 v1.0→v1.1; ingestion/12 v1.1→v1.0. A ordem é fixa, não randomizada;
-permanece possível efeito de ordem dentro da célula. A referência publicada é histórica.
-
-Os pacotes são preparados sem carga; execução será manual após prontidão comprovada.
-Qualquer falha interrompe a sequência, preservando válidas e inválidas sem repetição
-automática. Preparação, resultados válidos e encerramento de release são estados distintos.
-
-## Interrupção da matriz e verificação limitada ao warm-up
-
-O novo ABBA foi concluído e revisado; a matriz seguinte tem dez repetições mixed/4
-válidas preservadas. A primeira v1.1 mixed/12 encerrou o Locust com código 2 no
-warm-up: 3.722 aplicações de 5.160 exigidas, sem erros HTTP. O coletor registrou
-61 ciclos completos e nenhuma falha; o rótulo histórico `snapshot` está incorreto.
-A correção do runner distingue as fontes de falha sem reescrever esse diagnóstico.
-
-A única tentativa diagnóstica v1.1/12 autorizada em DESIGN §30.5 foi executada
-manualmente: 3.497/5.160 aplicações, zero falhas HTTP, Locust exit 2 e 61 ciclos
-completos de coleta. Não houve medição. O diagnóstico corrigido registrou
-`process_exit`; a conciliação posterior confirmou 3.497 comandos/recibos/finalizações.
-A regra prévia de falha equivalente mantém 12 usuários bloqueados. Nenhuma repetição
-válida foi substituída ou promovida a outra campanha. Não repetir o launcher.
-A proposta antiga de doze diagnósticos permanece inativa.
-
-Decisão posterior autorizada: preparar uma campanha separada de sensibilidade
-60/120 s, duas observações por versão/duração, somente warm-up, na ordem de §30.5.
-Essa autorização não amplia nem retoma a matriz original. Preserva recursos,
-aplicação, dataset e quota; altera explicitamente duração e ritmo de admissão.
-Não prepara uma nova matriz oficial. Evidências, interpretação e bloqueios em
-`benchmarks/V11_REVIEW.md`; a proposta antiga de doze diagnósticos segue inativa.
-
-
-## Nova comparação simétrica de 120 s — interrupção de coordenação
-
-A sensibilidade encerrou oito tentativas. v1.0: duas quotas completas em 60 s e
-duas em 120 s. v1.1: 3.677 e 3.674/5.160 em 60 s, duas completas em 120 s.
-Isso sustenta a política comum; não prova teto físico, estabilidade, causalidade
-exclusiva ou ausência de defeitos. Os 60 s permanecem requisito do protocolo
-histórico, sem reclassificação como SLA. Evidências e próxima entrada estão em
-`benchmarks/V11_REVIEW.md`; todos os launchers anteriores estão encerrados.
-
-A nova campanha terá 30 medições por versão, cinco por perfil/carga, em blocos na
-ordem aprovada. Nenhuma medição anterior será incorporada. Piso temporal: 12 horas,
-além de preparação, verificações, drain e exportação. Qualquer falha interrompe;
-não se aplica a exceção da sensibilidade para quota incompleta. Fontes, imagens
-da aplicação, dados e observabilidade permanecem congelados. Runner e loadgen têm
-identidades próprias. Preparação e testes sem carga antecedem revisão independente,
-commit em `codex/v1.1-tracking`, CI do commit e conferência final do pacote.
-Release pendente; cópia independente das evidências sem confirmação.
-
-
-A execução liberada em `02fe942` preservou r01 v1.0 mixed/4 válida e uma r02
-parcial anterior ao warm-up. O verificador exigia `loads` dentro de
-`protocol_expected`, embora o runner exporte `load` separadamente. Corrigir a
-comparação e o diagnóstico não altera carga ou aplicação. A sequência encerrada
-não será repetida; a continuação implementada exige identidade e vínculo explícitos com
-a medição preservada, sem reescrever seus metadados ou completar artificialmente
-o bloco histórico. Ver `benchmarks/V11_REVIEW.md`.
+Após CI aprovada, a autorização permite criar `release/v1.1.0` e a tag anotada
+`v1.1.0-rc.1` no mesmo commit, sem mudar a branch de trabalho, main ou referências
+históricas. A publicação é somente pré-release, sem latest e sem release estável.
+Referências existentes não podem ser sobrescritas. A matriz incompleta e as ressalvas
+permanecem abertas; nenhuma nova campanha ou contrato posterior é autorizado.

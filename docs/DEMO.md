@@ -189,13 +189,15 @@ Detalhes de transações, locks e idempotência permanecem documentados em
 
 ## Capturas da demonstração
 
-As imagens abaixo foram obtidas da aplicação real FulfillFlow v1.1 — incremento I em ambiente
-local controlado. Todos os dados apresentados são sintéticos.
+As imagens abaixo são capturas históricas da aplicação real v1.0.0, preservadas
+como ilustrações da interface. Não são capturas da v1.1. Todos os dados são sintéticos.
+A conferência funcional v1.1 possui registro próprio em
+[benchmarks/V11_REVIEW.md](../benchmarks/V11_REVIEW.md), sem substituir essas imagens.
 
 Não use geração de imagens e não exponha secrets, assinaturas, DSN ou variáveis
 de ambiente.
 
-![Dashboard operacional do FulfillFlow v1.1 — incremento I](assets/demo/dashboard.png)
+![Dashboard operacional histórico do FulfillFlow v1.0.0](assets/demo/dashboard.png)
 
 Dashboard com os estados operacionais e os eventos recentes.
 

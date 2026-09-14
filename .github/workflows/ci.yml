@@ -53,6 +53,17 @@ jobs:
       - name: Unit, API, and simulator tests
         run: uv run pytest tests/unit tests/api -q
 
+      - name: HTTP recovery scenarios without skips
+        run: |
+          uv run pytest tests/api/test_http_recovery.py -v --junitxml=/tmp/http-recovery.xml
+          uv run python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse("/tmp/http-recovery.xml").findall(".//testcase")
+          assert len(cases) == 2, "Both HTTP interruption scenarios must execute"
+          assert not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
+          print("Both HTTP recovery scenarios passed without skips")
+          PY
+
       - name: Verify both owner migration graphs
         run: |
           uv run alembic -c alembic_core.ini upgrade head
