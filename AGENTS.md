@@ -2,9 +2,10 @@
 
 ## Authority and scope
 
-- Work only on the user-authorized increment of the approved v1.1 Tracking extraction. Preserve the published v1.0.0; DESIGN §30 distinguishes the implemented functional extraction from pending experimental preparation.
+- Work only on the user-authorized v1.2 increment. DESIGN defines the asynchronous Tracking target; RELEASE_PLAN records implementation status. Preserve v1.0.0, v1.1.0-rc.1 and all frozen evidence.
 - Read the relevant sections of `DESIGN.md` before changing architecture, domain behavior, persistence, HTTP contracts, security, observability, seeds, or benchmarks.
 - For a targeted task, locate the applicable headings and avoid loading unrelated DESIGN sections into context.
+- Read inherited contracts from the frozen commit linked in DESIGN, using `git show <commit>:DESIGN.md` when needed. Do not load or copy the entire historical document for each task.
 - `DESIGN.md` is authoritative for product and architecture. This file defines how to work in the repository.
 - Do not infer requirements from hypothetical later architectures. Build the simplest implementation that fully satisfies the current contract.
 - If a request conflicts with `DESIGN.md`, surface the conflict before implementing it. Do not silently diverge.
@@ -18,7 +19,7 @@
 5. Run focused checks first, then the broadest relevant validation available.
 6. Review the final diff for scope, secrets, accidental generated files, and DESIGN drift.
 
-For v1.1 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request.
+For v1.2 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request. Resolve routine implementation choices autonomously; ask only for concrete contract or scope decisions.
 
 Do not attempt the entire release in one undifferentiated change. Do not create empty placeholder files merely to reproduce the planned tree.
 
@@ -32,6 +33,7 @@ Do not attempt the entire release in one undifferentiated change. Do not create 
 - Prometheus client and configurable OpenTelemetry/OTLP; Jaeger is optional local infrastructure.
 - uv with `pyproject.toml` and committed `uv.lock`.
 - Multi-stage Dockerfile, Docker Compose and GitHub Actions.
+- RabbitMQ 4.x and aio-pika for the two Tracking command/result flows in DESIGN. Pin compatible versions and image digest during increment I; preserve unrelated locked dependencies.
 
 Do not replace an approved component or add a production dependency without a concrete requirement. Update `uv.lock` whenever dependencies change; never edit it manually.
 
@@ -39,16 +41,16 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## Architecture boundaries
 
-- The published v1.0 is a modular monolith. The v1.1 functional extraction is Core + Tracking with segregated databases in one PostgreSQL instance; apply only the substitutions in DESIGN §30.
+- Core and Tracking retain separate databases and roles in one PostgreSQL instance. Their API and worker processes share only their owning service's database. Notifications stays in Core.
 - Business modules are `orders`, `shipments`, `carriers`, `tracking` and `notifications`.
 - `shared` contains only stable technical primitives such as clock, IDs and pagination. It contains no business rules and depends on no business module or infrastructure framework.
-- Modules within a service communicate through Python public interfaces. Cross-service communication uses only the authenticated HTTP contracts in DESIGN §30; do not import another service's business implementation or persistence.
+- Modules within a service communicate through Python public interfaces. Cross-service commands/results use the AMQP contracts in DESIGN; forwarding and queries retain the documented authenticated HTTP contracts. Do not import another service's business implementation or persistence.
 - A module may access only its own ORM models and repositories.
 - Within a service, cross-module access goes through `public.py` or an explicitly public schema.
 - Routers and templates contain no business rules. ORM models are never API schemas.
-- `domain.py` must not depend on FastAPI, SQLAlchemy, web, database or observability infrastructure.
+- `domain.py` must not depend on FastAPI, SQLAlchemy, AMQP clients, web, database or observability infrastructure.
 - Respect this dependency direction:
-  - The v1.0 Tracking facade uses public Carriers, Shipments and Notifications contracts; its v1.1 replacement uses the Core contracts in DESIGN §30, not in-process access to those modules.
+  - Tracking uses explicit Core contracts, never in-process access to Core business modules. Keep the existing synchronous flow only until increment II activates its documented replacement.
   - Shipments may use public Orders and Carriers contracts.
   - Orders, Carriers and Notifications do not depend on another business module unless DESIGN is revised first.
 - Keep Import Linter contracts executable. Do not hide forbidden imports behind local imports, `TYPE_CHECKING`, dynamic imports or re-exports.
@@ -60,7 +62,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - PostgreSQL 18 is the only supported database. Never introduce SQLite or an in-memory persistence substitute.
 - Use native UUID, `timestamptz`, named constraints and varchar-backed domain enums with named checks as defined in DESIGN.
 - Alembic is the only schema creation and evolution mechanism. Do not call `Base.metadata.create_all()` in runtime or integration tests.
-- Use one `AsyncSession` per request within its owning service. Hold no SQL connection, transaction or lock during cross-service HTTP. Scripts establish explicit session and transaction boundaries.
+- Use independently scoped sessions per request or worker operation within the owning service. Never share an AsyncSession between concurrent tasks. Hold no SQL connection, transaction or lock during HTTP or AMQP I/O; close/release the SQL scope before publishing or acknowledging. Scripts and workers establish explicit transaction boundaries.
 - Repositories may query, add and `flush`; they never `commit` or `rollback` a coordinated transaction.
 - The coordinating service owns local transaction boundaries. Public module services within that service participate in its current transaction; no session or transaction spans Core and Tracking.
 - Do not add a generic Unit of Work abstraction unless current code demonstrates a concrete need; `AsyncSession` may serve as the transaction context.
@@ -77,24 +79,23 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Keep one secret per carrier, loaded from settings. Never log secrets, signatures or complete webhook bodies.
 - Treat the database unique constraint on `(carrier_id, external_event_id)` as the final idempotency authority.
 - Same event ID and same payload hash may resume or return the original result. Same event ID with a different hash is a conflict and never overwrites the original.
-- Preserve the historical v1.0 transaction boundaries until replaced by the approved v1.1 flow in DESIGN §30.4:
-  - Transaction A commits the authenticated inbox record independently.
-  - Transaction B atomically normalizes the event, records the timeline, applies Shipment state, records Notification when applicable, evaluates Order completion and finalizes the inbox.
-- In v1.1, use local reception, idempotent Core receipt/effects and Tracking finalization as specified in DESIGN §30.4. Preserve original identity, timestamps and outcomes on redelivery; do not claim global atomicity or automatic recovery without redelivery.
+- In v1.2, commit admission, normalized command and command outbox together before returning 202. Persist permanent admission rejection without creating application work.
+- Commit the Core receipt/effects and result outbox together. Finalize Tracking with the received result in a separate local transaction, preserving identities, timestamps and outcomes.
+- AMQP ACK follows durable technical-inbox persistence, not business completion. Durable local processing, bounded retries and explicit blocked states then own recovery. Never claim global atomicity or exactly-once transport.
 - Repositories inside a coordinated local transaction must not commit independently.
-- In v1.0 acquire pessimistic locks only in this order: inbox, Shipment, Order. In v1.1, Core keeps Shipment before Order; inbox locks remain local to Tracking and never span HTTP.
+- Core locks Shipment before Order; inbox locks stay in their owning database and never span network I/O. Preserve lock ordering in all worker paths.
 - Use `READ COMMITTED`, `SELECT ... FOR UPDATE` and database constraints; do not rely on check-then-insert for concurrency safety.
-- Permanent validation or domain failures mark the inbox `REJECTED`. Transient infrastructure or unexpected application failures after Transaction A preserve `RECEIVED` for synchronous retry.
+- Permanent validation or domain failures mark the inbox `REJECTED`. Operational failures keep business state pending and technical work retryable or explicitly blocked; do not convert infrastructure failure into business rejection.
 - TrackingEvent is append-only. Stale or invalid transitions are recorded without regressing Shipment state.
 - Event ordering is the lexicographic tuple `(occurred_at, received_at, external_event_id)`.
 
 ## API, UI and security
 
-- Keep the public API under `/api/v1` and preserve documented routes and payload semantics.
+- Keep the public API under `/api/v1`. The explicit v1.2 exception is durable webhook acceptance with 202 and result polling; implement it together with clients/tests. Preserve other routes and semantics from the frozen reference linked in DESIGN.
 - Use dedicated Pydantic schemas for create, read and list operations.
 - Return documented `application/problem+json` errors through global handlers, including framework validation, 404 and 405 responses.
-- Echo a valid `X-Request-ID` or generate a UUID; propagate it to logs, inbox records and spans.
-- Render HTML server-side. HTMX handlers call the same application services as the API; cross-service forwarding follows DESIGN §30, without business rules in templates or routers.
+- Echo a valid `X-Request-ID` or generate a UUID; preserve the original correlation in durable messages and controlled logs. Do not claim tracing is implemented when it remains pending.
+- Render HTML server-side. HTMX handlers call the same application services as the API; forwarding and pending/result views follow DESIGN, without business rules in templates or routers.
 - Keep Bootstrap and HTMX assets local and compatible with the Content Security Policy.
 - Mutating HTML forms require CSRF protection. JSON APIs and carrier webhooks remain stateless and cookie-free.
 - Keep CORS disabled by default. Do not add application rate limiting to the controlled comparison environment.
@@ -125,6 +126,7 @@ Every behavior change requires the narrowest meaningful test. Select additional 
 Rules:
 
 - Integration and API persistence tests run against real PostgreSQL, never SQLite.
+- Transport, confirms, acknowledgements and restart tests use real RabbitMQ. Mocks complement failure injection; they do not replace broker integration or justify silent CI skips.
 - Control time through `Clock`; tests must not depend on wall-clock time or execution order.
 - Concurrency tests must use independent sessions/connections and verify database outcomes, not only mocked calls.
 - Cover state transitions, both carrier adapters, raw-byte HMAC, idempotency, retry, lock ordering and Order completion as specified in DESIGN.
@@ -163,8 +165,8 @@ For a completed cross-cutting change, run Ruff, formatting, Mypy, Import Linter,
 - Do not change benchmark routes, payload semantics, scenario weights, dataset, warm-up, load shape or resource configuration casually.
 - After the first valid benchmark, material changes require a documented new campaign and rerun of affected baselines.
 - Warm-up uses its own deterministic event-ID namespace, is repeated after every database restore and reaches the same pre-measurement state.
-- Keep logging/tracing identical across the comparison. Freeze workers, pools and component resources within each release; across v1.0/v1.1 preserve the aggregate budgets and declare the process split in DESIGN §30.5. Do not multiply budgets by component.
-- Resolve the frozen loadgen's manifest/topology compatibility in increment II (DESIGN §30.5); do not assume compatibility or silently change its image or the protocol.
+- Extensive campaigns remain paused. Do not port the synchronous loadgen during functional increments or interpret 202 as completed work.
+- Record new worker, broker, resource and observability identities. A future protocol must explicitly address offered/accepted/completed work and total resources, and declare instrumentation differences; never silently change frozen images for parity.
 - Benchmark results must identify commit, environment, dependency lock, hardware and protocol.
 
 ## Scope guard
@@ -174,12 +176,12 @@ Do not add any of the following:
 - user authentication, SSO, OAuth, RBAC or multitenancy;
 - catalog, inventory, warehouse, payment, checkout, billing or ERP integration;
 - real carrier, email, SMS, WhatsApp or push integrations;
-- RabbitMQ, Kafka, Redis, Celery, Taskiq, brokers or independent workers;
+- Kafka, Redis, Celery, Taskiq, additional brokers or workers outside the two service-owned flows authorized in DESIGN;
 - API Gateway, Kubernetes, AKS or mandatory cloud resources;
 - React, Vue, Angular, Node.js build tooling or runtime CDN dependencies;
 - MinIO, Blob Storage or file storage;
 - AI/LLM features;
-- background reprocessing or distributed rate limiting.
+- background reprocessing outside the durable Tracking command/result contract, extraction of Notifications or distributed rate limiting.
 
 If a task appears to require an excluded component, stop and explain the conflict instead of adding it.
 

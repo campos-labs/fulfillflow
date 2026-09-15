@@ -1,177 +1,194 @@
-# FulfillFlow — etapas e aceite da v1.1
+# FulfillFlow — Plano de entrega v1.2
 
-## Estado atual e aceite pendente
+## 1. Objetivo e estado
 
-| Estado | Situação e limite |
+Entregar Tracking com admissão durável e coordenação de comandos/resultados por
+RabbitMQ, mantendo Notifications no Core. Contratos pertencem ao
+[DESIGN.md](DESIGN.md); este documento define sequência, aceite e estado.
+
+Base: `v1.1.0-rc.1`, SHA `217e29a230689da3bd6359790f0753b41a10a927`.
+Branch: `feature/v1.2-tracking-async`. A v1.0 publicada e a pré-release v1.1
+permanecem congeladas. Nenhum merge para main é necessário para iniciar esta linha.
+
+| Marco | Estado |
 | --- | --- |
-| Candidata funcional | Incrementos I e II implementados; aceite funcional autorizado para a pré-release v1.1.0-rc.1, com rastreabilidade na síntese e conferência UI/DEMO concluída. Não equivale à release final. |
-| Comparação suspensa | Matrizes incompletas e classificações preservadas por campanha. Nenhuma retomada, carga ou continuação autorizada. |
-| Release final pendente | Mantém o aceite do incremento III: matriz, relatório reproduzível, checksums, gates e autorização de publicação. |
+| Arquitetura alvo e plano | Preparados; conferência de implementação no início do incremento I |
+| I — Contratos e transporte durável | Não iniciado |
+| II — Fluxo assíncrono completo | Não iniciado |
+| III — Recuperação e operação | Não iniciado |
+| IV — UI, verificação integrada e congelamento funcional | Não iniciado |
+| Comparação extensa | Adiada, sem execução autorizada |
+| Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
 
-A matriz incompleta não autoriza retomar campanhas nem impede, por si, propor
-uma evolução seguinte. Qualquer evolução exige proposta e aprovação próprias;
-este fechamento não implementa nem aprova novos contratos.
+O código inicial ainda executa o fluxo síncrono da v1.1. A comparação anterior
+continua suspensa/incompleta. Resultados e ressalvas estão em
+[V11_REVIEW.md](benchmarks/V11_REVIEW.md) e seu histórico vinculado. Nada neste plano
+autoriza retomar campanhas, reinterpretar o 503 ou reunir repetições de campanhas
+diferentes. Integridade/WAL históricos e cópia independente não confirmados
+permanecem pendências; não usar esses volumes no desenvolvimento.
 
-A rastreabilidade está em [V11_REVIEW](benchmarks/V11_REVIEW.md). Recuperação
-funcional, desempenho e observabilidade são aceites distintos. Logging estruturado,
-métricas e tracing continuam lacunas; cópia independente e integridade/WAL dos
-bancos históricos não estão confirmadas. O 503 histórico segue sem causa determinada.
+## 2. Método de execução
 
-## 1. Referência e objetivo
+Trabalhar por incremento autorizado, com testes e revisão do diff antes de avançar.
+Não produzir outra rodada de planejamento para escolhas internas já cobertas pelo
+DESIGN. Resolver autonomamente caminhos, erros de scripts, nomes privados e testes
+pertinentes. Parar apenas a parte dependente de conflito real de contrato, mudança
+de escopo, perda de evidência ou requisito externo indisponível.
 
-A v1.0.0 é o monólito modular publicado e preservado. A v1.1 extrai deliberadamente a capacidade de Tracking para avaliar autonomia, comunicação, consistência e custo operacional. Ganho de desempenho não é requisito de aprovação nem conclusão antecipada.
+No início, conferir branch/base, alterações existentes e os trechos de código
+afetados. A arquitetura alvo substitui explicitamente a semântica do webhook e a
+coordenação HTTP; outras regras da referência permanecem. Apontar incompatibilidade
+concreta antes de implementar, sem legitimar divergência editando DESIGN depois.
 
-- Commit apontado pela tag anotada v1.0.0 e base documental: `6235f6cb2a733e23ea76cf8264d2145f3759a871`.
-- Commit efetivamente medido na baseline: `ae15e0a2da465f4aec3d9c699655441ad1947265`.
-- Integração da release em main por fast-forward conferida: main e release/v1.0.0, locais e remotas, estão nessa base no início do trabalho.
-- Branch de trabalho criada localmente: `codex/v1.1-tracking`.
-- Conferir o estado real antes de editar; não repetir integração ou recriar referências existentes.
-- Preservar tag, manifests, resultados e publicação histórica da v1.0.
+Não atualizar ferramentas instaladas ou dependências alheias. Fixar somente as
+novas dependências autorizadas pelo resolver e registrar a imagem RabbitMQ por
+versão/digest. Usar recursos de teste isolados, nomes/volumes próprios e ownership
+verificado. Não parar processos históricos, restaurar bases preservadas ou executar
+Locust. Testes funcionais e demonstração curta são distintos de campanha de carga.
 
-## 2. Escopo e fronteira alvo
+## 3. Incremento I — Contratos e transporte durável
 
-Manter Python, FastAPI, PostgreSQL e Docker Compose. Dois serviços de aplicação: Core e Tracking. Sem RabbitMQ, Redis, Kubernetes, AKS, gateway adicional ou novas capacidades de produto nesta release.
+**Resultado:** infraestrutura de mensagens verificável nos dois sentidos, sem
+alterar prematuramente a resposta pública da aplicação.
 
-| Responsabilidade | Proprietário |
-| --- | --- |
-| Orders, Shipments, Notifications e suas máquinas de estados | Core |
-| Cadastro de transportadoras: identidade, código, nome, situação ativa e associação às Shipments | Core |
-| HMAC, schemas externos, adapters Alpha/Beta e normalização para evento canônico | Tracking |
-| Inbox bruto, idempotência de recepção, coordenação do processamento, eventos e timeline | Tracking |
-| Aplicação do evento canônico sobre Shipment, Order e Notification | Core |
+1. Conferir os contratos existentes de comando, recibo e resultado contra DESIGN
+   §§3–6. Definir envelopes, serialização canônica, limites, identidade lógica e
+   rejeição de divergências, com testes desde a primeira mudança.
+2. Acrescentar migrations locais para outbox, inbox técnica e quarentena, constraints
+   e índices de busca de pendências. Testar upgrade limpo e a partir de cópia
+   descartável representativa da v1.1, preservando registros existentes.
+3. Implementar claims/leases, publicação persistente com confirms/mandatory,
+   recepção durável antes de ACK e processamento local retomável. Compartilhar
+   apenas primitivas técnicas necessárias; não criar framework de mensageria.
+4. Fixar aio-pika e RabbitMQ, acrescentar Compose isolado de testes e configurar
+   RabbitMQ real na CI afetada. Não substituir verificações por skips silenciosos.
+5. Testar publicação nos dois sentidos, rejeição de roteamento, duplicatas,
+   confirmação perdida, commit/ACK incerto, lease expirada e constraints concorrentes.
 
-Tracking interpreta o evento externo; Core decide seus efeitos sobre o domínio. Consultas necessárias ao cadastro e aplicação de eventos usam contratos internos estreitos, autenticados e com timeouts finitos. Credenciais HMAC ficam disponíveis ao serviço que verifica a assinatura, sem divulgação em contratos ou logs.
+**Aceite:** testes unitários e PostgreSQL/RabbitMQ reais aprovados; identidade e
+recuperação de transporte demonstradas; fluxo síncrono existente ainda verificável.
+Não declarar a v1.2 operacional por haver somente filas e tabelas.
+Demonstrar retomada local após reinício com uma mensagem já confirmada ao broker
+e ainda não aplicada. Persistir e dar ACK sem recuperar esse trabalho não atende
+ao aceite, mesmo com a fila RabbitMQ vazia.
 
-A entrada pública permanece no Core, encaminhando as operações de Tracking por cliente HTTP assíncrono. Preservar rotas, payload bruto para autenticação, headers relevantes, códigos, schemas e X-Request-ID. Encaminhamento não mantém transação ou conexão SQL aberta. Não confundir I/O assíncrono com processamento em fila: a coordenação permanece síncrona no fluxo da requisição.
+## 4. Incremento II — Fluxo assíncrono completo
 
-Usar uma instância PostgreSQL 18 com dois bancos e credenciais segregadas. Cada serviço acessa somente seu banco. Remover dependências de FKs entre proprietários e substituir as garantias necessárias por contratos e validações explícitas; não duplicar regras de domínio. Manter migrações por proprietário e documentar a preparação dos dados da v1.1, sem alterar as evidências da v1.0. O compartilhamento da instância limita o isolamento de infraestrutura e deve ser registrado.
+**Resultado:** evento novo recebe 202 após admissão durável e chega a resultado
+terminal por comandos e resultados AMQP, sem reentrega obrigatória do webhook.
+Esse caminho cobre trabalho retomável; bloqueio por esgotamento ou conflito exige
+o rearme explícito previsto, cuja operação completa é verificada no incremento III.
 
-## 3. Consistência e recuperação
+1. Integrar recepção/normalização/outbox atômicas de Tracking e idempotência
+   pendente/terminal. Implementar schema 202, Location e consulta de conclusão.
+2. Reutilizar a aplicação local idempotente do Core, adicionando a outbox de
+   resultado na mesma transação. Integrar o consumidor de resultados e a
+   finalização local do Tracking com as validações de identidade/hash.
+3. Criar entrypoints dos dois workers e ativar o Compose v1.2 com projeto, volumes,
+   credenciais, limites e pools do DESIGN. Remover do runtime v1.2 o endpoint e o
+   cliente de apply HTTP que o AMQP substitui; preservar as consultas HTTP previstas.
+4. Adaptar o caminho mínimo de UI/simulador para compreender 202, sem apresentar
+   pendência como sucesso concluído. Sincronizar README e versão de desenvolvimento
+   do pacote quando o runtime alvo se tornar executável; não publicar imagens/tags.
+5. Testar ponta a ponta ambos adapters, conflito de bytes, duplicatas antes/depois
+   do resultado, rejeições, timeline, Shipment, Notification e conclusão do Order.
 
-Substituir a transação global do monólito por três passos duráveis:
+**Aceite:** fluxo completo em PostgreSQL/RabbitMQ reais; exatamente os efeitos
+permitidos pelo domínio; nenhuma transação SQL durante HTTP/AMQP; Import Linter
+coerente com a nova fronteira. Os testes de recuperação HTTP da v1.1 ficam na
+referência congelada; ao substituir caminhos no checkout v1.2, manter testes
+equivalentes das garantias e preservar cobertura dos caminhos HTTP remanescentes.
 
-1. Tracking autentica, persiste inbox bruto e fixa identidade estável do evento/comando recuperável, respeitando os casos sem persistência do contrato vigente (DESIGN §14.3).
-2. Core aplica em transação local: recibo idempotente, Shipment, Notification e Order; preserva regras de ordenação e locks aplicáveis, incluindo Shipment antes de Order.
-3. Tracking grava o resultado/timeline e finaliza o inbox em transação local. Uma confirmação HTTP 200 exige a conclusão dos efeitos previstos para esse resultado.
+## 5. Incremento III — Recuperação e operação
 
-O recibo Core possui chave única por identidade do evento, vinculada à transportadora, hash de conteúdo imutável e resultado original persistido. Preservar a unicidade de recepção por `(carrier_id, external_event_id)`. A retomada mantém identidade e `received_at` original; perda de resposta não reaplica estado, duplica notificações nem recalcula o resultado usando um estado posterior. Mesmo ID com conteúdo diferente é conflito. Rejeições permanentes têm resultado reproduzível. Distingui-las de `NO_STATE_CHANGE` e `IGNORED_*`, que continuam resultados HTTP 200 com timeline; rejeições permanentes não criam TrackingEvent (DESIGN §13.1 e §14.3).
+**Resultado:** falhas nas novas fronteiras têm estado durável, diagnóstico e
+procedimento finito de recuperação demonstrável.
 
-Distinguir retomada de RECEIVED de DUPLICATE já finalizado. Após a recepção, falhas transitórias preservam RECEIVED e retornam 503; erros inesperados retornam 500, como no contrato vigente. Reentrega idêntica retoma o fluxo e rejeição já registrada é reproduzida. Não há worker de retry nem promessa de recuperação automática sem reentrega.
+1. Completar políticas de retry por item e pausa de dependência, bloqueio,
+   quarentena, rearme explícito auditável e diagnóstico por ID. Não acrescentar
+   retries ilimitados ou reposição automática de testes encerrados.
+2. Implementar lifecycle dos workers, encerramento limitado, healthcheck e
+   sinalização de falha de loop obrigatório. Diferenciar saúde de admissão e
+   conclusão, sem adicionar portas HTTP aos workers.
+3. Acrescentar logs controlados do fluxo novo e comandos de inspeção local conforme
+   DESIGN §8. Preservar access logs atuais e registrar a diferença de observabilidade.
+4. Exercitar crash/restart antes/depois dos commits e ACK, indisponibilidade e
+   retorno de broker/bancos, conflito de conteúdo e resultado duplicado. Verificar
+   recuperação de trabalho aceito e ausência de efeitos duplicados.
+5. Testar concorrência real com múltiplos consumidores/sessões, resultado fora de
+   ordem, lease vencida com proprietário antigo e esgotamento/rearme de tentativas.
 
-Entre commits pode haver Core atualizado e timeline pendente. A v1.1 não oferece atomicidade global. Documentar e testar esse intervalo, inclusive a chegada de evento posterior antes da finalização do anterior, concorrência, respostas perdidas e eventos fora de ordem. O mecanismo concreto deve ser o mínimo necessário para preservar as regras e impedir efeitos duplicados; não acrescentar broker, saga genérica ou compensação destrutiva.
+**Aceite:** falhas injetadas produzem resultado esperado, pendência recuperável ou
+bloqueio explícito; evidências identificam fronteira e causa controlada. Não afirmar
+estabilidade prolongada ou solução do 503 histórico a partir desses testes.
 
-## 4. Contrato da comparação
+## 6. Incremento IV — Verificação integrada e referência funcional
 
-Referências: DESIGN.md, benchmarks/README.md e benchmarks/baselines/v1.0/RELATORIO.md, além dos manifests oficiais publicados. A baseline não identifica Tracking como causa exclusiva de contenção.
+**Resultado:** fluxo utilizável e referência rastreável, com limitações explícitas.
 
-Preservar workload, contratos externos, dataset lógico, coortes, pesos, q=430, spawn rate 16 users/s, matriz 4/12 users × mixed/timeline/ingestion × cinco repetições válidas por ponto. O protocolo original conserva warm-up de 60 s. O contrato simétrico de §30.5 mantém estabilização de 300 s após preparação, warm-up de 120 s com ritmo proporcional, measurement de 300 s, coleta de 1 s e as regras congeladas de admissão, drain, timeouts e energia. Logging, tracing/sampling, timeouts de pool/SQL e healthcheck do loadgen permanecem conforme os manifests e Compose publicados.
+1. Finalizar UI/HTMX e simulador: pendência, polling limitado pela jornada, rejeição,
+   timeout de observação e resultado. Verificar CSRF, CSP e assets locais.
+2. Atualizar DEMO e conferir visualmente uma jornada curta em ambiente isolado:
+   criar dados, enviar evento, observar pendência/conclusão, timeline, Notification,
+   conclusão de Order e duplicata. Capturas novas somente se necessárias para
+   documentar comportamento alterado; não substituir capturas históricas.
+3. Executar validação integrada final, migrations e build/smoke pertinentes.
+   Conferir fechamento de processos, isolamento de recursos e ausência de dados
+   reais/segredos em código, logs e artefatos.
+4. Atualizar estado neste plano e comportamento no README/DEMO. DESIGN registra
+   contrato vigente; documentação de benchmark continua indicando protocolos e
+   campanhas encerrados. Não replicar diário de execução em todos os documentos.
+5. Consolidar SHA, lock, imagens/digests, migrations, comandos, testes/CI do SHA
+   exato e limitações na descrição da entrega. Não criar outro documento de
+   passagem de contexto com conteúdo redundante.
 
-| Componente | CPU | Memória | Pool |
-| --- | --- | --- | --- |
-| Core | 1 | 768 MiB | 5, overflow 0 |
-| Tracking | 1 | 768 MiB | 5, overflow 0 |
-| PostgreSQL compartilhado | 2 | 2560 MiB | Conforme serviços acima |
-| Loadgen | 2 | 1536 MiB | Não aplicável |
+**Aceite:** API, persistência, recuperação, operação e UI coerentes; verificações
+obrigatórias aprovadas e identidade congelável. Lacunas de observabilidade mais
+amplas e comparação adiada continuam explícitas. Implementado, verificado,
+pré-release e release final são estados distintos.
 
-Um worker por serviço. Totais de aplicação: 2 CPUs, 1536 MiB e 10 conexões de pool. Não multiplicar orçamento ao extrair. Dois processos versus um, partição fixa de CPU/pool e encaminhamento pelo Core são diferenças explícitas do experimento. Não mudar essa divisão após observar resultados oficiais; qualquer necessidade material de revisão deve ser decidida antes do congelamento.
+## 7. Validações e versionamento
 
-Preservar o ambiente aprovado nos manifests, inclusive versões e tolerância de memória Docker de 1 MiB. Não atualizar ferramentas ou recalibrar silenciosamente. HEAD, imagens de aplicação, migrações e schemas v1.1 terão identidades próprias; não fingir que hashes físicos de schemas separados são iguais ao schema v1.0.
+Executar testes focais primeiro. Ao concluir alterações transversais e no aceite
+final: Ruff, formatação, Mypy, Import Linter e suítes pytest pertinentes; ao final,
+suíte integrada completa e cobertura. Migrations exigem Alembic upgrade,
+verificação dos heads e drift. Runtime exige build e smoke das imagens afetadas.
+Os comandos existentes do AGENTS continuam sendo o ponto de partida; acrescentar
+somente comandos que já tenham sido implementados.
 
-Preservar locustfile, artefato/seed determinística e conteúdo lógico do dataset congelados; não exigir que o loader físico monolítico permaneça idêntico. Adaptar somente a preparação, distribuição dos mesmos dados lógicos e verificações exigidas pelos dois bancos. O gerador atual (`benchmarks/dataset.py`) importa normalização de Carriers e contratos de Shipments/Notifications: a extração exige conferir esses acoplamentos, sem duplicar regras nem mudar os dados. Se for necessária mudança em artefato congelado, apresentar conflito concreto antes de prosseguir.
+CI deve executar testes críticos PostgreSQL/RabbitMQ sem skips e associar o resultado
+ao SHA revisado. Testes Windows/PowerShell são obrigatórios quando houver mudança
+nesses fluxos, pelo executável real disponível; CI Linux não os substitui. Não
+repetir suítes aprovadas sem mudança ou preocupação concreta que justifique.
 
-Compatibilidade do loadgen resolvida e validada no incremento II: o parent congelado aceita somente v1.0/app; a imagem derivada autorizada substitui apenas `benchmarks/campaign.py` e aceita manifest v2 com release/topologia Core e Tracking explícitas. A auditoria comprovou preservação de locustfile, dataset e dependências. Parent e candidata têm identidades distintas registradas no pacote; a diferença de imagem/validação é declarada na comparação. Não alterar novamente imagem ou protocolo sem proposta específica.
+Fazer commits por assunto/incremento na branch v1.2 quando autorizado pela tarefa,
+sem reescrever histórico ou incluir arquivos alheios. Push, merge para main e
+publicação de tag/release seguem a autorização específica; não são consequência
+automática do aceite funcional. Tags existentes nunca são movidas. Uma nova
+pré-release deve apontar ao SHA exato verificado e expor suas limitações.
 
-Coletar Core e Tracking separadamente e agregados, incluindo o custo de comunicação e recibos. Reconciliar HTTP, Locust e efeitos nos dois bancos; preservar exportação final após drain e completude da telemetria. Dados auxiliares novos, como recibos, devem ser identificados sem alterar silenciosamente o estado lógico inicial.
+## 8. Pausa obrigatória após o aceite funcional
 
-## 5. Incrementos
+Ao concluir IV, entregar síntese de comportamento, verificações, limitações e
+identidades. **Não iniciar a matriz extensa nem a v1.3.** Solicitar decisão única:
+encerrar este ciclo, preparar comparação delimitada ou propor evolução posterior.
+Se a tarefa autorizar somente I/II, a parada ocorre ao concluir esses incrementos;
+esta seção não amplia a autorização de implementação.
 
-### I — Extração funcional integrada
+Uma comparação futura terá pacote e protocolo próprios, podendo avaliar referências
+congeladas de várias versões com ferramenta identificada e adaptadores explícitos.
+Não exigirá alterar tags antigas. Deverá decidir previamente orçamento total,
+carga oferecida, admissão/conclusão, drain, falhas, observabilidade e controles do
+host. Pilotos e tentativas anteriores permanecem classificados e separados.
 
-**Estado: concluído e enviado na branch autorizada, com CI aprovada.** Core e Tracking executam com bancos/roles e
-migrações segregados; API/UI encaminham os contratos públicos e a preparação
-funcional pela API está disponível em `scripts/prepare_demo_v11.py`.
+## 9. Evolução posterior, não autorizada neste ciclo
 
-- Reconciliar este plano com código e instruções locais; aplicar a arquitetura alvo planejada já registrada no DESIGN §30, preservando sua distinção do contrato histórico v1.0. O plano organiza a execução, não substitui o DESIGN.
-- Implementar os contratos internos e o recibo Core, separação de persistência, migrações e configuração Compose.
-- Extrair adapters, HMAC, normalização, inbox e timeline; integrar encaminhamento e adaptar API/UI.
-- Entregar um fluxo completo executável, incluindo preparação local dos dados necessária à validação funcional.
-- Testar desde o primeiro incremento HMAC/adapters, contratos, persistência em PostgreSQL, caminho feliz, duplicatas concorrentes e retomada após perda de resposta do Core. Manter gates aprovados; adaptar os contratos arquiteturais somente à fronteira aprovada.
+Notifications poderá ser avaliado como serviço assíncrono independente após uma
+referência funcional da v1.2. Isso exige contrato, propriedade dos dados, publicação,
+idempotência, consultas/UI e recuperação próprios; não basta criar outro consumidor.
+A branch futura parte da referência escolhida da v1.2, sem exigir publicação final
+ou matriz extensa concluída, desde que o aceite funcional necessário esteja aprovado.
 
-Aceite: aplicação utilizável pelos contratos públicos, bancos segregados, eventos processados sem duplicação no fluxo validado e documentação de execução coerente. Não deixar mecanismos essenciais de consistência como placeholders. Casos adversos restantes ficam explicitamente listados para II.
-
-### II — Consistência e prontidão experimental
-
-**Estado: implementação concluída; prontidão operacional sob revisão.** Os testes válidos de I foram
-reutilizados. II acrescenta interrupções antes/depois de cada commit, perda de resposta
-de rejeição, indisponibilidade dos peers e concorrência combinada com falhas. O harness
-prepara e verifica os dois bancos, registra suas identidades e conta recibos, coleta
-recursos separados/agregados e concilia efeitos. O diff do loadgen foi apresentado e
-autorizado: imagem derivada com somente `campaign.py` alterado, sem mudar workload,
-dataset ou dependências. O pacote é `benchmarks/V11_REVIEW.md`. Piloto e controles
-posteriores não substituem a matriz oficial; sua situação está registrada na síntese V11_REVIEW.
-
-- Completar testes reais de concorrência, rejeições, falhas em cada fronteira de commit, respostas perdidas, reentrega e ordenação.
-- Validar ausência de acessos cruzados aos bancos e de recursos SQL retidos durante HTTP.
-- Adaptar harness de preparação, identidades, telemetria e reconciliação ao desenho v1.1; preservar o protocolo aceito.
-- Validar restauração determinística dos dois bancos e gates funcionais, de integração e CI pertinentes. A preparação só declara prontidão quando ambos conferem com o estado inicial esperado; falha parcial bloqueia o ensaio, sem prometer commit SQL global entre bancos.
-- Preparar manifests candidatos, comandos e estimativa de duração para a campanha, sem iniciá-la.
-
-Aceite: regras de recuperação comprovadas, nenhum efeito duplicado, efeitos previstos conciliados após HTTP 200, limites compartilhados conferidos e pacote pronto para revisão. Não criar uma nova campanha ampla de calibração; ensaios exploratórios adicionais exigem uma lacuna concreta e escopo delimitado.
-
-### III — Comparação e release
-
-- Após autorização específica e preparação do host, realizar validação prévia sob carga estritamente necessária e congelar a identidade candidata.
-- Obter as 30 repetições válidas por versão previstas no contrato simétrico (60 no conjunto), com destino novo, preservação dos artefatos e interrupção em falhas. Não contar diagnósticos ou tentativas inválidas como oficiais nem repetir execuções válidas sem justificativa.
-- Consolidar v1.1 e comparação com v1.0, relatando dispersão, limitações, diferenças de arquitetura e ausência de garantia causal fora do desenho observado.
-- Arquivar evidências, verificar cópia independente e publicar seletivamente documentação, manifests e índice; manter arquivos brutos fora do Git.
-- Preparar integração final, tag v1.1.0 e notas para autorização. Não mover v1.0.0.
-
-Aceite: matriz concluída sem duplicação, contagens e checksums íntegros, relatório reproduzível, gates aprovados e release rastreável. Ganho de throughput não é critério de aceite.
-
-## 6. Documentação e continuidade
-
-- RELEASE_PLAN.md registra escopo, incrementos e situação de conclusão; não vira diário de comandos.
-- DESIGN.md distingue o incremento funcional implementado da preparação experimental planejada. Não reescrever decisões históricas como se a v1.0 já fosse distribuída.
-- README.md descreve o que funciona e seus comandos; não apresenta incrementos pendentes como entregues.
-- Ler AGENTS.md existente e instruções aplicáveis. Corrigir somente orientações obsoletas que conflitem com a separação aprovada; não duplicar o plano, criar regras genéricas ou enfraquecer gates.
-- Sem HANDOFF.md permanente. Ao fim de cada incremento, fornecer resumo operacional curto: branch/commit, mudanças, validações, pendências, estado local e próxima ação.
-- Preservar .vscode/settings.json e artefatos locais preexistentes fora do trabalho autorizado.
-
-Este plano não autoriza por si só push, merge, publicação, cargas oficiais ou operações destrutivas. O prompt de cada incremento define as ações autorizadas. Leituras, implementação e verificações pertinentes ao incremento autorizado não exigem aprovações repetidas.
-
-## 7. Limite da release
-
-O aceite de release prevê Core + Tracking, contratos estáveis, consistência explicitada e comparação concluída. Esse aceite ainda não foi atingido. O congelamento como candidata funcional não equivale à publicação da release.
-
-Evolução futura: uma eventual v1.2 exige proposta e aprovação próprias; não está autorizada por este plano.
-
-## Histórico e notas da pré-release
-
-O [histórico encerrado](benchmarks/V11_HISTORY.md) preserva os registros anteriores;
-a [síntese da candidata](benchmarks/V11_REVIEW.md) vincula contratos, testes,
-identidades e campanhas. Não reutilizar instruções históricas.
-
-### Pré-release funcional — v1.1.0-rc.1
-
-**Aceite funcional aprovado; publicação como pré-release condicionada à CI do commit final.** Extração funcional síncrona
-Core + Tracking, com bancos/credenciais/migrações segregados, HMAC sobre os bytes
-originais, recibos idempotentes e recuperação por reentrega. API e UI preservam os
-contratos aprovados. Não há atomicidade global nem recuperação automática.
-
-Aprovados: contratos do DESIGN §30, implementação dos incrementos I/II,
-conferência UI/DEMO e incorporação dos dois cenários HTTP após commit. A CI exige
-explicitamente ambos sem skips. A aplicação e as imagens medidas permanecem
-preservadas; as mudanças de fechamento são testes, verificação CI e documentação.
-As lacunas de observabilidade, comparação suspensa, 503 desconhecido,
-integridade/WAL e cópia independente não confirmados acompanham a rc.
-Nenhuma alegação de estabilidade geral, equivalência ou ganho de desempenho.
-
-Base do fechamento: `8786247ff52db3575eaff9246464df3d7d277310`. O commit final é
-identificado pela tag anotada `v1.1.0-rc.1` e por sua CI vinculada nas notas GitHub.
-A CI da base não substitui a validação do commit final.
-
-Após CI aprovada, a autorização permite criar `release/v1.1.0` e a tag anotada
-`v1.1.0-rc.1` no mesmo commit, sem mudar a branch de trabalho, main ou referências
-históricas. A publicação é somente pré-release, sem latest e sem release estável.
-Referências existentes não podem ser sobrescritas. A matriz incompleta e as ressalvas
-permanecem abertas; nenhuma nova campanha ou contrato posterior é autorizado.
+Esta intenção não autoriza componentes genéricos, eventos sem consumidor atual,
+infraestrutura cloud ou extração antecipada. A decisão e o plano dessa evolução
+pertencerão à branch futura; o DESIGN v1.2 continua restrito a Tracking.

@@ -16,7 +16,7 @@ The v1.1 schema-v2 loader adds explicit Core/Tracking ownership. The separate
 `symmetric-warmup120-comparison-v1` contract uses 120-second proportional admission,
 300-second stabilization and 300-second measurement; it does not weaken the
 historical validator. Application, runner, loadgen and coordinator identities are
-recorded separately. Approved contracts are in [DESIGN §30](../DESIGN.md#30-arquitetura-v11--extração-e-preparação-comparação-pendente).
+recorded separately. Approved contracts are in the [frozen v1.1 DESIGN §30](https://github.com/campos-labs/fulfillflow/blob/217e29a230689da3bd6359790f0753b41a10a927/DESIGN.md#30-arquitetura-v11--extração-e-preparação-comparação-pendente).
 
 Execution requires a new, reviewed package and destinations, matching images,
 source, host and resources, clean preparation and complete reconciliation.

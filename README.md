@@ -3,6 +3,11 @@
 FulfillFlow gerencia pedidos, remessas e eventos de transportadoras simuladas com
 FastAPI, PostgreSQL 18, API JSON e interface operacional renderizada no servidor.
 
+Esta branch prepara a v1.2 assíncrona. O [DESIGN](DESIGN.md) descreve o alvo e o
+[plano de entrega](RELEASE_PLAN.md) registra os incrementos ainda não implementados.
+Os comandos e o comportamento abaixo continuam correspondendo à base síncrona
+`v1.1.0-rc.1` até a ativação do novo fluxo.
+
 A v1.1 implementa Core + Tracking, com bancos, credenciais e migrações separados.
 Core mantém Orders, Shipments, Notifications e o cadastro de Carriers; Tracking
 mantém autenticação HMAC, adapters Alpha/Beta, inbox e timeline. A entrada pública
@@ -258,8 +263,8 @@ entre proprietários e rejeição de conexão com a credencial do outro serviço
 ## Documentação
 
 - [Demonstração funcional](docs/DEMO.md): preparação e jornada pela API/UI.
-- [DESIGN](DESIGN.md): contratos e invariantes aprovados.
-- [RELEASE_PLAN](RELEASE_PLAN.md): etapas, aceite e pendências da v1.1.
+- [DESIGN](DESIGN.md): arquitetura alvo v1.2 e contratos preservados da base.
+- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos, aceite e estado da v1.2.
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
 - [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
 - [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.
