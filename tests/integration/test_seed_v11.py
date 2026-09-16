@@ -1,6 +1,11 @@
 """Both owner databases must contain the exact frozen projection before readiness."""
 
+from pathlib import Path
+from shutil import copyfile
+
 import pytest
+from alembic import command
+from alembic.config import Config
 from benchmarks import seed_v11
 from benchmarks.seed_loader import SeedSafetyError
 from sqlalchemy import text
@@ -11,7 +16,48 @@ from fulfillflow.db import Database
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture
+def frozen_v11_schemas(
+    tmp_path: Path,
+    postgres_database: Database,
+    postgres_tracking_database: Database,
+    postgres_settings: Settings,
+    postgres_tracking_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The frozen benchmark loader is verified against its actual v1.1 schemas."""
+    owners = (("core", postgres_settings), ("tracking", postgres_tracking_settings))
+    configurations = {}
+    for owner, _ in owners:
+        scripts = tmp_path / owner
+        (scripts / "versions").mkdir(parents=True)
+        copyfile(f"alembic_{owner}/versions/1101_{owner}.py", scripts / "versions" / "1101.py")
+        config = tmp_path / f"alembic_{owner}.ini"
+        config.write_text(f"[alembic]\nscript_location = {scripts.as_posix()}\n", encoding="utf-8")
+        configurations[config.name] = config
+    validate = seed_v11._validate_postgresql_target
+
+    async def validate_frozen(connection, *, confirmed_database_name, alembic_config_path):
+        await validate(
+            connection,
+            confirmed_database_name=confirmed_database_name,
+            alembic_config_path=configurations[alembic_config_path.name],
+        )
+
+    monkeypatch.setattr(seed_v11, "_validate_postgresql_target", validate_frozen)
+    try:
+        for owner, settings in owners:
+            monkeypatch.setenv("DATABASE_URL", settings.database_dsn)
+            command.downgrade(Config(f"alembic_{owner}.ini"), f"1101_{owner}")
+        yield
+    finally:
+        for owner, settings in owners:
+            monkeypatch.setenv("DATABASE_URL", settings.database_dsn)
+            command.upgrade(Config(f"alembic_{owner}.ini"), "head")
+
+
 async def test_pair_seed_repeat_and_partial_failure_recovery(
+    frozen_v11_schemas,
     postgres_database: Database,
     postgres_tracking_database: Database,
     postgres_settings: Settings,
