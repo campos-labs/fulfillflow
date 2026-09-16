@@ -14,14 +14,15 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 | --- | --- |
 | Arquitetura alvo e plano | Conferidos contra o código em 9d1d468; comando/recibo preservados |
 | I — Contratos e transporte durável | Concluído: PostgreSQL/RabbitMQ reais, revisão e CI aprovada no SHA `5a50f97` |
-| II — Fluxo assíncrono completo | Em implementação e validação: admissão, aplicação e conclusão duráveis |
+| II — Fluxo assíncrono completo | Concluído: outboxes atômicas, 202/consulta, workers, clientes e recuperação local testados |
 | III — Recuperação e operação | Não iniciado |
 | IV — UI, verificação integrada e congelamento funcional | Não iniciado |
 | Comparação extensa | Adiada, sem execução autorizada |
 | Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
 
 O checkout ativa o fluxo assíncrono da v1.2; a referência síncrona v1.1 permanece
-congelada. A comparação anterior continua suspensa/incompleta. Resultados e ressalvas estão em
+congelada. A comparação anterior continua suspensa/incompleta. Resultados e
+ressalvas estão em
 [V11_REVIEW.md](benchmarks/V11_REVIEW.md) e seu histórico vinculado. Nada neste plano
 autoriza retomar campanhas, reinterpretar o 503 ou reunir repetições de campanhas
 diferentes. Integridade/WAL históricos e cópia independente não confirmados
@@ -98,6 +99,34 @@ permitidos pelo domínio; nenhuma transação SQL durante HTTP/AMQP; Import Lint
 coerente com a nova fronteira. Os testes de recuperação HTTP da v1.1 ficam na
 referência congelada; ao substituir caminhos no checkout v1.2, manter testes
 equivalentes das garantias e preservar cobertura dos caminhos HTTP remanescentes.
+
+### Evidências do aceite I/II — 2026-09-16
+
+- Implementação do II em `840cd91852a1c23db8c97af67da5b81a14d5f3cf`, seguida de
+  adaptação dos testes de consulta de Notifications e ações de Order ao 202.
+  DESIGN não foi alterado; Notifications permanece no Core.
+- Validação local: suíte unitária, nove casos novos de polling, controles com
+  PowerShell 7.6.5 e 186 casos de API/integração/UI/E2E/arquitetura. As quatro
+  asserções síncronas identificadas na passagem ampla foram corrigidas e
+  reexecutadas isoladamente. Cobertura integrada local: **86,80%**, gate de 80%.
+- Ruff, formatação, Mypy e os dez contratos de Import Linter aprovados. Alembic
+  confirmou `1201_core`/`1202_tracking`, sem drift; upgrade de registros v1.1
+  preservou conteúdo e deixou campos novos nulos, sem criar trabalho legado.
+- Testes reais demonstraram rollback do fato e da outbox juntos, interrupção
+  antes/depois dos commits, idempotência, locks, resultado divergente bloqueado
+  e retomada por processos novos após ACK com fila vazia, nos dois serviços.
+- Build e smoke no projeto isolado `fulfillflow-f05e-v12-runtime`: Alpha/Beta,
+  202 durante interrupção do broker, conclusão após seu retorno sem reenvio e
+  Order `FULFILLED`. Processos encerrados; imagens, volumes e dados preservados.
+- A CI executa suíte completa/cobertura sem duplicar suítes e exige ausência de
+  skips nos testes críticos de transporte e recuperação. Conferir o resultado
+  pelo **SHA exato da entrega**, não apenas pelo nome da branch.
+
+Parada desta execução: **antes do III**. Rearme auditável de `BLOCKED`, lifecycle
+completo, healthcheck e diagnóstico operacional dos workers continuam pendentes
+no III; refinamento da UI e congelamento funcional permanecem no IV. Não houve
+campanha, merge, tag/release, alteração de evidência congelada nem atualização de
+dependências existentes. A dependência nova é aio-pika com suas transitivas.
 
 ## 5. Incremento III — Recuperação e operação
 

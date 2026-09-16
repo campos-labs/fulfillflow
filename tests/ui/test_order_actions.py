@@ -7,7 +7,9 @@ import pytest
 from httpx import AsyncClient
 
 from fulfillflow.config import Settings
+from fulfillflow.db import Database
 from fulfillflow.orders.public import OrderStatus
+from tests.async_flow import drain
 from tests.support import FixedClock
 from tests.ui.support import (
     confirm_order,
@@ -42,6 +44,8 @@ async def _order_in_state(
     settings: Settings,
     clock: FixedClock,
     status: OrderStatus,
+    core: Database,
+    tracking: Database,
 ) -> str:
     order = await create_order(client, reference=f"UI-ACTIONS-{status.value}")
     order_id = str(order["id"])
@@ -60,8 +64,10 @@ async def _order_in_state(
                 external_status="DELIVERED",
                 occurred_at=clock.now(),
             )
-            assert delivered.status_code == 200, delivered.text
-            assert delivered.json()["result"] == "APPLIED"
+            assert delivered.status_code == 202, delivered.text
+            await drain(core, tracking, clock)
+            completed = (await client.get(delivered.headers["location"])).json()
+            assert completed["result"]["result"] == "APPLIED"
     persisted = await client.get(f"/api/v1/orders/{order_id}")
     assert persisted.status_code == 200
     assert persisted.json()["status"] == status.value
@@ -82,12 +88,21 @@ async def test_order_detail_only_offers_available_actions(
     ui_client: AsyncClient,
     postgres_settings: Settings,
     fixed_clock: FixedClock,
+    postgres_database: Database,
+    postgres_tracking_database: Database,
     status: OrderStatus,
     mutations: set[str],
     create_shipment_allowed: bool,
     htmx: bool,
 ) -> None:
-    order_id = await _order_in_state(ui_client, postgres_settings, fixed_clock, status)
+    order_id = await _order_in_state(
+        ui_client,
+        postgres_settings,
+        fixed_clock,
+        status,
+        postgres_database,
+        postgres_tracking_database,
+    )
     response = await ui_client.get(
         f"/orders/{order_id}",
         headers={"HX-Request": "true"} if htmx else {},
@@ -112,9 +127,16 @@ async def test_fulfilled_order_still_rejects_direct_invalid_actions(
     ui_client: AsyncClient,
     postgres_settings: Settings,
     fixed_clock: FixedClock,
+    postgres_database: Database,
+    postgres_tracking_database: Database,
 ) -> None:
     order_id = await _order_in_state(
-        ui_client, postgres_settings, fixed_clock, OrderStatus.FULFILLED
+        ui_client,
+        postgres_settings,
+        fixed_clock,
+        OrderStatus.FULFILLED,
+        postgres_database,
+        postgres_tracking_database,
     )
     token = csrf_token(await ui_client.get("/orders/new"))
     request_id = "00000000-0000-4000-8000-000000000778"

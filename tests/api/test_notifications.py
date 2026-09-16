@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
+from tests.async_flow import drain
 from tests.service_pair import create_app
 from tests.support import FixedClock
 
@@ -112,6 +113,7 @@ def _item_ids(response: Response) -> list[str]:
 async def test_notification_queries_cover_generation_filters_pagination_and_sanitization(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
 ) -> None:
     initial_time = fixed_clock.current
@@ -176,6 +178,9 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
                 event_id="notification-event-001",
                 raw_body=first_body,
             )
+            assert first_applied.status_code == 202, first_applied.text
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            first_applied = await client.get(first_applied.headers["location"])
             fixed_clock.current = initial_time + timedelta(hours=1)
             no_state_change = await _post_alpha_event(
                 client,
@@ -184,6 +189,9 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
                 event_id="notification-event-002",
                 raw_body=no_change_body,
             )
+            assert no_state_change.status_code == 202, no_state_change.text
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            no_state_change = await client.get(no_state_change.headers["location"])
             duplicate = await _post_alpha_event(
                 client,
                 postgres_settings,
@@ -199,6 +207,9 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
                 event_id="notification-event-003",
                 raw_body=second_body,
             )
+            assert second_applied.status_code == 202, second_applied.text
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            second_applied = await client.get(second_applied.headers["location"])
             fixed_clock.current = third_notification_time
             third_applied = await _post_alpha_event(
                 client,
@@ -207,6 +218,9 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
                 event_id="notification-event-004",
                 raw_body=third_body,
             )
+            assert third_applied.status_code == 202, third_applied.text
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            third_applied = await client.get(third_applied.headers["location"])
 
             all_notifications = await client.get("/api/v1/notifications")
             repeated_list = await client.get("/api/v1/notifications")
@@ -254,16 +268,16 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
             detail = await client.get(f"/api/v1/notifications/{first_notification['id']}")
 
     assert first_applied.status_code == 200
-    assert first_applied.json()["result"] == "APPLIED"
+    assert first_applied.json()["result"]["result"] == "APPLIED"
     assert no_state_change.status_code == 200
-    assert no_state_change.json()["result"] == "NO_STATE_CHANGE"
+    assert no_state_change.json()["result"]["result"] == "NO_STATE_CHANGE"
     assert duplicate.status_code == 200
     assert duplicate.json()["result"] == "DUPLICATE"
     assert duplicate.json()["tracking_event_id"] == first_applied.json()["tracking_event_id"]
     assert second_applied.status_code == 200
-    assert second_applied.json()["result"] == "APPLIED"
+    assert second_applied.json()["result"]["result"] == "APPLIED"
     assert third_applied.status_code == 200
-    assert third_applied.json()["result"] == "APPLIED"
+    assert third_applied.json()["result"]["result"] == "APPLIED"
 
     assert all_notifications.status_code == 200
     assert all_notifications.json()["total"] == 3
