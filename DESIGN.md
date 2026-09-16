@@ -319,8 +319,10 @@ Não prometer causa raiz quando os registros não a sustentarem.
 
 A UI mantém templates no servidor e os controles CSRF/CSP existentes. Mostrar
 aceito/pendente, finalizado e rejeitado sem apresentar 202 como aplicação concluída.
-Polling a cada segundo termina ao obter estado terminal ou sair da página; erros
-de consulta não alteram estado persistido. Atualizar timeline e resultado quando
+Polling a cada segundo termina ao obter estado terminal, sair da página ou
+esgotar os 30 segundos da observação local. Uma nova observação explícita apenas
+consulta o mesmo evento; não reenvia admissão. Erros de consulta preservam a tela
+e não alteram estado persistido. Prazo esgotado não significa rejeição ou perda. Atualizar timeline e resultado quando
 disponíveis, sem regras de negócio em templates.
 
 O simulador reconhece 202, consulta `Location` com prazo configurável e apresenta

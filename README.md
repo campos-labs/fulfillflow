@@ -152,6 +152,14 @@ caracteres.
 A resposta 202 contém `inbox_event_id`, `external_event_id`, `status=RECEIVED`,
 `received_at` e `request_id`. `Location` indica
 `/api/v1/carrier-events/{inbox_event_id}` e `Retry-After: 1` orienta polling.
+A tela do inbox consulta a cada segundo por até 30 segundos por observação.
+Falhas de consulta preservam a aceitação e exibem aviso; **Check again** inicia
+outra observação sem reenviar o evento. Conclusão/rejeição encerram as consultas,
+e o resultado aplicado oferece link para a timeline. Prazo esgotado não é rejeição.
+O simulador emite fases `accepted`, `completed`, `rejected`, `observation_failed`
+e `observation_expired`; falhas de admissão/cliente usam `failed` (503 não é
+rejeição de negócio). Seu prazo é configurável por `--completion-timeout-seconds`.
+
 O GET expõe `result`, `tracking_event_id`, `completed_at` e progresso local:
 `QUEUED`, `AWAITING_RESULT`, `COMPLETED` ou `BLOCKED_LOCAL`.
 

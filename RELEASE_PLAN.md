@@ -16,7 +16,7 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 | I — Contratos e transporte durável | Concluído: PostgreSQL/RabbitMQ reais, revisão e CI aprovada no SHA `5a50f97` |
 | II — Fluxo assíncrono completo | Concluído: outboxes atômicas, 202/consulta, workers, clientes e recuperação local testados |
 | III — Recuperação e operação | Concluído: rearme/diagnóstico, políticas, lifecycle/saúde e recuperação verificados |
-| IV — UI, verificação integrada e congelamento funcional | Não iniciado |
+| IV — UI, verificação integrada e congelamento funcional | Concluído funcionalmente; aceite vinculado à CI do SHA final da entrega |
 | Comparação extensa | Adiada, sem execução autorizada |
 | Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
 
@@ -222,6 +222,54 @@ mais ampla e avaliação de estabilidade/capacidade continuam pendentes.
 obrigatórias aprovadas e identidade congelável. Lacunas de observabilidade mais
 amplas e comparação adiada continuam explícitas. Implementado, verificado,
 pré-release e release final são estados distintos.
+
+### Aceite funcional I–IV
+
+A conferência é por contrato, não pela quantidade de testes. Referência de entrada
+no IV: `25a1c03429447b954fda43f0ad1f2c612d8749b3`, com CI aprovada.
+
+| Contrato conferido | Evidência executável / observação |
+| --- | --- |
+| HMAC dos bytes, adapters, admissão durável 202, duplicata e conflito | `test_tracking_authentication.py`, `test_carrier_adapters.py`, `test_async_tracking.py`, `test_tracking_concurrency.py` |
+| Inbox/comando/outbox Tracking e recibo/efeitos/outbox Core atômicos; rejeição permanente distinta de falha operacional | `test_commit_boundaries.py`, `test_tracking_persistence.py`, `test_http_recovery.py` |
+| ACK técnico com recuperação local, confirms/leases, queda/retorno e idempotência dos efeitos | `test_message_transport.py`, `test_worker_recovery.py`, `test_worker_dependencies.py` |
+| Rearme auditado, limites por geração, concorrência e resultados fora de ordem | `test_message_operations.py`, `test_result_ordering.py`, `test_order_shipment_concurrency.py` |
+| Lifecycle, dependências e saúde distintos de conclusão | `test_worker_lifecycle.py`, `test_worker_dependencies.py`; smoke de ambos os workers |
+| Cliente distingue aceitação, conclusão/rejeição, falha de consulta e prazo | `test_carrier_simulator.py`, `test_external_simulator_journey.py`; execução real por PowerShell |
+| UI/HTMX, CSRF/CSP, projeção sanitizada, resultado e timeline | `tests/ui`; conferência em navegador real descrita abaixo |
+| Persistência e fronteiras preservadas | heads `1202_core`/`1203_tracking`, Alembic sem drift, dez contratos Import Linter; sem migration/dependência nova no IV |
+
+### Conferência do IV — 2026-09-16
+
+- Projeto exclusivo `fulfillflow-f05e-iv-demo`, porta local `18560`, volumes novos,
+  hostname RabbitMQ `iv-demo-broker`; imagens de revisão próprias, sem sobrescrever
+  imagens históricas. `uv.lock` permanece inalterado.
+- Navegador real: criação/confirmação por formulário, Shipment, admissão 202,
+  `QUEUED`/`AWAITING_RESULT`, consultas sucessivas, erro de consulta preservando
+  a aceitação, prazo de 30 s e nova observação; resultado atualizado automaticamente,
+  link/timeline com quatro `APPLIED`, quatro Notifications simuladas e Order `FULFILLED`.
+  Rejeição posterior ao 202 também foi conferida com motivo persistido e polling encerrado.
+  Reentrega dos mesmos bytes retornou `DUPLICATE`/`APPLIED`, sem quinto efeito.
+- Pendência foi produzida parando somente workers próprios; erro de consulta,
+  parando/restaurando somente a API Tracking própria. Nenhum atraso artificial
+  foi introduzido no runtime. A revisão visual corrigiu o acompanhamento do elemento
+  original da requisição após substituição HTMX. Capturas históricas não foram alteradas.
+- Testes focais de UI e simulador aprovados em Windows com PostgreSQL/RabbitMQ
+  reais nos caminhos pertinentes, incluindo rejeição, bloqueio, prazo e ausência
+  de reenvio. Ruff/formatação, Mypy e fronteiras aprovados. Upgrade de bancos novos,
+  heads/drift e build/smoke locais aprovados. A suíte integrada completa/cobertura
+  e build/smoke do workflow devem passar no SHA final publicado, informado na entrega.
+- Evidências de recuperação I–III continuam aplicáveis: o IV não altera outboxes,
+  aplicação de negócio, migrations, dependências ou protocolo AMQP. Verificações
+  Windows históricas dos scripts de benchmark permanecem válidas e não são
+  substituídas pelos skips de plataforma da CI Linux.
+
+Marco: parar no aceite funcional após aprovação da CI final; sem tag, release,
+merge ou campanha. Observabilidade mais ampla, estabilidade prolongada/capacidade
+não estão demonstradas; o 503 histórico permanece uma limitação documentada.
+A identidade de imagem construída e o SHA/CI exatos constam na entrega. O próximo
+passo recomendado é revisar e arquivar essa referência funcional; publicação ou
+comparação requer decisão própria, sem início automático.
 
 ## 7. Validações e versionamento
 

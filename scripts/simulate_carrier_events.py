@@ -298,6 +298,7 @@ def observe_completion(
     opener: Callable[..., Any] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    emit: Callable[[str], None] | None = None,
 ) -> HttpResult:
     try:
         identifier = str(UUID(str(accepted.payload["inbox_event_id"])))
@@ -329,9 +330,12 @@ def observe_completion(
                 )
         except HTTPError as error:
             _close_response(error)
-        except (URLError, TimeoutError, OSError):
+            if emit is not None:
+                emit(_json_line({"phase": "observation_failed", "inbox_event_id": identifier}))
+        except (URLError, TimeoutError, OSError, HTTPException):
             # A failed observation never changes the accepted business state.
-            pass
+            if emit is not None:
+                emit(_json_line({"phase": "observation_failed", "inbox_event_id": identifier}))
         finally:
             if response is not None:
                 _close_response(response)
@@ -376,6 +380,7 @@ def run_scenario(
                     timeout=timeout,
                     completion_timeout=completion_timeout,
                     opener=opener,
+                    emit=emit,
                 )
         except SimulatorError as error:
             emit(
@@ -388,6 +393,11 @@ def run_scenario(
                         "event_id": step.artifact.event_id,
                         "success": False,
                         "error": error.code,
+                        "phase": (
+                            "observation_expired"
+                            if isinstance(error, SimulatorObservationTimeoutError)
+                            else "failed"
+                        ),
                     }
                 )
             )
@@ -401,6 +411,15 @@ def run_scenario(
             "attempt": position,
             "event_id": step.artifact.event_id,
             "http_status": response.status,
+            "phase": (
+                "accepted"
+                if response.status == 202
+                else "failed"
+                if response.status >= 500
+                else "rejected"
+                if response.payload.get("kind") == "rejected" or response.status >= 400
+                else "completed"
+            ),
             "success": matched,
         }
         observation.update(_safe_operational_result(response.payload))

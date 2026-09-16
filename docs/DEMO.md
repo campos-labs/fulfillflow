@@ -1,4 +1,4 @@
-# Demonstração funcional do FulfillFlow v1.1 — incremento I
+# Demonstração funcional do FulfillFlow v1.2 — aceite I–IV
 
 Este roteiro apresenta a jornada principal do FulfillFlow em um ambiente local e
 controlado: criação de um `Order`, criação de uma `Shipment`, recebimento de
@@ -23,11 +23,11 @@ transportadora ou conta de e-mail real é utilizada.
 
 ## Pré-requisitos
 
-- checkout da branch v1.1 validada;
+- checkout validado da branch `feature/v1.2-tracking-async`;
 - Docker Engine com Docker Compose;
 - Python 3.13 e `uv` para executar o simulador externo;
 - PowerShell;
-- porta `127.0.0.1:8000` disponível.
+- porta `127.0.0.1:18560` disponível.
 
 Execute todos os comandos a partir da raiz do repositório.
 
@@ -37,7 +37,7 @@ Na sessão do PowerShell usada para iniciar o Compose e o simulador, defina:
 
 ```powershell
 $env:APP_ENV = "local"
-$env:APP_PORT = "8000"
+$env:APP_PORT = "18560"
 $env:POSTGRES_PASSWORD = "fulfillflow-demo-admin-password-2026"
 $env:CORE_DB_PASSWORD = "fulfillflow-demo-core-password-2026"
 $env:TRACKING_DB_PASSWORD = "fulfillflow-demo-tracking-password-2026"
@@ -49,7 +49,7 @@ $env:CARRIER_ALPHA_WEBHOOK_SECRET = "fulfillflow-demo-alpha-2026-local-only-a84e
 $env:CARRIER_BETA_WEBHOOK_SECRET = "fulfillflow-demo-beta-2026-local-only-b73c"
 ```
 
-Cada senha de role deve coincidir com seu DSN. Use um volume v1.1 novo; não
+Cada senha de role deve coincidir com seu DSN. Use volumes novos e exclusivos da demonstração; não
 reutilize o banco da v1.0. Os secrets Alpha e Beta precisam ser distintos e ficam
 no Tracking. Core recebe somente o secret de sessão e o token interno comum.
 As telas e os webhooks continuam acessíveis pela porta pública do Core.
@@ -60,26 +60,45 @@ Prepare o ambiente Python do simulador e inicie o stack:
 
 ```powershell
 uv sync --frozen
-docker compose up --build --wait
+$demoProject = "fulfillflow-v12-demo"
+if (docker ps -a --filter "label=com.docker.compose.project=$demoProject" --format '{{.ID}}') {
+    throw "Projeto já existente: escolha outro nome; não remova dados anteriores."
+}
+if (docker volume ls --filter "label=com.docker.compose.project=$demoProject" --format '{{.Name}}') {
+    throw "Volumes já existentes: escolha outro nome de projeto."
+}
+$demoSha = git rev-parse HEAD
+$demoImage = "fulfillflow:demo-$demoSha"
+$demoOverride = Join-Path $env:TEMP "$demoProject.override.yaml"
+$demoServices = 'core','tracking','core-worker','tracking-worker','migrate-core','migrate-tracking'
+$demoLines = @('services:')
+foreach ($service in $demoServices) {
+    $demoLines += "  ${service}:"
+    $demoLines += "    image: $demoImage"
+}
+$demoLines | Set-Content -LiteralPath $demoOverride -Encoding utf8
+$env:RABBITMQ_HOSTNAME = 'demo-broker'
+docker build --target runtime -t $demoImage .
+docker compose -p $demoProject -f compose.yaml -f $demoOverride up -d --no-build --wait --wait-timeout 180
 ```
 
 Confirme que a aplicação está pronta:
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8000/health/live
-Invoke-WebRequest http://127.0.0.1:8000/health/ready
+Invoke-WebRequest http://127.0.0.1:18560/health/live
+Invoke-WebRequest http://127.0.0.1:18560/health/ready
 ```
 
 As duas respostas devem retornar HTTP 200 e `{"status":"ok"}`.
 
 | Tela | URL |
 |---|---|
-| Dashboard | `http://127.0.0.1:8000/` |
-| Orders | `http://127.0.0.1:8000/orders` |
-| Shipments | `http://127.0.0.1:8000/shipments` |
-| Carrier event inbox | `http://127.0.0.1:8000/carrier-events` |
-| Notifications | `http://127.0.0.1:8000/notifications` |
-| Instruções do simulador | `http://127.0.0.1:8000/simulator` |
+| Dashboard | `http://127.0.0.1:18560/` |
+| Orders | `http://127.0.0.1:18560/orders` |
+| Shipments | `http://127.0.0.1:18560/shipments` |
+| Carrier event inbox | `http://127.0.0.1:18560/carrier-events` |
+| Notifications | `http://127.0.0.1:18560/notifications` |
+| Instruções do simulador | `http://127.0.0.1:18560/simulator` |
 
 O painel `/simulator` apresenta os comandos disponíveis, mas não envia eventos.
 Os webhooks são enviados pelo processo externo
@@ -125,7 +144,7 @@ Na mesma sessão do PowerShell que contém o secret Alpha, execute:
 
 ```powershell
 uv run python scripts/simulate_carrier_events.py `
-  --base-url http://127.0.0.1:8000 `
+  --base-url http://127.0.0.1:18560 `
   --carrier carrier-alpha `
   --tracking-code ALPHA-LIVE-0001 `
   --scenario valid
@@ -137,10 +156,37 @@ O simulador envia quatro eventos:
 POSTED → IN_TRANSIT → OUT_FOR_DELIVERY → DELIVERED
 ```
 
-Cada resposta deve apresentar HTTP 200, `"result":"APPLIED"` e
-`"success":true`. A última deve apresentar
+Cada evento novo deve apresentar uma linha `phase=accepted`, HTTP 202 e
+`inbox_event_id`, seguida de consulta com `phase=completed`, `"result":"APPLIED"`
+e `"success":true`. A última deve apresentar
 `"current_status":"DELIVERED"`. Exit code zero indica que todas as respostas
 corresponderam ao contrato esperado.
+
+## 5.1 Observar pendência e prazo sem atrasar o runtime
+
+Somente neste projeto isolado, antes do envio, pause os workers:
+
+```powershell
+docker compose -p $demoProject -f compose.yaml -f $demoOverride stop core-worker tracking-worker
+```
+
+Execute o comando da seção 5 em outro terminal com os mesmos secrets, acrescentando
+`--completion-timeout-seconds 90`. Abra `/carrier-events/{inbox_event_id}` usando o
+ID emitido. Confirme aceitação, `RECEIVED/QUEUED` e consultas HTMX a cada segundo.
+Após 30 segundos, a UI encerra sua observação e mostra prazo esgotado, sem rejeição.
+O cliente de linha de comando tem prazo independente. Se ele também expirar,
+`RESULT_NOT_OBSERVED`/exit 1 indica resultado não observado, não perda do evento.
+
+Retome somente os workers desse projeto:
+
+```powershell
+docker compose -p $demoProject -f compose.yaml -f $demoOverride start core-worker tracking-worker
+```
+
+Use **Check again** para uma nova observação. Confirme conclusão e o link para a
+timeline. A consulta não reenvia o webhook. Falhas temporárias de consulta mostram
+aviso e são tentadas novamente dentro do prazo; `BLOCKED_LOCAL` exige a operação
+auditada descrita no README, sem prometer recuperação automática.
 
 ## 6. Conferir os efeitos na interface
 
@@ -157,20 +203,21 @@ corresponderam ao contrato esperado.
    estado deverá ser `FULFILLED`.
 6. Volte ao Dashboard e confira as contagens e os eventos recentes.
 
-## 7. Demonstrar idempotência — opcional
+## 7. Demonstrar idempotência
 
 Crie outro `Order` confirmado e outra Shipment Alpha em `PENDING`, usando o
 tracking code `ALPHA-DUP-0001`. Em seguida, execute:
 
 ```powershell
 uv run python scripts/simulate_carrier_events.py `
-  --base-url http://127.0.0.1:8000 `
+  --base-url http://127.0.0.1:18560 `
   --carrier carrier-alpha `
   --tracking-code ALPHA-DUP-0001 `
   --scenario duplicate
 ```
 
-A primeira tentativa deve retornar `APPLIED`; a repetição do mesmo evento deve
+A primeira tentativa deve ser aceita com 202 e posteriormente concluir `APPLIED`;
+a repetição do mesmo evento deve
 retornar `DUPLICATE` com `original_result` igual a `APPLIED`. A repetição não
 cria outro inbox, `TrackingEvent` ou `Notification`.
 
@@ -181,16 +228,17 @@ O simulador também oferece `out-of-order`, `unknown-status` e
 ## Como o fluxo funciona
 
 O simulador serializa o payload uma vez, assina os mesmos bytes enviados e chama
-`POST /api/v1/carriers/{carrier_code}/events`. A aplicação autentica o webhook,
-preserva o inbox, normaliza o evento, registra o `TrackingEvent`, atualiza a
-`Shipment`, cria uma `Notification` quando aplicável e reavalia o `Order`.
+`POST /api/v1/carriers/{carrier_code}/events`. Tracking autentica e confirma inbox/comando/outbox em uma transação antes do 202.
+Workers transportam comando e resultado via RabbitMQ. Core confirma recibo, efeitos
+e outbox de resultado atomicamente; Tracking finaliza em outra transação local.
+ACK técnico não é conclusão de negócio.
 Detalhes de transações, locks e idempotência permanecem documentados em
 `DESIGN.md`.
 
 ## Capturas da demonstração
 
 As imagens abaixo são capturas históricas da aplicação real v1.0.0, preservadas
-como ilustrações da interface. Não são capturas da v1.1. Todos os dados são sintéticos.
+como ilustrações da interface. Não são capturas da v1.1 ou v1.2. Todos os dados são sintéticos.
 A conferência funcional v1.1 possui registro próprio em
 [benchmarks/V11_REVIEW.md](../benchmarks/V11_REVIEW.md), sem substituir essas imagens.
 
@@ -216,18 +264,19 @@ Instruções para executar o simulador externo; o painel não envia eventos.
 ## Encerrar o ambiente
 
 ```powershell
-docker compose down --volumes
+docker compose -p $demoProject -f compose.yaml -f $demoOverride stop
 ```
 
-Esse comando remove permanentemente o banco local do Compose. Use-o somente no
-ambiente sintético e descartável desta demonstração.
+O encerramento preserva volumes, imagens e evidência sintética para inspeção.
+Não remova recursos de outros projetos nem substitua imagens históricas.
 
 ## Limitações
 
 - não há autenticação de usuários, Carrier real ou envio real de e-mail;
 - o bind padrão é local, em `127.0.0.1`;
 - `/simulator` é somente instrucional;
-- o processamento do webhook é síncrono, sem fila ou worker;
+- aceitação e conclusão são distintas; falhas de consulta não desfazem admissão;
+- logs/diagnóstico locais não representam observabilidade ampla nem estabilidade prolongada;
 - o roteiro não substitui as suítes automatizadas;
 - o roteiro não executa Locust nem produz baseline ou resultado oficial de
    benchmark.

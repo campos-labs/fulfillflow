@@ -438,6 +438,7 @@ def test_expected_negative_scenarios_are_successful_and_mismatches_fail() -> Non
         "event_id": plan.steps[0].artifact.event_id,
         "http_status": 422,
         "problem_code": "UNKNOWN_EXTERNAL_STATUS",
+        "phase": "rejected",
         "scenario": "unknown-status",
         "step": "unknown-status",
         "success": True,
@@ -838,7 +839,7 @@ def test_async_polling_uses_same_origin_without_forwarding_hmac_and_closes_respo
     assert all(response.closed for response in responses)
 
 
-@pytest.mark.parametrize("failure", ["pending", "http", "network"])
+@pytest.mark.parametrize("failure", ["pending", "http", "network", "protocol"])
 def test_observation_timeout_never_reports_business_rejection(failure):
     from uuid import uuid4
 
@@ -857,9 +858,12 @@ def test_observation_timeout_never_reports_business_rejection(failure):
     clock = [0.0]
     calls = []
     errors = []
+    observations = []
 
     def opener(request, *, timeout):
         calls.append(timeout)
+        if failure == "protocol":
+            raise HTTPException("private wire details")
         if failure == "network":
             raise URLError("unavailable")
         if failure == "http":
@@ -877,6 +881,7 @@ def test_observation_timeout_never_reports_business_rejection(failure):
             accepted,
             timeout=2,
             completion_timeout=3,
+            emit=observations.append,
             opener=opener,
             monotonic=lambda: clock[0],
             sleep=sleep,
@@ -885,6 +890,9 @@ def test_observation_timeout_never_reports_business_rejection(failure):
     assert len(calls) == 3
     assert all(body.closed for body in errors)
     assert accepted.status == 202
+    assert len(observations) == (0 if failure == "pending" else 3)
+    assert all(json.loads(line)["phase"] == "observation_failed" for line in observations)
+    assert "private wire details" not in str(observations)
 
 
 @pytest.mark.parametrize(
@@ -952,3 +960,52 @@ def test_async_simulator_emits_acceptance_separately_from_completion():
     assert [item["http_status"] for item in records] == [202, 200] * 4
     assert all(records[i]["phase"] == "accepted" for i in range(0, 8, 2))
     assert all(records[i]["success"] for i in range(1, 8, 2))
+
+
+@pytest.mark.parametrize("terminal", ["expired", "rejected"])
+def test_accepted_failure_never_resubmits_admission(monkeypatch, terminal):
+    from uuid import uuid4
+
+    plan = simulator.build_scenario(
+        _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+        signed_timestamp=SIGNED_TIMESTAMP,
+    )
+    identifier = str(uuid4())
+    calls = []
+    output = []
+
+    def send(artifact, **kwargs):
+        calls.append(artifact)
+        return simulator.HttpResult(
+            202, {"inbox_event_id": identifier}, f"/api/v1/carrier-events/{identifier}"
+        )
+
+    def observe(*args, **kwargs):
+        if terminal == "expired":
+            raise simulator.SimulatorObservationTimeoutError("unobserved")
+        return simulator.HttpResult(200, {"kind": "rejected", "code": "SHIPMENT_NOT_FOUND"})
+
+    monkeypatch.setattr(simulator, "send_request", send)
+    monkeypatch.setattr(simulator, "observe_completion", observe)
+    assert not simulator.run_scenario(plan, timeout=1, emit=output.append)
+    assert len(calls) == 1
+    records = [json.loads(line) for line in output]
+    assert records[0]["phase"] == "accepted"
+    assert records[1]["phase"] == ("observation_expired" if terminal == "expired" else "rejected")
+
+
+@pytest.mark.parametrize("status,phase", [(503, "failed"), (202, "accepted")])
+def test_unexpected_admission_response_is_not_business_completion_or_rejection(status, phase):
+    plan = simulator.build_scenario(
+        _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+        signed_timestamp=SIGNED_TIMESTAMP,
+    )
+    output = []
+    assert not simulator.run_scenario(
+        plan,
+        timeout=1,
+        mode="synchronous",
+        opener=lambda request, timeout: FakeResponse(status, {}),
+        emit=output.append,
+    )
+    assert json.loads(output[0])["phase"] == phase

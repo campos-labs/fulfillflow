@@ -68,7 +68,7 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
         )
         assert response.status_code == 202, response.text
         pending = await ui_client.get(f"/carrier-events/{response.json()['inbox_event_id']}")
-        assert 'hx-trigger="every 1s"' in pending.text
+        assert 'hx-trigger="observe"' in pending.text
         await drain(postgres_database, postgres_tracking_database, fixed_clock)
         detail = (await ui_client.get(response.headers["location"])).json()
         assert detail["result"]["result"] == expected
@@ -117,6 +117,9 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     assert "&lt;script&gt;alert" in order_page.text
 
     assert "ui-result-applied" in inbox.text
+    assert "Completed. The persisted result" in inbox_detail.text
+    assert "View updated timeline" in inbox_detail.text
+    assert 'hx-trigger="observe"' not in inbox_detail.text
     assert "UIESCAPE0001" in inbox_detail.text
     assert raw_only not in inbox_detail.text
     assert "secret raw extension" not in inbox_detail.text
@@ -164,3 +167,35 @@ async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(
     assert response.status_code == 202
     assert "set-cookie" not in response.headers
     assert "fulfillflow_session" not in ui_client.cookies
+
+
+async def test_inbox_blocked_and_rejected_do_not_poll(
+    ui_client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
+):
+    from sqlalchemy import update
+
+    from fulfillflow.tracking.message_tables import tables
+
+    response = await send_alpha_event(
+        ui_client,
+        postgres_settings,
+        event_id="iv-missing-shipment",
+        tracking_code="IV-MISSING",
+        external_status="CREATED",
+        occurred_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
+    )
+    assert response.status_code == 202
+    path = f"/carrier-events/{response.json()['inbox_event_id']}"
+    async with postgres_tracking_database.session() as session, session.begin():
+        await session.execute(update(tables.outbox).values(state="BLOCKED", reason="TEST_BLOCK"))
+    blocked = await ui_client.get(path, headers={"HX-Request": "true"})
+    assert "requires audited rearm" in blocked.text
+    assert 'hx-trigger="observe"' not in blocked.text
+    assert "Observing for up to" not in blocked.text
+    async with postgres_tracking_database.session() as session, session.begin():
+        await session.execute(update(tables.outbox).values(state="PENDING", reason=None))
+    await drain(postgres_database, postgres_tracking_database, fixed_clock)
+    rejected = await ui_client.get(path, headers={"HX-Request": "true"})
+    assert "Rejected. The persisted reason" in rejected.text
+    assert "SHIPMENT_NOT_FOUND" in rejected.text
+    assert 'hx-trigger="observe"' not in rejected.text
