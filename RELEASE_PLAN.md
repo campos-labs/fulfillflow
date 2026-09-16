@@ -236,7 +236,7 @@ no IV: `25a1c03429447b954fda43f0ad1f2c612d8749b3`, com CI aprovada.
 | Rearme auditado, limites por geração, concorrência e resultados fora de ordem | `test_message_operations.py`, `test_result_ordering.py`, `test_order_shipment_concurrency.py` |
 | Lifecycle, dependências e saúde distintos de conclusão | `test_worker_lifecycle.py`, `test_worker_dependencies.py`; smoke de ambos os workers |
 | Cliente distingue aceitação, conclusão/rejeição, falha de consulta e prazo | `test_carrier_simulator.py`, `test_external_simulator_journey.py`; execução real por PowerShell |
-| UI/HTMX, CSRF/CSP, projeção sanitizada, resultado e timeline | `tests/ui`; conferência em navegador real descrita abaixo |
+| UI/HTMX, CSRF/CSP, projeção sanitizada, resultado e timeline | `tests/ui`, `test_inbox_presentation.py`; conferência em navegador real descrita abaixo |
 | Persistência e fronteiras preservadas | heads `1202_core`/`1203_tracking`, Alembic sem drift, dez contratos Import Linter; sem migration/dependência nova no IV |
 
 ### Conferência do IV — 2026-09-16
@@ -253,7 +253,8 @@ no IV: `25a1c03429447b954fda43f0ad1f2c612d8749b3`, com CI aprovada.
 - Pendência foi produzida parando somente workers próprios; erro de consulta,
   parando/restaurando somente a API Tracking própria. Nenhum atraso artificial
   foi introduzido no runtime. A revisão visual corrigiu o acompanhamento do elemento
-  original da requisição após substituição HTMX. Capturas históricas não foram alteradas.
+  original da requisição após substituição HTMX. Registros legados não recebem indicação inventada de 202 ou resultado.
+  Capturas históricas não foram alteradas.
 - Testes focais de UI e simulador aprovados em Windows com PostgreSQL/RabbitMQ
   reais nos caminhos pertinentes, incluindo rejeição, bloqueio, prazo e ausência
   de reenvio. Ruff/formatação, Mypy e fronteiras aprovados. Upgrade de bancos novos,
