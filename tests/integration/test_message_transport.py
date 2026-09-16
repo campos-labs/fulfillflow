@@ -52,7 +52,7 @@ async def channel():
         await channel.set_qos(prefetch_count=8)
         for flow in ("tracking.apply.v1", "tracking.result.v1"):
             await declare_flow(channel, flow)
-            queue = await channel.get_queue(flow)
+            queue = await channel.get_queue(f"{flow}.queue")
             await queue.purge()
         yield channel
 
@@ -65,7 +65,7 @@ async def test_durable_ack_restart_and_duplicate(owners, channel, direction):
     async with source.session() as session, session.begin():
         await put_message(session, source_tables.outbox, message, NOW)
     assert await publish_batch(source, source_tables, channel, FixedClock(NOW)) == 1
-    queue = await channel.get_queue(message.type)
+    queue = await channel.get_queue(f"{message.type}.queue")
     incoming = await queue.get(timeout=5)
     assert incoming is not None
     await receive(destination, tables, incoming, message.type, NOW)
@@ -124,7 +124,7 @@ async def test_lost_confirm_expired_lease_and_stale_owner(owners, channel):
 
 async def test_unroutable_is_not_confirmed(channel):
     flow = "tracking.apply.v1"
-    queue = await channel.get_queue(flow)
+    queue = await channel.get_queue(f"{flow}.queue")
     await queue.unbind(flow, routing_key=flow)
     try:
         with pytest.raises(aio_pika.exceptions.DeliveryError):
@@ -175,7 +175,7 @@ async def test_malformed_quarantine_before_ack(owners, channel):
     database, tables = owners[0]
     exchange = await channel.get_exchange("tracking.apply.v1")
     await exchange.publish(aio_pika.Message(body=b"not-json"), routing_key="tracking.apply.v1")
-    queue = await channel.get_queue("tracking.apply.v1")
+    queue = await channel.get_queue("tracking.apply.v1.queue")
     incoming = await queue.get(timeout=5)
     await receive(database, tables, incoming, "tracking.apply.v1", NOW)
     async with database.session() as session:
@@ -188,7 +188,7 @@ async def test_commit_then_ack_failure_redelivers_without_duplicate(owners, chan
     database, tables = owners[0]
     message = command_message()
     await publish(channel, message)
-    queue = await channel.get_queue(message.type)
+    queue = await channel.get_queue(f"{message.type}.queue")
     incoming = await queue.get(timeout=5)
     original_ack = aio_pika.IncomingMessage.ack
 
@@ -213,7 +213,7 @@ async def test_failed_commit_never_acks(owners, channel, monkeypatch):
     database, tables = owners[0]
     message = command_message()
     await publish(channel, message)
-    queue = await channel.get_queue(message.type)
+    queue = await channel.get_queue(f"{message.type}.queue")
     incoming = await queue.get(timeout=5)
     from sqlalchemy.ext.asyncio import AsyncSessionTransaction
 
@@ -256,7 +256,7 @@ async def test_outbox_return_exhaustion_is_durable(owners, channel):
     message = command_message()
     async with database.session() as session, session.begin():
         await put_message(session, tables.outbox, message, NOW)
-    queue = await channel.get_queue(message.type)
+    queue = await channel.get_queue(f"{message.type}.queue")
     await queue.unbind(message.type, routing_key=message.type)
     when = NOW
     try:
@@ -295,7 +295,7 @@ async def test_conflict_quarantine_preserves_original(owners, channel):
     async with database.session() as session, session.begin():
         await put_message(session, tables.inbox, message, NOW)
     await publish(channel, message.model_copy(update={"request_id": UUID(int=99)}))
-    queue = await channel.get_queue(message.type)
+    queue = await channel.get_queue(f"{message.type}.queue")
     incoming = await queue.get(timeout=5)
     await receive(database, tables, incoming, message.type, NOW)
     async with database.session() as session:

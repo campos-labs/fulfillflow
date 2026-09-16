@@ -29,7 +29,7 @@ async def declare_flow(channel: AbstractChannel, flow: str) -> None:
         flow, aio_pika.ExchangeType.DIRECT, durable=True, auto_delete=False
     )
     queue = await channel.declare_queue(
-        flow,
+        f"{flow}.queue",
         durable=True,
         exclusive=False,
         auto_delete=False,
