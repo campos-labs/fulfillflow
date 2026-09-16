@@ -182,7 +182,9 @@ async def serve(
             try:
                 started = time.monotonic()
                 async with database.session() as session, session.begin():
-                    worked = await process_one(session, tables.inbox, clock.now(), apply)
+                    worked = await process_one(
+                        session, tables.inbox, clock.now(), apply, clock=clock
+                    )
                     activity = session.info.get("message_activity")
                 if activity:
                     emit(

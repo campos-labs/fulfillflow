@@ -174,10 +174,12 @@ estabilidade prolongada ou solução do 503 histórico a partir desses testes.
 
 ### Verificação do III — 2026-09-16
 
-- Validação focal PostgreSQL/RabbitMQ e validação funcional Windows: 217 casos
+- Validação focal PostgreSQL/RabbitMQ e validação funcional Windows: 219 casos
   cobertos entre a passagem ampla e as correções focais; cobertura local **88,13%**.
   Inclui oito cenários de queda/retorno no startup e com worker já ativo, CLI real,
   deadlock, rearme concorrente, lease antiga e resultados fora de ordem.
+  Regressão focal de 20 casos confirma que a duração da tentativa não consome
+  o intervalo de retry e que a conclusão recebe o instante após a aplicação.
 - Cinco testes estruturais legados aprovados. Após interrupção nativa do dump
   de diagnóstico Python no Windows, essas verificações foram executadas em
   processo separado, sem atualizar ferramentas ou enfraquecer asserções.

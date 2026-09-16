@@ -289,3 +289,42 @@ async def test_diagnostic_reports_corrupt_envelope_without_exposing_bytes(owner)
             await rearm(
                 session, tables, "inbox", message.message_id, digest, "Cannot repair bytes", NOW
             )
+
+
+async def test_attempt_duration_does_not_consume_retry_delay(owner):
+    database, tables, message = owner
+
+    class AdvancingClock:
+        instant = NOW
+
+        def now(self):
+            return self.instant
+
+    clock = AdvancingClock()
+    async with database.session() as session, session.begin():
+        await put_message(session, tables.inbox, message, NOW)
+
+    async def slow_failure(session, envelope):
+        clock.instant += timedelta(seconds=5)
+        raise RetryableItemError("slow operation")
+
+    async with database.session() as session, session.begin():
+        assert await process_one(session, tables.inbox, NOW, slow_failure, clock=clock)
+        row = (await session.execute(select(tables.inbox))).mappings().one()
+        assert row["last_attempt_at"] == NOW + timedelta(seconds=5)
+        assert row["next_attempt_at"] == NOW + timedelta(seconds=6)
+        assert row["state"] == "RETRY_WAIT"
+        assert not await process_one(session, tables.inbox, clock.now(), slow_failure, clock=clock)
+
+    clock.instant += timedelta(seconds=1)
+
+    async def slow_success(session, envelope):
+        clock.instant += timedelta(seconds=5)
+
+    async with database.session() as session, session.begin():
+        assert await process_one(session, tables.inbox, clock.now(), slow_success, clock=clock)
+        row = (await session.execute(select(tables.inbox))).mappings().one()
+        assert row["state"] == "DONE"
+        assert row["attempts"] == 2
+        assert row["finished_at"] == NOW + timedelta(seconds=11)
+        assert row["last_attempt_at"] == row["finished_at"]

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.contracts.messages import MessageEnvelope, decode_message, encode_message
 from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.shared.clock import Clock
 
 
 class MessageConflictError(ValueError):
@@ -192,6 +193,8 @@ async def process_one(
     table: Table,
     now: datetime,
     apply: Callable[[AsyncSession, MessageEnvelope], Awaitable[None]],
+    *,
+    clock: Clock | None = None,
 ) -> bool:
     """Lock survives savepoint rollback; connection failures abort the entire transaction."""
     row = (
@@ -218,31 +221,45 @@ async def process_one(
             envelope = decode_message(row["body"])
             await apply(session, envelope)
     except RetryableItemError:
-        await _item_failure(session, table, row, now, retryable=True)
+        await _item_failure(
+            session, table, row, clock.now() if clock is not None else now, retryable=True
+        )
     except DBAPIError as error:
         sqlstate = getattr(error.orig, "sqlstate", None)
         if sqlstate in ("40001", "40P01", "55P03", "57014"):
-            await _item_failure(session, table, row, now, retryable=True)
+            await _item_failure(
+                session, table, row, clock.now() if clock is not None else now, retryable=True
+            )
         elif error.connection_invalidated or isinstance(error, (OperationalError, InterfaceError)):
             raise
         else:
-            await _item_failure(session, table, row, now, retryable=False)
+            await _item_failure(
+                session, table, row, clock.now() if clock is not None else now, retryable=False
+            )
     except (BlockedItemError, MessageConflictError):
-        await _item_failure(session, table, row, now, retryable=False)
+        await _item_failure(
+            session, table, row, clock.now() if clock is not None else now, retryable=False
+        )
     except Exception:
         # Preserve a finite diagnostic for unexpected item failures; never log the body.
         await _item_failure(
-            session, table, row, now, retryable=False, category="UNEXPECTED_ITEM_ERROR"
+            session,
+            table,
+            row,
+            clock.now() if clock is not None else now,
+            retryable=False,
+            category="UNEXPECTED_ITEM_ERROR",
         )
     else:
+        completed_at = clock.now() if clock is not None else now
         await session.execute(
             update(table)
             .where(table.c.message_id == row["message_id"])
             .values(
                 state="DONE",
                 attempts=row["attempts"] + 1,
-                last_attempt_at=now,
-                finished_at=now,
+                last_attempt_at=completed_at,
+                finished_at=completed_at,
                 reason=None,
             )
         )
