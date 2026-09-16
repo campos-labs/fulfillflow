@@ -16,6 +16,7 @@ jobs:
       TEST_DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
       TEST_TRACKING_DATABASE_URL: postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking
       TEST_LEGACY_DATABASE_URL: postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy
+      TEST_AMQP_URL: amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test
       TEST_V11_POSTGRES_CONTAINER: fulfillflow-ci-tests-db-1
       INTERNAL_API_SECRET: 9d8e5b6f749941feaf4c88390a3a94b2d80ab13c0a04496babd54cc878f611eb
       SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e

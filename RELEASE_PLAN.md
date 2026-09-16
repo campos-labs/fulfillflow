@@ -12,8 +12,8 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 
 | Marco | Estado |
 | --- | --- |
-| Arquitetura alvo e plano | Preparados; conferência de implementação no início do incremento I |
-| I — Contratos e transporte durável | Não iniciado |
+| Arquitetura alvo e plano | Conferidos contra o código em 9d1d468; comando/recibo preservados |
+| I — Contratos e transporte durável | Em validação: envelopes, migrations locais, outbox/inbox, broker real e retomada local |
 | II — Fluxo assíncrono completo | Não iniciado |
 | III — Recuperação e operação | Não iniciado |
 | IV — UI, verificação integrada e congelamento funcional | Não iniciado |

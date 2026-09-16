@@ -17,6 +17,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.52,<3",
     "tzdata>=2025.2; sys_platform == 'win32'",
     "uvicorn>=0.52.4,<1",
+    "aio-pika==9.5.8",
 ]
 
 [dependency-groups]

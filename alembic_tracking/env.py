@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from fulfillflow.asyncio_support import run_async
 from fulfillflow.config import DatabaseSettings
 from fulfillflow.db.session import postgres_connect_args
+from fulfillflow.tracking import message_tables  # noqa: F401
 from fulfillflow.tracking import models as tracking_models  # noqa: F401
 from fulfillflow.tracking.base import TrackingBase as Base
 

@@ -16,14 +16,14 @@ from sqlalchemy.engine import make_url
         (
             "TEST_DATABASE_URL",
             "alembic_core.ini",
-            "1101_core",
+            "1201_core",
             {"orders", "shipments", "carriers", "notifications", "tracking_event_receipts"},
             "fulfillflow_tracking",
         ),
         (
             "TEST_TRACKING_DATABASE_URL",
             "alembic_tracking.ini",
-            "1101_tracking",
+            "1201_tracking",
             {"carrier_event_inbox", "tracking_events"},
             "fulfillflow_core",
         ),
@@ -66,7 +66,7 @@ def test_owner_schema_roundtrip_and_credentials(
                     "SELECT tablename FROM pg_tables WHERE schemaname='public' "
                     "AND tablename <> 'alembic_version'"
                 )
-            } == tables
+            } == tables | {"message_outbox", "message_inbox", "message_quarantine"}
             assert all(
                 row[0] in tables
                 for row in connection.execute(

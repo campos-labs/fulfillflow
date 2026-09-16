@@ -268,3 +268,25 @@ entre proprietários e rejeição de conexão com a credencial do outro serviço
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
 - [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
 - [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.
+
+## Transporte v1.2 — incremento I
+
+O checkout inclui infraestrutura de transporte durável em preparação; o webhook
+continua síncrono até a ativação do incremento II. Cada banco possui suas próprias
+`message_outbox`, `message_inbox` e `message_quarantine`. ACK confirma persistência
+técnica; não representa conclusão de negócio. Itens `BLOCKED` não retomam sozinhos;
+a operação de rearme auditável pertence ao incremento III.
+
+Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
+
+```powershell
+docker compose -p fulfillflow-v12-tests -f compose.test.yaml up -d --wait
+$env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
+uv run pytest tests/integration/test_message_transport.py -q
+```
+
+Configure também `TEST_DATABASE_URL` e `TEST_TRACKING_DATABASE_URL` conforme a
+seção de testes. Use projeto e volumes novos; não reutilize recursos históricos.
+A imagem de teste é RabbitMQ 4.2.4 Alpine, fixada por digest no Compose; o cliente
+é `aio-pika==9.5.8`. Os testes verificam confirmação, retorno, commit/ACK incerto,
+duplicação, lease, esgotamento e recuperação local com a fila vazia.

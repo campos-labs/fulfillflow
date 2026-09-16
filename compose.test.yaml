@@ -1,4 +1,4 @@
-name: fulfillflow-v11-tests
+name: fulfillflow-v12-tests
 
 services:
   db:
@@ -21,5 +21,22 @@ services:
       timeout: 3s
       retries: 30
 
+  broker:
+    image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
+    environment:
+      RABBITMQ_DEFAULT_USER: v12_test
+      RABBITMQ_DEFAULT_PASS: v12-isolated-broker-test
+      RABBITMQ_DEFAULT_VHOST: fulfillflow-v12-test
+    ports:
+      - "127.0.0.1:${TEST_AMQP_PORT:-18542}:5672"
+    volumes:
+      - isolated_broker_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+
 volumes:
+  isolated_broker_data:
   isolated_test_data:

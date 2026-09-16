@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from fulfillflow.asyncio_support import run_async
 from fulfillflow.carriers import models as carrier_models  # noqa: F401
 from fulfillflow.config import DatabaseSettings
+from fulfillflow.core import message_tables  # noqa: F401
 from fulfillflow.db.base import Base
 from fulfillflow.db.session import postgres_connect_args
 from fulfillflow.notifications import models as notification_models  # noqa: F401
