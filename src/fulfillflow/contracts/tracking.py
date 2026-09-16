@@ -5,20 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol, Self
+from typing import Literal, Protocol, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from fulfillflow.contracts.core import EventResult
 from fulfillflow.contracts.values import (
     InboxStatus,
     ShipmentApplicationResult,
     ShipmentStatus,
 )
 
+Progress = Literal["QUEUED", "AWAITING_RESULT", "COMPLETED", "BLOCKED_LOCAL"]
+
 
 class WebhookResult(StrEnum):
-    """Results returned by the synchronous carrier endpoint."""
+    """Business result vocabulary retained for terminal webhook duplicates."""
 
     APPLIED = "APPLIED"
     NO_STATE_CHANGE = "NO_STATE_CHANGE"
@@ -77,6 +80,10 @@ class _Inbox(Protocol):
     error_detail: str | None
     processed_at: datetime | None
     request_id: UUID
+    completed_at: datetime | None
+
+    @property
+    def result(self) -> object: ...
 
 
 class CarrierPayloadProjection(BaseModel):
@@ -104,13 +111,26 @@ class _CarrierEventView(Protocol):
     @property
     def payload(self) -> CarrierPayloadProjection | None: ...
 
+    @property
+    def progress(self) -> Progress | None: ...
+
 
 class _Schema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class WebhookAccepted(_Schema):
+    """Durable acceptance; it does not describe applied business effects."""
+
+    inbox_event_id: UUID
+    external_event_id: str
+    status: Literal["RECEIVED"] = "RECEIVED"
+    received_at: datetime
+    request_id: UUID
+
+
 class WebhookResponse(_Schema):
-    """Acknowledgement of one accepted or duplicate webhook."""
+    """Original terminal outcome returned by an identical processed webhook."""
 
     external_event_id: str
     inbox_event_id: UUID
@@ -184,6 +204,8 @@ class CarrierEventSummaryRead(_Schema):
     processed_at: datetime | None
     request_id: UUID
     tracking_event_id: UUID | None
+    completed_at: datetime | None = None
+    progress: Progress | None = None
 
     @classmethod
     def from_view(cls, view: _CarrierEventView) -> Self:
@@ -200,6 +222,8 @@ class CarrierEventSummaryRead(_Schema):
             processed_at=inbox.processed_at,
             request_id=inbox.request_id,
             tracking_event_id=view.tracking_event_id,
+            completed_at=inbox.completed_at,
+            progress=view.progress,
         )
 
 
@@ -208,6 +232,7 @@ class CarrierEventRead(CarrierEventSummaryRead):
 
     payload: CarrierPayloadProjection | None
     error_detail: str | None
+    result: EventResult | None = None
 
     @classmethod
     def from_view(cls, view: _CarrierEventView) -> Self:
@@ -217,6 +242,9 @@ class CarrierEventRead(CarrierEventSummaryRead):
             **summary.model_dump(),
             payload=view.payload,
             error_detail=view.inbox.error_detail,
+            result=TypeAdapter(EventResult).validate_python(view.inbox.result)
+            if view.inbox.result is not None
+            else None,
         )
 
 

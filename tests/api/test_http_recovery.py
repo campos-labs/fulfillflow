@@ -1,4 +1,4 @@
-"""Real loopback HTTP cancellation after a durable Core commit; no benchmark traffic."""
+"""Real loopback HTTP cancellation after durable Tracking admission; no benchmark traffic."""
 
 import asyncio
 import socket
@@ -14,6 +14,7 @@ from sqlalchemy import text
 from starlette.types import Message, Receive, Scope, Send
 from tests.api.test_service_contracts import _counts
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
+from tests.async_flow import drain
 from tests.service_pair import create_app
 from tests.support import FixedClock
 
@@ -24,7 +25,7 @@ pytestmark = pytest.mark.integration
 
 
 class ResponseGate:
-    """Hold actual response headers after the Core endpoint completed its transaction."""
+    """Hold actual response headers after Tracking committed admission."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -35,11 +36,11 @@ class ResponseGate:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         async def gated_send(message: Message) -> None:
             if (
-                scope["path"] == "/internal/v1/tracking-events"
+                scope["path"] == "/internal/v1/tracking/carriers/carrier-alpha/events"
                 and message["type"] == "http.response.start"
                 and self.hold_once
             ):
-                assert message["status"] == 200
+                assert message["status"] == 202
                 self.hold_once = False
                 self.reached.set()
                 await self.release.wait()
@@ -81,7 +82,7 @@ class ObservedHTTPTransport(httpx.AsyncHTTPTransport):
 
 
 @pytest.mark.parametrize("interruption", ["deadline", "caller_cancellation"])
-async def test_real_http_interruption_after_core_commit_recovers_without_duplicate_effects(
+async def test_real_http_interruption_after_admission_commit_recovers_without_duplicate_effects(
     postgres_settings: Settings,
     postgres_database: Database,
     postgres_tracking_database: Database,
@@ -93,16 +94,16 @@ async def test_real_http_interruption_after_core_commit_recovers_without_duplica
     port = listener.getsockname()[1]
     settings = postgres_settings.model_copy(
         update={
-            "core_base_url": f"http://127.0.0.1:{port}",
+            "tracking_base_url": f"http://127.0.0.1:{port}",
             "service_http_timeout_seconds": 6,
             "forwarding_timeout_seconds": 8,
         }
     )
     app = create_app(settings, postgres_database, clock=fixed_clock)
-    # Only Tracking -> Core uses a real TCP socket. Public forwarding remains ASGI.
+    # Core forwarding uses real TCP; Tracking registry queries remain ASGI.
     network = ObservedHTTPTransport()
-    app.state.tracking_app.state.service_transport = network
-    gate = ResponseGate(app)
+    app.state.service_transport = network
+    gate = ResponseGate(app.state.tracking_app)
     server = TestServer(gate)
     serving: asyncio.Task[None] | None = None
     pending: asyncio.Task[httpx.Response] | None = None
@@ -134,11 +135,7 @@ async def test_real_http_interruption_after_core_commit_recovers_without_duplica
             pending = asyncio.create_task(post())
             await asyncio.wait_for(gate.reached.wait(), 5)
             # Independent SQL connections see the commit while HTTP is still pending.
-            assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 0)
-            async with postgres_database.engine.connect() as connection:
-                receipt_before = (
-                    await connection.execute(text("SELECT * FROM tracking_event_receipts"))
-                ).one()
+            assert await _counts(postgres_database, postgres_tracking_database) == (0, 0, 1, 0)
             async with postgres_tracking_database.engine.connect() as connection:
                 inbox_before = (
                     await connection.execute(
@@ -170,7 +167,7 @@ async def test_real_http_interruption_after_core_commit_recovers_without_duplica
             else:
                 assert network.interruptions[0] is asyncio.CancelledError
             assert not gate.release.is_set()
-            assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 0)
+            assert await _counts(postgres_database, postgres_tracking_database) == (0, 0, 1, 0)
             async with postgres_tracking_database.engine.connect() as connection:
                 assert await connection.scalar(text("SELECT status FROM carrier_event_inbox")) == (
                     "RECEIVED"
@@ -179,8 +176,11 @@ async def test_real_http_interruption_after_core_commit_recovers_without_duplica
             gate.release.set()
             fixed_clock.current += timedelta(seconds=20)
             recovered = await post()
-            assert recovered.status_code == 200
-            assert recovered.json()["result"] == "APPLIED"
+            assert recovered.status_code == 202
+            assert recovered.json()["inbox_event_id"] == str(inbox_before.id)
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            completed = (await client.get(recovered.headers["location"])).json()
+            assert completed["result"]["result"] == "APPLIED"
             duplicate = await post()
             assert duplicate.status_code == 200
             assert duplicate.json()["result"] == "DUPLICATE"
@@ -189,9 +189,9 @@ async def test_real_http_interruption_after_core_commit_recovers_without_duplica
             assert conflict.json()["code"] == "EVENT_ID_PAYLOAD_CONFLICT"
             assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 1)
             async with postgres_database.engine.connect() as connection:
-                assert (
+                receipt_before = (
                     await connection.execute(text("SELECT * FROM tracking_event_receipts"))
-                ).one() == receipt_before
+                ).one()
                 assert await connection.scalar(text("SELECT status FROM orders")) == "FULFILLED"
                 assert await connection.scalar(text("SELECT status FROM shipments")) == "DELIVERED"
             async with postgres_tracking_database.engine.connect() as connection:

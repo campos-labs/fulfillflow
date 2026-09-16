@@ -5,13 +5,12 @@ from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
-from fulfillflow.contracts.core import ApplyEventCommand, CarrierRead, EventResult
+from fulfillflow.contracts.core import CarrierRead
 from fulfillflow.contracts.problems import RemoteServiceUnavailableError
 from fulfillflow.http.internal import ServiceClient, raise_for_service_problem
 
 _CARRIER = TypeAdapter[CarrierRead | None](CarrierRead | None)
 _CARRIERS = TypeAdapter[list[CarrierRead]](list[CarrierRead])
-_RESULT = TypeAdapter[EventResult](EventResult)
 
 
 class CoreClient(ServiceClient):
@@ -49,19 +48,3 @@ class CoreClient(ServiceClient):
                 raise RemoteServiceUnavailableError
         except ValidationError as exc:
             raise RemoteServiceUnavailableError from exc
-
-    async def apply(self, command: ApplyEventCommand) -> EventResult:
-        response = await self.request(
-            "POST",
-            "/internal/v1/tracking-events",
-            content=command.model_dump_json().encode(),
-            headers=[("Content-Type", "application/json")],
-        )
-        raise_for_service_problem(response)
-        try:
-            result = _RESULT.validate_json(response.content)
-        except ValidationError as exc:
-            raise RemoteServiceUnavailableError from exc
-        if result.event_id != command.event_id:
-            raise RemoteServiceUnavailableError
-        return result

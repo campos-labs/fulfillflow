@@ -13,15 +13,15 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 | Marco | Estado |
 | --- | --- |
 | Arquitetura alvo e plano | Conferidos contra o código em 9d1d468; comando/recibo preservados |
-| I — Contratos e transporte durável | Em validação: envelopes, migrations locais, outbox/inbox, broker real e retomada local |
-| II — Fluxo assíncrono completo | Não iniciado |
+| I — Contratos e transporte durável | Concluído: PostgreSQL/RabbitMQ reais, revisão e CI aprovada no SHA `5a50f97` |
+| II — Fluxo assíncrono completo | Em implementação e validação: admissão, aplicação e conclusão duráveis |
 | III — Recuperação e operação | Não iniciado |
 | IV — UI, verificação integrada e congelamento funcional | Não iniciado |
 | Comparação extensa | Adiada, sem execução autorizada |
 | Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
 
-O código inicial ainda executa o fluxo síncrono da v1.1. A comparação anterior
-continua suspensa/incompleta. Resultados e ressalvas estão em
+O checkout ativa o fluxo assíncrono da v1.2; a referência síncrona v1.1 permanece
+congelada. A comparação anterior continua suspensa/incompleta. Resultados e ressalvas estão em
 [V11_REVIEW.md](benchmarks/V11_REVIEW.md) e seu histórico vinculado. Nada neste plano
 autoriza retomar campanhas, reinterpretar o 503 ou reunir repetições de campanhas
 diferentes. Integridade/WAL históricos e cópia independente não confirmados

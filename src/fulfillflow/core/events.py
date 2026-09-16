@@ -34,13 +34,19 @@ class CoreEventService:
 
     async def apply(self, command: ApplyEventCommand) -> EventResult:
         async with self._session.begin():
-            if not await self._carriers.views_by_ids({command.carrier_id}):
-                raise CarrierNotFoundError(str(command.carrier_id))
-            original = await self._receipts.claim(command)
-            if original is not None:
-                return original
-            result = await self._apply_claimed(command)
-            await self._receipts.finalize(command, result)
+            return await self.apply_in_transaction(command)
+
+    async def apply_in_transaction(self, command: ApplyEventCommand) -> EventResult:
+        """Participate in the worker's inbox/effects/result-outbox transaction."""
+        if not self._session.in_transaction():
+            raise RuntimeError("Core event application requires an owning transaction")
+        if not await self._carriers.views_by_ids({command.carrier_id}):
+            raise CarrierNotFoundError(str(command.carrier_id))
+        original = await self._receipts.claim(command)
+        if original is not None:
+            return original
+        result = await self._apply_claimed(command)
+        await self._receipts.finalize(command, result)
         return result
 
     async def _apply_claimed(self, command: ApplyEventCommand) -> EventResult:

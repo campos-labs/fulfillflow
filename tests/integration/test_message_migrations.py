@@ -48,7 +48,10 @@ def test_v11_records_survive_transport_upgrade(monkeypatch, owner, variable):
         command.current(config, check_heads=True)
         command.check(config)
         with psycopg.connect(dsn) as connection:
-            assert connection.execute(query).fetchall() == before
+            after = connection.execute(query).fetchall()
+            assert [row[: len(before[0])] for row in after] == before
+            if owner == "tracking":
+                assert after[0][-2:] == (None, None)
             assert connection.execute("SELECT count(*) FROM message_outbox").fetchone() == (0,)
             assert connection.execute("SELECT count(*) FROM message_inbox").fetchone() == (0,)
     finally:

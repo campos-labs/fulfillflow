@@ -38,6 +38,8 @@ class CarrierEventInbox:
     processed_at: datetime | None
     request_id: UUID
     command: dict[str, JsonValue] | None = None
+    completed_at: datetime | None = None
+    result: dict[str, JsonValue] | None = None
 
     def mark_processed(self, processed_at: datetime) -> None:
         """Finalize a successfully normalized event."""

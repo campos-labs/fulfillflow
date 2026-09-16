@@ -51,20 +51,6 @@ jobs:
       - name: Start isolated owner and legacy databases
         run: docker compose -p fulfillflow-ci-tests -f compose.test.yaml up -d --wait --wait-timeout 120
 
-      - name: Unit, API, and simulator tests
-        run: uv run pytest tests/unit tests/api -q
-
-      - name: HTTP recovery scenarios without skips
-        run: |
-          uv run pytest tests/api/test_http_recovery.py -v --junitxml=/tmp/http-recovery.xml
-          uv run python - <<'PY'
-          import xml.etree.ElementTree as ET
-          cases = ET.parse("/tmp/http-recovery.xml").findall(".//testcase")
-          assert len(cases) == 2, "Both HTTP interruption scenarios must execute"
-          assert not any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error"))
-          print("Both HTTP recovery scenarios passed without skips")
-          PY
-
       - name: Verify both owner migration graphs
         run: |
           uv run alembic -c alembic_core.ini upgrade head
@@ -78,21 +64,29 @@ jobs:
       - name: Structural DatabaseProbe Docker integration
         run: uv run pytest tests/integration/test_benchmark_schema_contract.py -q
 
-      - name: PostgreSQL integration tests
-        run: >-
-          uv run pytest tests/integration -q
-          --ignore=tests/integration/test_benchmark_schema_contract.py
-
-      - name: Operational UI tests
-        run: uv run pytest tests/ui -q
-
-      - name: External simulator E2E
-        run: uv run pytest tests/e2e/test_external_simulator_journey.py -q
-
-      - name: Coverage gate
+      - name: Full functional suite and coverage
         run: >-
           uv run pytest --cov=fulfillflow --cov-report=term-missing
+          --junitxml=/tmp/functional.xml
           --ignore=tests/integration/test_benchmark_schema_contract.py
+
+      - name: Require actual transport and recovery scenarios
+        run: |
+          uv run python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse("/tmp/functional.xml").findall(".//testcase")
+          for module, minimum in (
+              ("test_message_transport", 20),
+              ("test_worker_recovery", 2),
+              ("test_http_recovery", 2),
+              ("test_commit_boundaries", 11),
+          ):
+              selected = [case for case in cases if module in case.get("classname", "")]
+              assert len(selected) >= minimum, f"Missing critical scenarios: {module}"
+              assert not any(case.find(tag) is not None for case in selected
+                             for tag in ("skipped", "failure", "error")), module
+          print("Real PostgreSQL/RabbitMQ and recovery scenarios passed without skips")
+          PY
 
       - name: Validate Docker Compose
         run: docker compose config --quiet

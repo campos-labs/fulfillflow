@@ -1,4 +1,4 @@
-"""Narrow authenticated registry and event-application endpoints in Core."""
+"""Narrow authenticated registry and Shipment query endpoints in Core."""
 
 from typing import Annotated
 from uuid import UUID
@@ -7,15 +7,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.carriers.public import CarriersPublic
-from fulfillflow.contracts.core import ApplyEventCommand, CarrierRead, EventResult
-from fulfillflow.core.events import CoreEventService
-from fulfillflow.http.dependencies import get_clock, get_session
-from fulfillflow.shared import Clock
+from fulfillflow.contracts.core import CarrierRead
+from fulfillflow.http.dependencies import get_session
 from fulfillflow.shipments.public import ShipmentNotFoundError, ShipmentsPublic
 
 router = APIRouter(prefix="/internal/v1", include_in_schema=False)
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
-ClockDependency = Annotated[Clock, Depends(get_clock)]
 
 
 @router.get("/carriers", response_model=list[CarrierRead])
@@ -44,10 +41,3 @@ async def require_shipment(shipment_id: UUID, session: SessionDependency) -> UUI
         if await ShipmentsPublic(session).find(shipment_id) is None:
             raise ShipmentNotFoundError(shipment_id)
     return shipment_id
-
-
-@router.post("/tracking-events", response_model=EventResult)
-async def apply_tracking_event(
-    command: ApplyEventCommand, session: SessionDependency, clock: ClockDependency
-) -> EventResult:
-    return await CoreEventService(session, clock).apply(command)

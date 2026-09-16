@@ -711,7 +711,7 @@ def test_official_summary_uses_median_and_preserves_five_repetitions(tmp_path: P
 
 
 def test_runner_derives_release_from_project_metadata() -> None:
-    assert _project_release(Path.cwd()) == "v1.1.0"
+    assert _project_release(Path.cwd()) == "v1.2.0.dev0"
 
 
 def test_git_provenance_has_a_finite_noninteractive_timeout(

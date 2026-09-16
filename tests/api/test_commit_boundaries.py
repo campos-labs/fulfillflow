@@ -3,7 +3,6 @@
 import asyncio
 import os
 from datetime import timedelta
-from typing import Any
 
 import httpx
 import pytest
@@ -12,10 +11,11 @@ from benchmarks.collectors_v11 import SplitDatabaseProbe
 from sqlalchemy import event, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from tests.api.test_service_contracts import LostResponse, _counts
+from tests.api.test_service_contracts import _counts
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
+from tests.async_flow import drain
 from tests.service_pair import create_app
-from tests.support import ContentionProbe, FixedClock, run_with_proven_contention
+from tests.support import FixedClock
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
@@ -56,7 +56,8 @@ async def test_reconciliation_reads_real_owner_databases_and_rejects_receipt_cor
             event_id="reconcile-event",
             raw_body=_alpha_body("reconcile-event", "RECONCILE-ONE"),
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
         assert await asyncio.to_thread(probe.reconcile) == {
             "commands": 1,
             "receipts": 1,
@@ -92,7 +93,7 @@ async def test_peer_unavailability_preserves_durable_state_and_allows_redelivery
 
     class Unavailable(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            if peer == "tracking" or request.url.path == "/internal/v1/tracking-events":
+            if peer in ("tracking", "core"):
                 raise httpx.ConnectError("synthetic peer outage", request=request)
             return await original_transport.handle_async_request(request)
 
@@ -122,220 +123,192 @@ async def test_peer_unavailability_preserves_durable_state_and_allows_redelivery
             assert await _counts(postgres_database, postgres_tracking_database) == (
                 0,
                 0,
-                int(peer == "core"),
+                0,
                 0,
             )
         finally:
             service_client._transport = original
-        assert (await post()).status_code == 200
+        assert (await post()).status_code == 202
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
         assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 1)
 
 
-@pytest.mark.parametrize("boundary", ["reception", "command", "core", "finalization"])
+@pytest.mark.parametrize("boundary", ["admission", "core", "finalization"])
 @pytest.mark.parametrize("when", ["before_commit", "after_commit"])
-async def test_commit_interruption_preserves_exact_durable_prefix_and_recovers(
-    postgres_settings: Settings,
-    postgres_database: Database,
-    postgres_tracking_database: Database,
-    fixed_clock: FixedClock,
-    monkeypatch: pytest.MonkeyPatch,
-    boundary: str,
-    when: str,
-) -> None:
+async def test_commit_interruption_preserves_atomic_stage_and_recovers_locally(
+    postgres_settings,
+    postgres_database,
+    postgres_tracking_database,
+    fixed_clock,
+    monkeypatch,
+    boundary,
+    when,
+):
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
     fired = False
 
-    def interrupt(session: Session) -> None:
+    def interrupt(session):
         nonlocal fired
+        if session.in_nested_transaction():
+            return
         if session.info.pop("commit_boundary", None) == boundary and not fired:
             fired = True
-            raise SQLAlchemyError("synthetic connection interruption at commit")
+            raise SQLAlchemyError("synthetic commit interruption")
 
-    original_add = TrackingRepository.add_inbox
     original_save = TrackingRepository.save_inbox
     original_finalize = ShipmentReceipts.finalize
 
-    async def add(self: TrackingRepository, inbox: Any) -> None:
-        await original_add(self, inbox)
-        self._session.info["commit_boundary"] = "reception"
-
-    async def save(self: TrackingRepository, inbox: Any) -> None:
+    async def save(self, inbox):
         await original_save(self, inbox)
         self._session.info["commit_boundary"] = (
-            "command" if inbox.status.value == "RECEIVED" else "finalization"
+            "admission" if inbox.status.value == "RECEIVED" else "finalization"
         )
 
-    async def finalize(self: ShipmentReceipts, command: Any, result: Any) -> None:
+    async def finalize(self, command, result):
         await original_finalize(self, command, result)
         self._session.info["commit_boundary"] = "core"
 
-    monkeypatch.setattr(TrackingRepository, "add_inbox", add)
     monkeypatch.setattr(TrackingRepository, "save_inbox", save)
     monkeypatch.setattr(ShipmentReceipts, "finalize", finalize)
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app, raise_app_exceptions=False), base_url="http://test"
+        ) as client,
     ):
         await _create_shipment(
             client, reference="COMMIT", carrier_code="carrier-alpha", tracking_code="COMMIT-ONE"
         )
 
-        async def post() -> httpx.Response:
+        async def post():
             return await _post_event(
                 client,
                 postgres_settings,
                 fixed_clock,
                 carrier_code="carrier-alpha",
                 event_id="commit-event",
-                raw_body=_alpha_body("commit-event", "COMMIT-ONE"),
+                raw_body=_alpha_body("commit-event", "COMMIT-ONE", status="DELIVERED"),
             )
 
         event.listen(Session, when, interrupt)
         try:
-            failed = await post()
+            accepted = await post()
+            if boundary == "admission":
+                assert accepted.status_code == 503
+            else:
+                assert accepted.status_code == 202
+                with pytest.raises(SQLAlchemyError):
+                    await drain(postgres_database, postgres_tracking_database, fixed_clock)
         finally:
             event.remove(Session, when, interrupt)
         assert fired
-        assert failed.status_code == 503
-        committed = ["reception", "command", "core", "finalization"].index(boundary)
-        if when == "after_commit":
-            committed += 1
-        assert await _counts(postgres_database, postgres_tracking_database) == (
-            int(committed >= 3),
-            int(committed >= 3),
-            int(committed >= 1),
-            int(committed >= 4),
+        committed = ["admission", "core", "finalization"].index(boundary) + int(
+            when == "after_commit"
         )
-        async with postgres_tracking_database.engine.connect() as connection:
-            before = (
-                await connection.execute(
+        assert await _counts(postgres_database, postgres_tracking_database) == (
+            int(committed >= 2),
+            int(committed >= 2),
+            int(committed >= 1),
+            int(committed >= 3),
+        )
+        async with postgres_tracking_database.session() as session:
+            original = (
+                await session.execute(
                     text("SELECT id, received_at, request_id, command FROM carrier_event_inbox")
                 )
             ).first()
-        if before is not None:
-            assert (before.command is not None) == (committed >= 2)
-        fixed_clock.current += timedelta(seconds=1)
-        resumed = await post()
-        assert resumed.status_code == 200
-        assert resumed.json()["result"] == ("DUPLICATE" if committed == 4 else "APPLIED")
+            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == int(
+                committed >= 1
+            )
+            if original:
+                assert original.command is not None
+        async with postgres_database.session() as session:
+            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == int(
+                committed >= 2
+            )
+        # Only uncertain admission needs redelivery. Acknowledged application work resumes locally.
+        if boundary == "admission":
+            assert (await post()).status_code == 202
+        fixed_clock.current += timedelta(seconds=31)
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
         assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 1)
-        async with postgres_tracking_database.engine.connect() as connection:
-            after = (
-                await connection.execute(
+        assert (await post()).json()["result"] == "DUPLICATE"
+        async with postgres_tracking_database.session() as session:
+            final = (
+                await session.execute(
                     text("SELECT id, received_at, request_id, command FROM carrier_event_inbox")
                 )
             ).one()
-        if before is not None:
-            assert after[:3] == before[:3]
-            if before.command is not None:
-                assert after.command == before.command
+            if original:
+                assert final == original
+            assert await session.scalar(text("SELECT state FROM message_inbox")) == "DONE"
+        async with postgres_database.session() as session:
+            assert await session.scalar(text("SELECT status FROM orders")) == "FULFILLED"
+            assert await session.scalar(text("SELECT state FROM message_inbox")) == "DONE"
 
 
-async def test_lost_rejection_response_replays_original_decision_after_shipment_creation(
-    postgres_settings: Settings,
-    postgres_database: Database,
-    postgres_tracking_database: Database,
-    fixed_clock: FixedClock,
-) -> None:
+@pytest.mark.parametrize("owner", ["tracking", "core"])
+async def test_outbox_insert_failure_rolls_back_the_entire_local_fact(
+    postgres_settings,
+    postgres_database,
+    postgres_tracking_database,
+    fixed_clock,
+    monkeypatch,
+    owner,
+):
+    from fulfillflow.core import message_handler
+    from fulfillflow.messaging.store import RetryableItemError
+    from fulfillflow.tracking import service
+
+    module = service if owner == "tracking" else message_handler
+    original = module.put_message
+
+    async def fail(*args, **kwargs):
+        await original(*args, **kwargs)
+        if owner == "tracking":
+            raise SQLAlchemyError("injected outbox failure")
+        raise RetryableItemError("injected outbox failure")
+
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
-    app.state.tracking_app.state.service_transport = LostResponse(app)
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app, raise_app_exceptions=False), base_url="http://test"
+        ) as client,
     ):
+        await _create_shipment(
+            client, reference="OUTBOX", carrier_code="carrier-alpha", tracking_code="OUTBOX"
+        )
 
-        async def post() -> httpx.Response:
+        async def post():
             return await _post_event(
                 client,
                 postgres_settings,
                 fixed_clock,
                 carrier_code="carrier-alpha",
-                event_id="lost-rejection",
-                raw_body=_alpha_body("lost-rejection", "MISSING-ONE"),
+                event_id="outbox",
+                raw_body=_alpha_body("outbox", "OUTBOX", status="DELIVERED"),
             )
 
-        assert (await post()).status_code == 503
-        assert await _counts(postgres_database, postgres_tracking_database) == (1, 0, 1, 0)
-        async with postgres_database.engine.connect() as connection:
-            original = await connection.scalar(text("SELECT result FROM tracking_event_receipts"))
-        await _create_shipment(
-            client,
-            reference="CREATED-LATER",
-            carrier_code="carrier-alpha",
-            tracking_code="MISSING-ONE",
-        )
-        fixed_clock.current += timedelta(seconds=5)
-        first, second = await post(), await post()
-        assert first.status_code == second.status_code == 422
-        assert first.json()["code"] == second.json()["code"] == original["code"]
-        assert await _counts(postgres_database, postgres_tracking_database) == (1, 0, 1, 0)
-        async with postgres_database.engine.connect() as connection:
-            assert (
-                await connection.scalar(text("SELECT result FROM tracking_event_receipts"))
-                == original
-            )
-            assert await connection.scalar(text("SELECT status FROM shipments")) == "PENDING"
-        async with postgres_tracking_database.engine.connect() as connection:
-            row = (
-                await connection.execute(
-                    text("SELECT status, processed_at FROM carrier_event_inbox")
-                )
-            ).one()
-            assert row.status == "REJECTED"
-            assert row.processed_at.isoformat() == original["decided_at"].replace("Z", "+00:00")
-
-
-@pytest.mark.parametrize("fault", ["rollback", "lost_response"])
-async def test_concurrent_redelivery_with_core_failure_has_one_durable_effect(
-    postgres_settings: Settings,
-    postgres_database: Database,
-    postgres_tracking_database: Database,
-    fixed_clock: FixedClock,
-    monkeypatch: pytest.MonkeyPatch,
-    fault: str,
-) -> None:
-    app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
-    if fault == "lost_response":
-        app.state.tracking_app.state.service_transport = LostResponse(app)
-    probe = ContentionProbe()
-    original = ShipmentReceipts.claim
-    failed = False
-
-    async def claim(self: ShipmentReceipts, command: Any) -> Any:
-        nonlocal failed
-        await probe.record_backend_pid(self._session)
-        result = await original(self, command)
-        if result is None and not probe.first_holds_transaction.is_set():
-            await probe.hold_first_transaction()
-            if fault == "rollback":
-                failed = True
-                raise SQLAlchemyError("synthetic failure while competing receipt waits")
-        return result
-
-    monkeypatch.setattr(ShipmentReceipts, "claim", claim)
-    async with (
-        app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
-    ):
-        await _create_shipment(
-            client, reference="FAIL-RACE", carrier_code="carrier-alpha", tracking_code="RACE-ONE"
-        )
-
-        async def post() -> httpx.Response:
-            return await _post_event(
-                client,
-                postgres_settings,
-                fixed_clock,
-                carrier_code="carrier-alpha",
-                event_id="race-event",
-                raw_body=_alpha_body("race-event", "RACE-ONE"),
-            )
-
-        responses = await run_with_proven_contention(postgres_database, probe, post, post)
-        assert sorted(r.status_code for r in responses if isinstance(r, httpx.Response)) == [
-            200,
-            503,
-        ]
-        assert failed == (fault == "rollback")
+        monkeypatch.setattr(module, "put_message", fail)
+        response = await post()
+        if owner == "tracking":
+            assert response.status_code == 503
+            assert await _counts(postgres_database, postgres_tracking_database) == (0, 0, 0, 0)
+        else:
+            assert response.status_code == 202
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            assert await _counts(postgres_database, postgres_tracking_database) == (0, 0, 1, 0)
+            async with postgres_database.session() as session:
+                assert await session.scalar(text("SELECT state FROM message_inbox")) == "RETRY_WAIT"
+                assert await session.scalar(text("SELECT status FROM orders")) == "CONFIRMED"
+                assert await session.scalar(text("SELECT status FROM shipments")) == "PENDING"
+        database = postgres_tracking_database if owner == "tracking" else postgres_database
+        async with database.session() as session:
+            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == 0
+        monkeypatch.setattr(module, "put_message", original)
+        if owner == "tracking":
+            assert (await post()).status_code == 202
+        fixed_clock.current += timedelta(seconds=2)
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
         assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 1)
-        assert (await post()).json()["result"] == "DUPLICATE"

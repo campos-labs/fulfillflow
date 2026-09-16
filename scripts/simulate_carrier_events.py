@@ -24,7 +24,7 @@ from typing import Any, Never
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 CARRIER_ALPHA = "carrier-alpha"
 CARRIER_BETA = "carrier-beta"
@@ -188,6 +188,7 @@ class HttpResult:
 
     status: int
     payload: Mapping[str, object]
+    location: str | None = None
 
 
 def calculate_signature(
@@ -282,6 +283,64 @@ def send_request(
         _close_response(response)
 
 
+class SimulatorObservationTimeoutError(SimulatorError):
+    """Accepted work has no terminal result observed before the observation deadline."""
+
+    code = "RESULT_NOT_OBSERVED"
+
+
+def observe_completion(
+    artifact: RequestArtifact,
+    accepted: HttpResult,
+    *,
+    timeout: float,
+    completion_timeout: float,
+    opener: Callable[..., Any] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> HttpResult:
+    try:
+        identifier = str(UUID(str(accepted.payload["inbox_event_id"])))
+    except (KeyError, ValueError) as error:
+        raise SimulatorResponseError("Invalid acceptance identity.") from error
+    expected = f"/api/v1/carrier-events/{identifier}"
+    if accepted.location != expected:
+        raise SimulatorResponseError("Invalid acceptance Location.")
+    origin = urlsplit(artifact.url)
+    url = f"{origin.scheme}://{origin.netloc}{expected}"
+    deadline = monotonic() + completion_timeout
+    open_request = opener or _open_without_redirects
+    while monotonic() < deadline:
+        response = None
+        try:
+            response = open_request(
+                Request(url, method="GET"), timeout=min(timeout, max(0.001, deadline - monotonic()))
+            )
+            result = _read_http_result(response, status=response.status)
+            payload = result.payload
+            if str(payload.get("id")) != identifier:
+                raise SimulatorResponseError("Polling returned a different inbox identity.")
+            if payload.get("status") in ("PROCESSED", "REJECTED"):
+                decision = payload.get("result")
+                if not isinstance(decision, dict):
+                    raise SimulatorResponseError("Terminal result is missing.")
+                return HttpResult(
+                    result.status, dict(decision, external_event_id=artifact.event_id)
+                )
+        except HTTPError as error:
+            _close_response(error)
+        except (URLError, TimeoutError, OSError):
+            # A failed observation never changes the accepted business state.
+            pass
+        finally:
+            if response is not None:
+                _close_response(response)
+        remaining = deadline - monotonic()
+        if remaining > 0:
+            sleep(min(1.0, remaining))
+    raise SimulatorObservationTimeoutError("Accepted; terminal result not yet observed.")
+
+
 def _open_without_redirects(request: Request, *, timeout: float) -> Any:
     """Use an explicit opener whose redirect handler never issues a second request."""
     return build_opener(_RejectRedirectHandler()).open(request, timeout=timeout)
@@ -293,11 +352,31 @@ def run_scenario(
     timeout: float,
     opener: Callable[..., Any] | None = None,
     emit: Callable[[str], None] = print,
+    mode: str = "async",
+    completion_timeout: float = 30.0,
 ) -> bool:
     """Execute a plan, stopping safely at the first unexpected result."""
     for position, step in enumerate(plan.steps, start=1):
         try:
             response = send_request(step.artifact, timeout=timeout, opener=opener)
+            if response.status == 202 and mode == "async":
+                emit(
+                    _json_line(
+                        {
+                            "phase": "accepted",
+                            "http_status": 202,
+                            "event_id": step.artifact.event_id,
+                            "inbox_event_id": response.payload.get("inbox_event_id"),
+                        }
+                    )
+                )
+                response = observe_completion(
+                    step.artifact,
+                    response,
+                    timeout=timeout,
+                    completion_timeout=completion_timeout,
+                    opener=opener,
+                )
         except SimulatorError as error:
             emit(
                 _json_line(
@@ -386,6 +465,8 @@ def build_parser() -> SimulatorArgumentParser:
         default=10.0,
         help="Per-request HTTP timeout in seconds (default: %(default)s).",
     )
+    parser.add_argument("--mode", choices=("async", "synchronous"), default="async")
+    parser.add_argument("--completion-timeout-seconds", type=float, default=30.0)
     return parser
 
 
@@ -394,13 +475,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
+        if (
+            not math.isfinite(arguments.completion_timeout_seconds)
+            or arguments.completion_timeout_seconds <= 0
+        ):
+            raise ValueError("completion timeout must be greater than zero")
         config = _config_from_arguments(arguments)
         plan = build_scenario(config)
     except OverflowError:
         parser.configuration_error("start time is outside the supported scenario range")
     except ValueError as error:
         parser.configuration_error(str(error))
-    return 0 if run_scenario(plan, timeout=config.timeout) else 1
+    return (
+        0
+        if run_scenario(
+            plan,
+            timeout=config.timeout,
+            mode=arguments.mode,
+            completion_timeout=arguments.completion_timeout_seconds,
+        )
+        else 1
+    )
 
 
 def _config_from_arguments(arguments: argparse.Namespace) -> SimulatorConfig:
@@ -754,7 +849,8 @@ def _read_http_result(response: Any, *, status: object) -> HttpResult:
         raise SimulatorConnectionError("Webhook endpoint could not be reached.") from error
     except (TypeError, ValueError) as error:
         raise SimulatorResponseError("Webhook response status was invalid.") from error
-    return HttpResult(resolved_status, payload)
+    headers = getattr(response, "headers", {})
+    return HttpResult(resolved_status, payload, headers.get("Location"))
 
 
 def _close_response(response: Any) -> None:

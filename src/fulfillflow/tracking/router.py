@@ -5,11 +5,12 @@ from typing import Annotated, cast
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import AwareDatetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.config import Settings
+from fulfillflow.contracts.tracking import WebhookAccepted
 from fulfillflow.http.body import read_limited_body as _read_limited_body
 from fulfillflow.http.dependencies import get_clock, get_session, get_settings
 from fulfillflow.http.internal import trace_headers
@@ -76,17 +77,18 @@ async def get_shipment_tracking(
 
 @router.post(
     "/carriers/{carrier_code}/events",
-    response_model=WebhookResponse,
+    response_model=WebhookResponse | WebhookAccepted,
     tags=["tracking"],
 )
 async def receive_carrier_event(
     carrier_code: str,
     request: Request,
+    response: Response,
     session: SessionDependency,
     clock: ClockDependency,
     settings: SettingsDependency,
-) -> WebhookResponse:
-    """Authenticate and synchronously process one raw Carrier webhook."""
+) -> WebhookResponse | WebhookAccepted:
+    """Authenticate and durably admit one raw Carrier webhook."""
     normalized_code = carrier_code.strip().lower()
     secret = _carrier_secret(settings, normalized_code)
     authentication = WebhookAuthentication(
@@ -106,6 +108,11 @@ async def receive_carrier_event(
         tolerance_seconds=settings.webhook_signature_tolerance_seconds,
         request_id=cast(UUID, request.state.request_id),
     )
+    if isinstance(outcome, WebhookAccepted):
+        response.status_code = 202
+        response.headers["Location"] = f"/api/v1/carrier-events/{outcome.inbox_event_id}"
+        response.headers["Retry-After"] = "1"
+        return outcome
     return WebhookResponse.from_outcome(outcome)
 
 

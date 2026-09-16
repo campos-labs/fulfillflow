@@ -23,7 +23,7 @@ from sqlalchemy.engine import make_url
         (
             "TEST_TRACKING_DATABASE_URL",
             "alembic_tracking.ini",
-            "1201_tracking",
+            "1202_tracking",
             {"carrier_event_inbox", "tracking_events"},
             "fulfillflow_core",
         ),

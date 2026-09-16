@@ -73,6 +73,7 @@ class Settings(DatabaseSettings):
     log_format: Literal["json", "console"] = "json"
 
     service_role: Literal["core", "tracking"] = "core"
+    amqp_url: SecretStr | None = None
     internal_api_secret: SecretStr
     core_base_url: AnyHttpUrl = AnyHttpUrl("http://core:8000")
     tracking_base_url: AnyHttpUrl = AnyHttpUrl("http://tracking:8000")

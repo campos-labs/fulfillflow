@@ -1,4 +1,4 @@
-name: fulfillflow-v11
+name: fulfillflow-v12
 
 x-service-environment: &service-environment
   APP_ENV: "${APP_ENV:-local}"
@@ -6,7 +6,7 @@ x-service-environment: &service-environment
   APP_HOST: "${APP_HOST:-0.0.0.0}"
   APP_PORT: "8000"
   APP_TIMEZONE: "${APP_TIMEZONE:-America/Sao_Paulo}"
-  DB_POOL_SIZE: "${DB_POOL_SIZE:-5}"
+  DB_POOL_SIZE: "${DB_POOL_SIZE:-2}"
   DB_MAX_OVERFLOW: "${DB_MAX_OVERFLOW:-0}"
   DB_POOL_TIMEOUT_SECONDS: "${DB_POOL_TIMEOUT_SECONDS:-5}"
   DB_STATEMENT_TIMEOUT_MS: "${DB_STATEMENT_TIMEOUT_MS:-5000}"
@@ -30,27 +30,27 @@ x-service-environment: &service-environment
 x-core-environment: &core-environment
   <<: *service-environment
   SERVICE_ROLE: core
-  DATABASE_URL: "${CORE_DATABASE_URL:-postgresql+psycopg://fulfillflow_core:fulfillflow-v11-core-local-2026@db:5432/fulfillflow_core}"
+  DATABASE_URL: "${CORE_DATABASE_URL:-postgresql+psycopg://fulfillflow_core:fulfillflow-v12-core-local-2026@db:5432/fulfillflow_core}"
   SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
   OTEL_SERVICE_NAME: fulfillflow-core
 
 x-tracking-environment: &tracking-environment
   <<: *service-environment
   SERVICE_ROLE: tracking
-  DATABASE_URL: "${TRACKING_DATABASE_URL:-postgresql+psycopg://fulfillflow_tracking:fulfillflow-v11-tracking-local-2026@db:5432/fulfillflow_tracking}"
+  DATABASE_URL: "${TRACKING_DATABASE_URL:-postgresql+psycopg://fulfillflow_tracking:fulfillflow-v12-tracking-local-2026@db:5432/fulfillflow_tracking}"
   CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:-f4f67f688c3f40a59079fd6bcc19a7f214c21df9b8a94039a4c0e7cd6cc84385}"
   CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:-3df2b1b16bd84e22987409e9acfc09f6428a8c3573154a478b2084852bc64af2}"
   OTEL_SERVICE_NAME: fulfillflow-tracking
 
 x-core: &core
-  image: fulfillflow-core:v11-local
+  image: fulfillflow-core:v12-local
   build:
     context: .
     target: runtime
   environment: *core-environment
 
 x-tracking: &tracking
-  image: fulfillflow-tracking:v11-local
+  image: fulfillflow-tracking:v12-local
   build:
     context: .
     target: runtime
@@ -62,11 +62,11 @@ services:
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-v11-admin-local-2026}"
-      CORE_DB_PASSWORD: "${CORE_DB_PASSWORD:-fulfillflow-v11-core-local-2026}"
-      TRACKING_DB_PASSWORD: "${TRACKING_DB_PASSWORD:-fulfillflow-v11-tracking-local-2026}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-v12-admin-local-2026}"
+      CORE_DB_PASSWORD: "${CORE_DB_PASSWORD:-fulfillflow-v12-core-local-2026}"
+      TRACKING_DB_PASSWORD: "${TRACKING_DB_PASSWORD:-fulfillflow-v12-tracking-local-2026}"
     volumes:
-      - v11_postgres_data:/var/lib/postgresql
+      - v12_postgres_data:/var/lib/postgresql
       - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
     cpus: 2.0
     mem_limit: 2560m
@@ -77,6 +77,21 @@ services:
       retries: 12
       start_period: 10s
     stop_grace_period: 30s
+
+  broker:
+    image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
+    volumes:
+      - v12_rabbitmq_data:/var/lib/rabbitmq
+      - ./infrastructure/rabbitmq-v12.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infrastructure/rabbitmq-v12.json:/etc/rabbitmq/definitions.json:ro
+    cpus: 0.5
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 15s
 
   migrate-core:
     <<: *core
@@ -101,8 +116,8 @@ services:
   core:
     <<: *core
     init: true
-    cpus: 1.0
-    mem_limit: 768m
+    cpus: 0.5
+    mem_limit: 384m
     depends_on:
       migrate-core:
         condition: service_completed_successfully
@@ -115,13 +130,52 @@ services:
     <<: *tracking
     command: ["python", "-m", "fulfillflow.tracking"]
     init: true
-    cpus: 1.0
-    mem_limit: 768m
+    cpus: 0.5
+    mem_limit: 384m
     depends_on:
       migrate-core:
         condition: service_completed_successfully
       migrate-tracking:
         condition: service_completed_successfully
 
+  core-worker:
+    <<: *core
+    command: ["python", "-m", "fulfillflow.core.worker"]
+    environment:
+      <<: *core-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${CORE_AMQP_URL:-amqp://core:fulfillflow-v12-core-amqp-local-2026@broker:5672/fulfillflow-v12}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 15s
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate-core:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
+  tracking-worker:
+    <<: *tracking
+    command: ["python", "-m", "fulfillflow.tracking.worker"]
+    environment:
+      <<: *tracking-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${TRACKING_AMQP_URL:-amqp://tracking:fulfillflow-v12-tracking-amqp-local-2026@broker:5672/fulfillflow-v12}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 15s
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate-tracking:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
 volumes:
-  v11_postgres_data:
+  v12_rabbitmq_data:
+  v12_postgres_data:

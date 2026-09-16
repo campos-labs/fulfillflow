@@ -89,6 +89,8 @@ async def test_external_simulator_updates_the_complete_operational_ui(
                 "2026-08-31T12:00:00Z",
                 "--timeout-seconds",
                 "5",
+                "--completion-timeout-seconds",
+                "10",
             ],
             cwd=Path.cwd(),
             env=simulator_environment,
@@ -98,7 +100,10 @@ async def test_external_simulator_updates_the_complete_operational_ui(
             check=False,
         )
         assert completed.returncode == 0, completed.stderr or completed.stdout
-        observations = [json.loads(line) for line in completed.stdout.splitlines()]
+        records = [json.loads(line) for line in completed.stdout.splitlines()]
+        accepted = [item for item in records if item.get("phase") == "accepted"]
+        assert len(accepted) == 4
+        observations = [item for item in records if item.get("phase") != "accepted"]
         assert len(observations) == 4
         assert [item["result"] for item in observations] == ["APPLIED"] * 4
         assert all(item["success"] is True for item in observations)
@@ -168,6 +173,7 @@ async def _live_application(settings: Settings, tracking: Settings) -> AsyncIter
                 settings.carrier_beta_webhook_secret.get_secret_value()
             ),
             "PYTHONUNBUFFERED": "1",
+            "AMQP_URL": os.environ["TEST_AMQP_URL"],
         }
     )
     tracking_environment = dict(environment)
@@ -187,23 +193,44 @@ async def _live_application(settings: Settings, tracking: Settings) -> AsyncIter
             process = await asyncio.to_thread(_start_application, env)
             processes.append(process)
             await _wait_until_ready(process, url)
-        yield base_url
+        for env in (environment, tracking_environment):
+            processes.append(
+                await asyncio.to_thread(
+                    _start_application, env, f"fulfillflow.{env['SERVICE_ROLE']}.worker"
+                )
+            )
+        try:
+            yield base_url
+        except BaseException:
+            for process in reversed(processes):
+                if process.poll() is None:
+                    process.terminate()
+                _stdout, stderr = await asyncio.to_thread(process.communicate, timeout=10)
+                print("Process diagnostic:", stderr[-3000:])
+            raise
     finally:
         for process in reversed(processes):
             await asyncio.to_thread(_stop_application, process)
 
 
-def _start_application(environment: Mapping[str, str]) -> subprocess.Popen[str]:
+def _start_application(
+    environment: Mapping[str, str], module: str | None = None
+) -> subprocess.Popen[str]:
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     return subprocess.Popen(
         [
             sys.executable,
             "-m",
-            "fulfillflow.tracking" if environment["SERVICE_ROLE"] == "tracking" else "fulfillflow",
+            module
+            or (
+                "fulfillflow.tracking"
+                if environment["SERVICE_ROLE"] == "tracking"
+                else "fulfillflow"
+            ),
         ],
         cwd=Path.cwd(),
         env=dict(environment),
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
         creationflags=creation_flags,

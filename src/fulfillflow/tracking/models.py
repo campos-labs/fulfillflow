@@ -67,6 +67,8 @@ class CarrierEventInboxModel(TrackingBase):
     )
     request_id: Mapped[UUID] = mapped_column(nullable=False)
     command: Mapped[dict[str, JsonValue] | None] = mapped_column(JSONB, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[dict[str, JsonValue] | None] = mapped_column(JSONB, nullable=True)
 
 
 Index(

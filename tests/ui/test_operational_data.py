@@ -13,6 +13,7 @@ from fulfillflow.notifications.public import (
     ExpectedNotificationFailure,
     NotificationsPublic,
 )
+from tests.async_flow import drain
 from tests.support import FixedClock
 from tests.ui.support import (
     confirm_order,
@@ -26,6 +27,7 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     ui_client: AsyncClient,
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
 ) -> None:
     malicious = '<img src=x onerror="alert(1)">'
@@ -64,9 +66,13 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
             description=description,
             extra={"unboundedExternalField": raw_only},
         )
-        assert response.status_code == 200, response.text
-        assert response.json()["result"] == expected
-        outcomes.append(response.json())
+        assert response.status_code == 202, response.text
+        pending = await ui_client.get(f"/carrier-events/{response.json()['inbox_event_id']}")
+        assert 'hx-trigger="every 1s"' in pending.text
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
+        detail = (await ui_client.get(response.headers["location"])).json()
+        assert detail["result"]["result"] == expected
+        outcomes.append(dict(detail, inbox_event_id=detail["id"]))
 
     def fail_renderer(resulting_status: str) -> None:
         del resulting_status
@@ -155,6 +161,6 @@ async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(
         occurred_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert "set-cookie" not in response.headers
     assert "fulfillflow_session" not in ui_client.cookies

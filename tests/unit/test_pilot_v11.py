@@ -209,8 +209,14 @@ def test_json_stdin_preserves_unicode_quotes_and_backslashes(monkeypatch):
     assert str(received[0][0][1]) == options["destination"]
 
 
-@pytest.mark.parametrize("failure", ["dirty", "checksum", "preexisting"])
+@pytest.mark.parametrize("failure", ["dirty", "checksum", "preexisting", "release"])
 def test_preflight_blocks_before_images_or_host(candidate, tmp_path, monkeypatch, failure):
+    # This frozen pilot contract must remain v1.1 even when checkout metadata moves on.
+    monkeypatch.setattr(
+        pilot.runner,
+        "_project_release",
+        lambda _: "v1.2.0.dev0" if failure == "release" else "v1.1.0",
+    )
     document = pilot.pilot_document(candidate, tmp_path / "attempt")
     write_report(
         candidate.parent / "SHA256SUMS.json",

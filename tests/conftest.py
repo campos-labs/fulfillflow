@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+import aio_pika
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -16,6 +17,7 @@ from sqlalchemy import text
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
+from fulfillflow.messaging.amqp import declare_flow
 from tests.support import FixedClock
 
 
@@ -81,6 +83,16 @@ async def postgres_database(
     """Yield a real database with business tables emptied in FK-safe order."""
     database = Database.from_settings(postgres_settings)
     await _clear_business_rows(database)
+    # Tests own this vhost. A prior crash may leave confirmed transport duplicates
+    # after its database fixture was cleared; each case starts with empty flows.
+    if url := os.environ.get("TEST_AMQP_URL"):
+        connection = await aio_pika.connect(url, timeout=10)
+        async with connection:
+            channel = await connection.channel()
+            for flow in ("tracking.apply.v1", "tracking.result.v1"):
+                await declare_flow(channel, flow)
+                queue = await channel.get_queue(f"{flow}.queue")
+                await queue.purge()
     try:
         yield database
     finally:
@@ -103,6 +115,8 @@ async def carrier_id(postgres_database: Database) -> UUID:
 
 async def _clear_business_rows(database: Database) -> None:
     async with database.engine.begin() as connection:
+        for table in ("message_inbox", "message_outbox", "message_quarantine"):
+            await connection.execute(text(f"DELETE FROM {table}"))
         await connection.execute(text("DELETE FROM notifications"))
         await connection.execute(text("DELETE FROM tracking_event_receipts"))
         await connection.execute(text("DELETE FROM shipments"))
@@ -141,6 +155,8 @@ async def postgres_tracking_database(
 
     async def clear() -> None:
         async with database.engine.begin() as connection:
+            for table in ("message_inbox", "message_outbox", "message_quarantine"):
+                await connection.execute(text(f"DELETE FROM {table}"))
             await connection.execute(text("DELETE FROM tracking_events"))
             await connection.execute(text("DELETE FROM carrier_event_inbox"))
 

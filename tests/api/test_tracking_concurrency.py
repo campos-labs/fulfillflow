@@ -1,4 +1,4 @@
-"""Deterministic HTTP concurrency proofs for the synchronous Tracking pipeline."""
+"""PostgreSQL contention proofs for admission and local command/result application."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from tests.async_flow import drain
 from tests.distributed_state import event_state
 from tests.service_pair import create_app
 from tests.support import (
@@ -26,12 +26,15 @@ from tests.support import (
 
 import fulfillflow.tracking.service as tracking_service_module
 from fulfillflow.config import Settings
+from fulfillflow.contracts.messages import decode_message
+from fulfillflow.core.message_handler import apply_command
 from fulfillflow.db import Database
 from fulfillflow.orders.public import Order, OrderStatus
 from fulfillflow.orders.repository import OrderRepository
 from fulfillflow.shipments.public import Shipment
 from fulfillflow.shipments.repository import ShipmentRepository
-from fulfillflow.tracking.domain import CarrierEventInbox, TrackingEvent
+from fulfillflow.tracking.domain import CarrierEventInbox
+from fulfillflow.tracking.message_handler import apply_result
 from fulfillflow.tracking.public import calculate_signature
 from fulfillflow.tracking.repository import TrackingRepository
 
@@ -370,6 +373,7 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                     ),
                 )
             )
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
             state = await event_state(
                 postgres_database,
                 postgres_tracking_database,
@@ -377,16 +381,8 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                 event_id=event_id,
             )
 
-    assert {first.status_code, second.status_code} == {200}
-    assert {first.json()["result"], second.json()["result"]} == {
-        "APPLIED",
-        "DUPLICATE",
-    }
-    duplicate = second if second.json()["result"] == "DUPLICATE" else first
-    applied = first if first.json()["result"] == "APPLIED" else second
-    assert duplicate.json()["original_result"] == "APPLIED"
-    assert duplicate.json()["inbox_event_id"] == applied.json()["inbox_event_id"]
-    assert duplicate.json()["tracking_event_id"] == applied.json()["tracking_event_id"]
+    assert first.status_code == second.status_code == 202
+    assert first.json()["inbox_event_id"] == second.json()["inbox_event_id"]
     assert state.inbox_count == 1
     assert state.tracking_count == 1
     assert state.notification_count == 1
@@ -453,6 +449,7 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
                     ),
                 )
             )
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
             state = await event_state(
                 postgres_database,
                 postgres_tracking_database,
@@ -460,8 +457,7 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
                 event_id=event_id,
             )
 
-    assert winner.status_code == 200
-    assert winner.json()["result"] == "APPLIED"
+    assert winner.status_code == 202
     _assert_problem(loser, status_code=409, code="EVENT_ID_PAYLOAD_CONFLICT")
     assert state.inbox_count == 1
     assert state.tracking_count == 1
@@ -474,123 +470,51 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
     assert state.order_status == "CONFIRMED"
 
 
-async def test_two_concurrent_resumptions_finalize_received_inbox_without_reapplying_core(
-    postgres_settings: Settings,
-    postgres_database: Database,
-    postgres_tracking_database: Database,
-    fixed_clock: FixedClock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_two_concurrent_results_finalize_one_inbox_without_repeating_core(
+    postgres_settings,
+    postgres_database,
+    postgres_tracking_database,
+    fixed_clock,
+    monkeypatch,
+):
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
-    event_id = "concurrent-resume"
-    tracking_code = "CONCURRENT-RESUME"
-    raw_body = _alpha_body(event_id, tracking_code, status="DELIVERED")
-    original_add_tracking = TrackingRepository.add_tracking_event
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
+    ):
+        await _create_order_with_shipments(
+            client, reference="RESULT-RACE", shipments=(("carrier-alpha", "RESULT-RACE"),)
+        )
+        accepted = await _post_event(
+            client,
+            postgres_settings,
+            fixed_clock,
+            carrier_code="carrier-alpha",
+            event_id="result-race",
+            raw_body=_alpha_body("result-race", "RESULT-RACE"),
+        )
+        assert accepted.status_code == 202
+        async with postgres_tracking_database.session() as session:
+            command = decode_message(await session.scalar(text("SELECT body FROM message_outbox")))
+        async with postgres_database.session() as session, session.begin():
+            await apply_command(session, command, fixed_clock)
+        async with postgres_database.session() as session:
+            result = decode_message(await session.scalar(text("SELECT body FROM message_outbox")))
+        probe = ContentionProbe()
+        _hold_first_inbox_lock(monkeypatch, probe)
 
-    async def fail_after_tracking_flush(
-        repository: TrackingRepository,
-        event: TrackingEvent,
-    ) -> None:
-        await original_add_tracking(repository, event)
-        raise SQLAlchemyError("injected Transaction B failure")
+        async def finalize():
+            async with postgres_tracking_database.session() as session, session.begin():
+                await apply_result(session, result, fixed_clock)
 
-    async with app.router.lifespan_context(app):
-        async with (
-            AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://first.test",
-            ) as first_client,
-            AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://second.test",
-            ) as second_client,
-        ):
-            _order_id, shipment_ids = await _create_order_with_shipments(
-                first_client,
-                reference="ORDER-CONCURRENT-RESUME",
-                shipments=(("carrier-alpha", tracking_code),),
-            )
-            shipment_id = shipment_ids[0]
-            monkeypatch.setattr(
-                TrackingRepository,
-                "add_tracking_event",
-                fail_after_tracking_flush,
-            )
-            failed = await _post_event(
-                first_client,
-                postgres_settings,
-                fixed_clock,
-                carrier_code="carrier-alpha",
-                event_id=event_id,
-                raw_body=raw_body,
-            )
-            rolled_back = await event_state(
-                postgres_database,
-                postgres_tracking_database,
-                shipment_id=shipment_id,
-                event_id=event_id,
-            )
-
-            monkeypatch.setattr(
-                TrackingRepository,
-                "add_tracking_event",
-                original_add_tracking,
-            )
-            probe = ContentionProbe()
-            _hold_first_inbox_lock(monkeypatch, probe)
-            first, second = _responses(
-                await run_with_proven_contention(
-                    postgres_database,
-                    probe,
-                    lambda: _post_event(
-                        first_client,
-                        postgres_settings,
-                        fixed_clock,
-                        carrier_code="carrier-alpha",
-                        event_id=event_id,
-                        raw_body=raw_body,
-                    ),
-                    lambda: _post_event(
-                        second_client,
-                        postgres_settings,
-                        fixed_clock,
-                        carrier_code="carrier-alpha",
-                        event_id=event_id,
-                        raw_body=raw_body,
-                    ),
-                )
-            )
-            final = await event_state(
-                postgres_database,
-                postgres_tracking_database,
-                shipment_id=shipment_id,
-                event_id=event_id,
-            )
-
-    _assert_problem(failed, status_code=503, code="DATABASE_UNAVAILABLE")
-    assert rolled_back.inbox_status == "RECEIVED"
-    assert bytes(rolled_back.raw_body) == raw_body
-    assert rolled_back.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
-    assert rolled_back.parsed_payload["eventId"] == event_id
-    assert rolled_back.tracking_count == 0
-    assert rolled_back.notification_count == rolled_back.receipt_count == 1
-    assert rolled_back.shipment_status == "DELIVERED"
-    assert rolled_back.order_status == "FULFILLED"
-    assert first.status_code == second.status_code == 200
-    assert first.json()["result"] == "APPLIED"
-    assert second.json()["result"] == "DUPLICATE"
-    assert second.json()["original_result"] == "APPLIED"
-    assert second.json()["inbox_event_id"] == first.json()["inbox_event_id"]
-    assert second.json()["tracking_event_id"] == first.json()["tracking_event_id"]
-    assert final.inbox_count == 1
-    assert final.tracking_count == 1
-    assert final.notification_count == 1
-    assert final.inbox_status == "PROCESSED"
-    assert bytes(final.raw_body) == raw_body
-    assert final.payload_sha256 == hashlib.sha256(raw_body).hexdigest()
-    assert final.parsed_payload["eventId"] == event_id
-    assert final.shipment_status == "DELIVERED"
-    assert final.order_status == "FULFILLED"
+        await run_with_proven_contention(postgres_tracking_database, probe, finalize, finalize)
+        detail = (await client.get(accepted.headers["location"])).json()
+        assert detail["progress"] == "COMPLETED"
+        async with postgres_tracking_database.session() as session:
+            assert await session.scalar(text("SELECT count(*) FROM tracking_events")) == 1
+        async with postgres_database.session() as session:
+            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert await session.scalar(text("SELECT count(*) FROM tracking_event_receipts")) == 1
 
 
 @pytest.mark.parametrize(
@@ -746,7 +670,9 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
 
             async def post_later_arrival() -> Response:
                 fixed_clock.current = initial_clock + second_clock_delta
-                return await _post_event(
+                return await _post_apply_and_observe(
+                    postgres_database,
+                    postgres_tracking_database,
                     second_client,
                     postgres_settings,
                     fixed_clock,
@@ -759,7 +685,9 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                 await run_with_proven_contention(
                     postgres_database,
                     probe,
-                    lambda: _post_event(
+                    lambda: _post_apply_and_observe(
+                        postgres_database,
+                        postgres_tracking_database,
                         first_client,
                         postgres_settings,
                         fixed_clock,
@@ -805,9 +733,9 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                 )
 
     assert first.status_code == second.status_code == 200
-    assert first.json()["result"] == expected_first_result
-    assert second.json()["result"] == expected_second_result
-    assert second.json()["current_status"] == expected_shipment_status
+    assert first.json()["result"]["result"] == expected_first_result
+    assert second.json()["result"]["result"] == expected_second_result
+    assert second.json()["result"]["current_status"] == expected_shipment_status
     assert shipment_state.status == expected_shipment_status
     assert shipment_state.order_status == expected_order_status
     assert shipment_state.status_external_event_id == expected_winner_event_id
@@ -958,7 +886,9 @@ async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_loca
                 await run_with_proven_contention(
                     postgres_database,
                     probe,
-                    lambda: _post_event(
+                    lambda: _post_apply_and_observe(
+                        postgres_database,
+                        postgres_tracking_database,
                         first_client,
                         postgres_settings,
                         fixed_clock,
@@ -970,7 +900,9 @@ async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_loca
                             status="DELIVERED",
                         ),
                     ),
-                    lambda: _post_event(
+                    lambda: _post_apply_and_observe(
+                        postgres_database,
+                        postgres_tracking_database,
                         second_client,
                         postgres_settings,
                         fixed_clock,
@@ -1020,8 +952,12 @@ async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_loca
                 ).all()
 
     assert first.status_code == second.status_code == 200
-    assert first.json()["result"] == second.json()["result"] == "APPLIED"
-    assert first.json()["current_status"] == second.json()["current_status"] == "DELIVERED"
+    assert first.json()["result"]["result"] == second.json()["result"]["result"] == "APPLIED"
+    assert (
+        first.json()["result"]["current_status"]
+        == second.json()["result"]["current_status"]
+        == "DELIVERED"
+    )
     first_pid = probe.first_pid.result()
     second_pid = probe.second_pid.result()
     assert first_pid != second_pid
@@ -1030,7 +966,7 @@ async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_loca
     tracking_steps = [
         steps for pid, steps in lock_steps.items() if pid not in {first_pid, second_pid}
     ]
-    assert sum(len(steps) for steps in tracking_steps) == 4
+    assert sum(len(steps) for steps in tracking_steps) == 2
     assert all(set(steps) == {"inbox"} for steps in tracking_steps)
     assert fulfillment_writes == [order_id]
     assert order_status == "FULFILLED"
@@ -1321,6 +1257,7 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
                 ),
                 timeout=10,
             )
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
             async with postgres_tracking_database.session() as session:
                 inboxes = (
                     await session.execute(
@@ -1351,8 +1288,7 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
                     )
                 ).all()
 
-    assert alpha.status_code == beta.status_code == 200
-    assert alpha.json()["result"] == beta.json()["result"] == "APPLIED"
+    assert alpha.status_code == beta.status_code == 202
     assert len(backend_pids) == 2
     assert len(set(backend_pids)) == 2
     assert len(inboxes) == 2
@@ -1365,3 +1301,31 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
     order_by_id = {row.id: row.status for row in order_states}
     assert order_by_id[alpha_order_id] == "CONFIRMED"
     assert order_by_id[beta_order_id] == "FULFILLED"
+
+
+async def _post_apply_and_observe(core, tracking, client, settings, fixed_clock, **kwargs):
+    """Exercise application lock ordering with independently scoped local transactions.
+
+    Transport/technical-inbox commits are covered separately; this helper controls
+    the business application order to prove contention with PostgreSQL locks.
+    """
+    accepted = await _post_event(client, settings, fixed_clock, **kwargs)
+    assert accepted.status_code == 202, accepted.text
+    async with tracking.session() as session:
+        command = decode_message(
+            await session.scalar(
+                text("SELECT body FROM message_outbox WHERE correlation_id=:id"),
+                {"id": UUID(accepted.json()["inbox_event_id"])},
+            )
+        )
+    async with core.session() as session, session.begin():
+        await apply_command(session, command, fixed_clock)
+    async with core.session() as session:
+        result = decode_message(
+            await session.scalar(
+                text("SELECT body FROM message_outbox WHERE event_id=:id"), {"id": command.event_id}
+            )
+        )
+    async with tracking.session() as session, session.begin():
+        await apply_result(session, result, fixed_clock)
+    return await client.get(accepted.headers["location"])

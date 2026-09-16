@@ -93,5 +93,12 @@ async def forward_tracking(request: Request) -> Response:
     return Response(
         content=result.content,
         status_code=result.status_code,
-        headers={"Content-Type": content_type},
+        headers={
+            "Content-Type": content_type,
+            **{
+                key: result.headers[key]
+                for key in ("Location", "Retry-After")
+                if key in result.headers
+            },
+        },
     )

@@ -11,13 +11,14 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from tests.async_flow import drain
 from tests.distributed_state import event_state
 from tests.service_pair import create_app
 from tests.support import FixedClock
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
+from fulfillflow.messaging.store import RetryableItemError
 from fulfillflow.notifications import domain as notification_domain
 from fulfillflow.notifications.public import NotificationsPublic
 from fulfillflow.shipments.public import ShipmentReceipts, ShipmentsPublic
@@ -154,7 +155,9 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
                 carrier_code="carrier-alpha",
                 tracking_code="ALPHA-RAW-0001",
             )
-            applied = await _post_event(
+            applied = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -193,7 +196,7 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
                     "external_event_id": "alpha-api-0001",
                 },
             )
-            detail = await client.get(f"/api/v1/carrier-events/{applied.json()['inbox_event_id']}")
+            detail = await client.get(f"/api/v1/carrier-events/{applied.json()['id']}")
             async with postgres_tracking_database.session() as session:
                 stored = (
                     await session.execute(
@@ -201,7 +204,7 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
                             "SELECT raw_body, parsed_payload FROM carrier_event_inbox "
                             "WHERE id = :id"
                         ),
-                        {"id": UUID(applied.json()["inbox_event_id"])},
+                        {"id": UUID(applied.json()["id"])},
                     )
                 ).one()
                 counts = (
@@ -223,13 +226,13 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
     assert applied.status_code == 200
     assert applied.headers["X-Request-ID"] == request_id
     assert applied.json()["request_id"] == request_id
-    assert applied.json()["result"] == "APPLIED"
-    assert applied.json()["previous_status"] == "PENDING"
-    assert applied.json()["current_status"] == "IN_TRANSIT"
+    assert applied.json()["result"]["result"] == "APPLIED"
+    assert applied.json()["result"]["previous_status"] == "PENDING"
+    assert applied.json()["result"]["current_status"] == "IN_TRANSIT"
     assert duplicate.status_code == 200
     assert duplicate.json()["result"] == "DUPLICATE"
     assert duplicate.json()["original_result"] == "APPLIED"
-    assert duplicate.json()["inbox_event_id"] == applied.json()["inbox_event_id"]
+    assert duplicate.json()["inbox_event_id"] == applied.json()["id"]
     assert duplicate.json()["tracking_event_id"] == applied.json()["tracking_event_id"]
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "EVENT_ID_PAYLOAD_CONFLICT"
@@ -322,7 +325,9 @@ async def test_beta_webhook_uses_its_own_schema_secret_and_location_projection(
                 raw_body=raw_body,
                 secret=postgres_settings.carrier_alpha_webhook_secret.get_secret_value(),
             )
-            applied = await _post_event(
+            applied = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -331,13 +336,13 @@ async def test_beta_webhook_uses_its_own_schema_secret_and_location_projection(
                 raw_body=raw_body,
             )
             timeline = await client.get(f"/api/v1/shipments/{shipment_id}/tracking")
-            detail = await client.get(f"/api/v1/carrier-events/{applied.json()['inbox_event_id']}")
+            detail = await client.get(f"/api/v1/carrier-events/{applied.json()['id']}")
 
     assert wrong_secret.status_code == 401
     assert wrong_secret.json()["code"] == "INVALID_WEBHOOK_SIGNATURE"
     assert applied.status_code == 200
-    assert applied.json()["result"] == "APPLIED"
-    assert applied.json()["current_status"] == "IN_TRANSIT"
+    assert applied.json()["result"]["result"] == "APPLIED"
+    assert applied.json()["result"]["current_status"] == "IN_TRANSIT"
     assert timeline.json()["items"][0]["location"] == "São Paulo, SP"
     assert timeline.json()["items"][0]["description"] == ("Recebido no centro de distribuição")
     assert detail.status_code == 200
@@ -416,6 +421,10 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
                 )
                 for event_id, raw_body, _, _ in cases
             ]
+            assert responses[3].status_code == 202
+            await drain(postgres_database, postgres_tracking_database, fixed_clock)
+            domain_rejection = await client.get(responses[3].headers["location"])
+            assert domain_rejection.json()["result"]["code"] == "SHIPMENT_NOT_FOUND_FOR_TRACKING"
             repeated = await _post_event(
                 client,
                 postgres_settings,
@@ -439,8 +448,10 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
                     text("SELECT count(*) FROM notifications")
                 )
 
-    assert [response.status_code for response in responses] == [422] * len(cases)
-    assert [response.json()["code"] for response in responses] == [case[2] for case in cases]
+    assert [response.status_code for response in responses] == [422, 422, 422, 202, 422]
+    assert [r.json()["code"] for r in responses if r.status_code == 422] == [
+        case[2] for case in cases if case[0] != "missing-tracking"
+    ]
     assert repeated.status_code == 422
     assert repeated.json()["code"] == "UNKNOWN_EXTERNAL_STATUS"
     assert len(rows) == len(cases)
@@ -705,7 +716,9 @@ async def test_local_commits_follow_the_design_persistence_order(
                 complete_order,
             )
             monkeypatch.setattr(TrackingRepository, "save_inbox", save_inbox)
-            response = await _post_event(
+            response = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -719,9 +732,9 @@ async def test_local_commits_follow_the_design_persistence_order(
             )
 
     assert response.status_code == 200
-    assert response.json()["result"] == "APPLIED"
+    assert response.json()["result"]["result"] == "APPLIED"
     assert steps == [
-        "inbox-flushed",  # Persist the immutable command before HTTP.
+        "inbox-flushed",  # Admission saves command before any publication.
         "shipment-flushed",
         "notification-flushed",
         "order-evaluated-after-lock",
@@ -731,10 +744,10 @@ async def test_local_commits_follow_the_design_persistence_order(
 
 
 @pytest.mark.parametrize(
-    ("injected_error", "expected_status", "expected_code"),
+    ("injected_error", "technical_state"),
     [
-        (SQLAlchemyError("injected persistence failure"), 503, "DATABASE_UNAVAILABLE"),
-        (RuntimeError("injected unexpected failure"), 500, "INTERNAL_ERROR"),
+        (RetryableItemError("injected transient item failure"), "RETRY_WAIT"),
+        (RuntimeError("injected unexpected failure"), "BLOCKED"),
     ],
     ids=["infrastructure", "unexpected-application"],
 )
@@ -745,8 +758,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
     injected_error: Exception,
-    expected_status: int,
-    expected_code: str,
+    technical_state: str,
 ) -> None:
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
     event_id = "resume-after-rollback"
@@ -797,6 +809,8 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             event_id=event_id,
             raw_body=raw_body,
         )
+        assert failed.status_code == 202
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
         rolled_back = await event_state(
             postgres_database,
             postgres_tracking_database,
@@ -804,6 +818,17 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             event_id=event_id,
         )
         monkeypatch.setattr(ShipmentReceipts, "finalize", original_finalize)
+        async with postgres_database.session() as session:
+            assert await session.scalar(text("SELECT state FROM message_inbox")) == technical_state
+        fixed_clock.current += timedelta(seconds=2)
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
+        if technical_state == "BLOCKED":
+            assert rolled_back.receipt_count == rolled_back.notification_count == 0
+            assert rolled_back.inbox_status == "RECEIVED"
+            assert rolled_back.shipment_status == "PENDING"
+            async with postgres_database.session() as session:
+                assert await session.scalar(text("SELECT state FROM message_inbox")) == "BLOCKED"
+            return
         resumed = await _post_event(
             client,
             postgres_settings,
@@ -819,8 +844,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             event_id=event_id,
         )
     assert fully_flushed
-    assert failed.status_code == expected_status
-    assert failed.json()["code"] == expected_code
+    assert failed.status_code == 202
     assert rolled_back.inbox_count == 1
     assert rolled_back.inbox_status == "RECEIVED"
     assert bytes(rolled_back.raw_body) == raw_body
@@ -833,7 +857,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
     assert rolled_back.shipment_status == "PENDING"
     assert rolled_back.order_status == "CONFIRMED"
     assert resumed.status_code == 200
-    assert resumed.json()["result"] == "APPLIED"
+    assert resumed.json()["result"] == "DUPLICATE"
     assert resumed.json()["current_status"] == "DELIVERED"
     assert (
         final.inbox_count
@@ -870,7 +894,9 @@ async def test_expected_notification_failure_is_recorded_without_rolling_back_tr
                 carrier_code="carrier-alpha",
                 tracking_code=tracking_code,
             )
-            response = await _post_event(
+            response = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -890,8 +916,8 @@ async def test_expected_notification_failure_is_recorded_without_rolling_back_tr
             )
 
     assert response.status_code == 200
-    assert response.json()["result"] == "APPLIED"
-    assert response.json()["shipment_id"] == shipment_id
+    assert response.json()["result"]["result"] == "APPLIED"
+    assert response.json()["result"]["shipment_id"] == shipment_id
     assert state.inbox_status == "PROCESSED"
     assert state.application_result == "APPLIED"
     assert state.notification_status == "FAILED"
@@ -939,7 +965,9 @@ async def test_same_tracking_code_is_isolated_by_carrier(
                 carrier_code="carrier-beta",
                 tracking_code=tracking_code,
             )
-            alpha_response = await _post_event(
+            alpha_response = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -947,7 +975,9 @@ async def test_same_tracking_code_is_isolated_by_carrier(
                 event_id="alpha-shared-code",
                 raw_body=_alpha_body("alpha-shared-code", tracking_code),
             )
-            beta_response = await _post_event(
+            beta_response = await _post_and_observe(
+                postgres_database,
+                postgres_tracking_database,
                 client,
                 postgres_settings,
                 fixed_clock,
@@ -959,8 +989,8 @@ async def test_same_tracking_code_is_isolated_by_carrier(
             beta_read = await client.get(f"/api/v1/shipments/{beta_shipment}")
 
     assert alpha_response.status_code == beta_response.status_code == 200
-    assert alpha_response.json()["shipment_id"] == alpha_shipment
-    assert beta_response.json()["shipment_id"] == beta_shipment
+    assert alpha_response.json()["result"]["shipment_id"] == alpha_shipment
+    assert beta_response.json()["result"]["shipment_id"] == beta_shipment
     assert alpha_read.json()["status"] == "IN_TRANSIT"
     assert beta_read.json()["status"] == "DELIVERED"
 
@@ -997,7 +1027,9 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
                 tracking_code="STATE-RESULTS",
             )
             responses = [
-                await _post_event(
+                await _post_and_observe(
+                    postgres_database,
+                    postgres_tracking_database,
                     client,
                     postgres_settings,
                     fixed_clock,
@@ -1035,11 +1067,11 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
                 )
 
     assert [response.status_code for response in responses] == [200] * len(events)
-    assert [response.json()["result"] for response in responses] == [
+    assert [response.json()["result"]["result"] for response in responses] == [
         expected for *_, expected in events
     ]
-    assert responses[2].json()["current_status"] == "POSTED"
-    assert responses[4].json()["current_status"] == "DELIVERED"
+    assert responses[2].json()["result"]["current_status"] == "POSTED"
+    assert responses[4].json()["result"]["current_status"] == "DELIVERED"
     assert shipment.json()["status"] == "DELIVERED"
     assert timeline.json()["total"] == 5
     assert len(timeline.json()["items"]) == 3
@@ -1069,3 +1101,16 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
         for response, event_spec in zip(responses, events, strict=True)
         if event_spec[3] == "APPLIED"
     }
+
+
+async def _post_and_observe(core, tracking, client, settings, fixed_clock, **kwargs):
+    accepted = await _post_event(client, settings, fixed_clock, **kwargs)
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json()["status"] == "RECEIVED"
+    await drain(core, tracking, fixed_clock)
+    detail = await client.get(
+        accepted.headers["location"], headers={"X-Request-ID": accepted.headers["X-Request-ID"]}
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["progress"] == "COMPLETED", detail.text
+    return detail

@@ -37,7 +37,8 @@ for source in (Base.metadata, TrackingBase.metadata):
 # Remove only the new field from the cloned model. Do not filter reflected database
 # objects: Alembic must still detect an unexpected column in a historical database.
 legacy_inbox = target_metadata.tables["carrier_event_inbox"]
-legacy_inbox._columns.remove(legacy_inbox.c.command)
+for new_column in ("command", "completed_at", "result"):
+    legacy_inbox._columns.remove(legacy_inbox.c[new_column])
 for table_name, column, target, constraint in (
     (
         "carrier_event_inbox",

@@ -17,6 +17,7 @@ from fulfillflow.contracts.tracking import (
     CarrierEventList,
     CarrierEventRead,
     TrackingEventList,
+    WebhookAccepted,
     WebhookResponse,
 )
 from fulfillflow.contracts.values import InboxStatus
@@ -239,7 +240,12 @@ async def get_shipment_tracking(
     return await forward_tracking(request)
 
 
-@router.post("/carriers/{carrier_code}/events", response_model=WebhookResponse, tags=["tracking"])
+@router.post(
+    "/carriers/{carrier_code}/events",
+    response_model=WebhookResponse,
+    responses={202: {"model": WebhookAccepted}},
+    tags=["tracking"],
+)
 async def receive_carrier_event(carrier_code: str, request: Request) -> Response:
     return await forward_tracking(request)
 

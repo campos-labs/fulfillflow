@@ -787,3 +787,168 @@ def _response_sequence(payloads: list[object]) -> Any:
         return FakeResponse(status, body)
 
     return opener
+
+
+def test_async_polling_uses_same_origin_without_forwarding_hmac_and_closes_responses():
+    from uuid import uuid4
+
+    plan = simulator.build_scenario(
+        _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+        signed_timestamp=SIGNED_TIMESTAMP,
+    )
+    identifier = str(uuid4())
+    accepted = simulator.HttpResult(
+        202, {"inbox_event_id": identifier}, f"/api/v1/carrier-events/{identifier}"
+    )
+    responses = [
+        FakeResponse(200, {"id": identifier, "status": "RECEIVED"}),
+        FakeResponse(
+            200,
+            {
+                "id": identifier,
+                "status": "PROCESSED",
+                "result": {"result": "APPLIED", "current_status": "POSTED"},
+            },
+        ),
+    ]
+    pending = list(responses)
+    clock = [0.0]
+
+    def opener(request, *, timeout):
+        assert request.full_url == f"http://127.0.0.1:8000{accepted.location}"
+        assert request.method == "GET"
+        assert request.header_items() == []
+        assert 0 < timeout <= 2
+        return pending.pop(0)
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    result = simulator.observe_completion(
+        plan.steps[0].artifact,
+        accepted,
+        timeout=2,
+        completion_timeout=5,
+        opener=opener,
+        monotonic=lambda: clock[0],
+        sleep=sleep,
+    )
+    assert result.payload["result"] == "APPLIED"
+    assert result.payload["external_event_id"] == plan.steps[0].artifact.event_id
+    assert all(response.closed for response in responses)
+
+
+@pytest.mark.parametrize("failure", ["pending", "http", "network"])
+def test_observation_timeout_never_reports_business_rejection(failure):
+    from uuid import uuid4
+
+    identifier = str(uuid4())
+    artifact = (
+        simulator.build_scenario(
+            _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+            signed_timestamp=SIGNED_TIMESTAMP,
+        )
+        .steps[0]
+        .artifact
+    )
+    accepted = simulator.HttpResult(
+        202, {"inbox_event_id": identifier}, f"/api/v1/carrier-events/{identifier}"
+    )
+    clock = [0.0]
+    calls = []
+    errors = []
+
+    def opener(request, *, timeout):
+        calls.append(timeout)
+        if failure == "network":
+            raise URLError("unavailable")
+        if failure == "http":
+            body = io.BytesIO(b"{}")
+            errors.append(body)
+            raise HTTPError(request.full_url, 503, "unavailable", {}, body)
+        return FakeResponse(200, {"id": identifier, "status": "RECEIVED"})
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    with pytest.raises(simulator.SimulatorObservationTimeoutError) as error:
+        simulator.observe_completion(
+            artifact,
+            accepted,
+            timeout=2,
+            completion_timeout=3,
+            opener=opener,
+            monotonic=lambda: clock[0],
+            sleep=sleep,
+        )
+    assert error.value.code == "RESULT_NOT_OBSERVED"
+    assert len(calls) == 3
+    assert all(body.closed for body in errors)
+    assert accepted.status == 202
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["https://evil.test/result", "/api/v1/carrier-events/wrong", "//evil.test/result", None],
+)
+def test_acceptance_location_must_match_original_inbox(location):
+    from uuid import uuid4
+
+    artifact = (
+        simulator.build_scenario(
+            _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+            signed_timestamp=SIGNED_TIMESTAMP,
+        )
+        .steps[0]
+        .artifact
+    )
+    accepted = simulator.HttpResult(202, {"inbox_event_id": str(uuid4())}, location)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid Location must not cause a request")
+
+    with pytest.raises(simulator.SimulatorResponseError):
+        simulator.observe_completion(
+            artifact, accepted, timeout=1, completion_timeout=1, opener=forbidden
+        )
+
+
+def test_async_simulator_emits_acceptance_separately_from_completion():
+    from uuid import uuid4
+
+    plan = simulator.build_scenario(
+        _config(simulator.CARRIER_ALPHA, simulator.SCENARIO_VALID),
+        signed_timestamp=SIGNED_TIMESTAMP,
+    )
+    output = []
+    pending = {}
+
+    def opener(request, *, timeout):
+        if request.method == "POST":
+            step = plan.steps[len(pending)]
+            identifier = str(uuid4())
+            location = f"/api/v1/carrier-events/{identifier}"
+            pending[location] = (identifier, step)
+            response = FakeResponse(202, {"inbox_event_id": identifier})
+            response.headers = {"Location": location}
+            return response
+        identifier, step = pending[request.selector]
+        return FakeResponse(
+            200,
+            {
+                "id": identifier,
+                "status": "PROCESSED",
+                "result": {
+                    "result": step.expected.result,
+                    "previous_status": step.expected.previous_status,
+                    "current_status": step.expected.current_status,
+                },
+            },
+        )
+
+    assert simulator.run_scenario(plan, timeout=1, opener=opener, emit=output.append)
+    records = [json.loads(line) for line in output]
+    assert len(records) == 8
+    assert [item["http_status"] for item in records] == [202, 200] * 4
+    assert all(records[i]["phase"] == "accepted" for i in range(0, 8, 2))
+    assert all(records[i]["success"] for i in range(1, 8, 2))

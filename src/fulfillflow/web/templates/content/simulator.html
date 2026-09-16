@@ -1,4 +1,5 @@
 <div class="mb-3"><h1 class="h2 mb-1">External Carrier simulator</h1><p class="text-body-secondary mb-0">This page is instructional. It does not execute the simulator or receive secrets.</p></div>
+<p class="alert alert-info">HTTP 202 means durable acceptance. The simulator polls for completion for up to 30 seconds; an observation timeout does not mean rejection or loss. Use --completion-timeout-seconds to change this limit, or --mode synchronous for frozen v1.1 images.</p>
 <div class="row g-3 mb-3"><div class="col-lg-6"><section class="card h-100 shadow-sm"><div class="card-header"><h2 class="h5 mb-0">Carrier Alpha</h2></div><div class="card-body"><p><code>carrier-alpha</code> uses its own synthetic environment secret.</p><pre><code>$env:CARRIER_ALPHA_WEBHOOK_SECRET="&lt;set-locally&gt;"
 uv run python scripts/simulate_carrier_events.py `
   --base-url http://127.0.0.1:8000 `

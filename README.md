@@ -1,25 +1,21 @@
 # FulfillFlow
 
-FulfillFlow gerencia pedidos, remessas e eventos de transportadoras simuladas com
-FastAPI, PostgreSQL 18, API JSON e interface operacional renderizada no servidor.
+Checkout de desenvolvimento **v1.2.0.dev0**, na linha de Tracking assíncrono.
+O [DESIGN](DESIGN.md) define os contratos e o [RELEASE_PLAN](RELEASE_PLAN.md)
+registra o aceite dos incrementos. As referências `v1.0.0` e `v1.1.0-rc.1`
+e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
 
-Esta branch prepara a v1.2 assíncrona. O [DESIGN](DESIGN.md) descreve o alvo e o
-[plano de entrega](RELEASE_PLAN.md) registra os incrementos ainda não implementados.
-Os comandos e o comportamento abaixo continuam correspondendo à base síncrona
-`v1.1.0-rc.1` até a ativação do novo fluxo.
+Core mantém Orders, Shipments, Notifications e Carriers. Tracking mantém HMAC,
+adapters Alpha/Beta, inbox e timeline. Cada serviço possui banco, role e worker
+próprios. Core continua sendo a entrada pública e serve a interface.
 
-A v1.1 implementa Core + Tracking, com bancos, credenciais e migrações separados.
-Core mantém Orders, Shipments, Notifications e o cadastro de Carriers; Tracking
-mantém autenticação HMAC, adapters Alpha/Beta, inbox e timeline. A entrada pública
-e a interface permanecem no Core.
-
-O processamento dos webhooks é síncrono. Recibos idempotentes no Core preservam os
-resultados e impedem duplicação de efeitos na reentrega idêntica. A recuperação de
-inboxes pendentes depende de reentrega; não há atomicidade global entre serviços.
-
-Os incrementos funcionais I e II estão concluídos. A comparação de desempenho e a
-release v1.1 permanecem pendentes; as campanhas estão suspensas. A v1.0.0 publicada
-continua preservada em sua tag.
+Eventos novos recebem **202 após admissão durável**, com inbox, comando e outbox
+Tracking gravados juntos. O worker publica `tracking.apply.v1` pelo RabbitMQ.
+Core grava recibo, efeitos e outbox `tracking.result.v1` na mesma transação local;
+Tracking finaliza a timeline e o inbox ao processar esse resultado. Publicação e
+ACK ocorrem fora da transação SQL. Não há atomicidade global nem exactly-once.
+O endpoint e o cliente internos de apply HTTP foram removidos; consultas e
+encaminhamento autenticados continuam HTTP.
 
 ## Subida local com Docker Compose
 
@@ -29,17 +25,22 @@ O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 docker compose up --build --wait
 ```
 
-O projeto padrão `fulfillflow-v11` cria um volume próprio, sem reutilizar o volume
-do monólito. PostgreSQL inicializa `fulfillflow_core` e `fulfillflow_tracking`, com
-roles distintas sem CONNECT ao banco do outro serviço. `migrate-core` e
-`migrate-tracking` aplicam seus respectivos heads antes de `core` e `tracking`
-iniciarem. Somente Core publica `127.0.0.1:8000`; Tracking e PostgreSQL ficam na
-rede interna. Cada aplicação usa um worker, 1 CPU, 768 MiB e pool de 5 conexões
-sem overflow. PostgreSQL recebe 2 CPUs e 2560 MiB.
+O projeto padrão `fulfillflow-v12` cria volumes PostgreSQL e RabbitMQ novos.
+PostgreSQL inicializa `fulfillflow_core` e `fulfillflow_tracking`, com roles sem
+CONNECT ao banco alheio. Os serviços `migrate-core` e `migrate-tracking` aplicam
+os heads antes dos processos. Somente Core publica `127.0.0.1:8000`; Tracking,
+workers, PostgreSQL e RabbitMQ ficam na rede interna. O broker usa um vhost e
+dois usuários com permissões separadas para os fluxos de comando e resultado.
 
-As migrações v1.1 destinam-se a bancos novos: não migram dados da v1.0 em uso.
-Os scripts Alembic históricos permanecem preservados. Não aponte os novos
-serviços para volumes ou bancos históricos.
+Cada API usa 0,5 CPU, 384 MiB e pool 2/0; cada worker, 0,5 CPU, 384 MiB e pool 3/0.
+PostgreSQL usa 2 CPUs/2560 MiB e RabbitMQ, 0,5 CPU/512 MiB. São parâmetros
+funcionais, sem alegação de equivalência de recursos com a v1.1. Workers usam
+prefetch 8, lote 20, polling 500 ms, lease 30 s e timeout de confirm 5 s.
+
+Health/readiness das APIs não comprovam conclusão do trabalho. Healthcheck,
+lifecycle operacional completo e rearme auditável dos workers pertencem ao
+incremento III; não se deve considerar esta etapa uma validação operacional final.
+Não aponte os serviços a bancos ou volumes históricos.
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8000/health/live
@@ -78,13 +79,37 @@ normalizado. Cada header autenticado deve ocorrer exatamente uma vez, e o event
 ID assinado aceita somente ASCII visível, sem whitespace lateral, com até 128
 caracteres.
 
+### Aceite, consulta e duplicatas
+
+A resposta 202 contém `inbox_event_id`, `external_event_id`, `status=RECEIVED`,
+`received_at` e `request_id`. `Location` indica
+`/api/v1/carrier-events/{inbox_event_id}` e `Retry-After: 1` orienta polling.
+O GET expõe `result`, `tracking_event_id`, `completed_at` e progresso local:
+`QUEUED`, `AWAITING_RESULT`, `COMPLETED` ou `BLOCKED_LOCAL`.
+
+Mesmo ID/bytes pendente retorna 202; já processado retorna 200 `DUPLICATE` com
+resultado original; rejeitado preserva o erro permanente. Bytes divergentes
+retornam 409. Erros de normalização autenticada persistem rejeição sem comando
+nem outbox. Erros de domínio decididos depois do aceite são consultados no GET.
+Broker indisponível não impede admissão se Core/Tracking e PostgreSQL necessários
+estiverem disponíveis. 202 e fila vazia **não significam conclusão**.
+
+O ACK confirma a inbox técnica durável. O processador local retoma trabalho após
+reinício; falhas transitórias por item têm cinco tentativas por geração, com
+esperas de 1/5/15/60 s. Conflitos e esgotamento ficam `BLOCKED`, sem retomada
+automática. O rearme auditável será entregue no III; não altere esses estados
+manualmente para simular recuperação. Legado sem transporte tem progresso nulo;
+as migrations não criam comandos nem inventam resultados históricos.
+
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
 isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua todos
 os placeholders. Mantenha `CORE_DB_PASSWORD`/`CORE_DATABASE_URL` e
 `TRACKING_DB_PASSWORD`/`TRACKING_DATABASE_URL` coerentes. `POSTGRES_PASSWORD`
 pertence apenas à administração inicial. Alterar o `.env` não altera senhas de
 roles já criadas. `INTERNAL_API_SECRET` autentica as chamadas internas; HMAC fica
-somente no Tracking e `SESSION_SECRET` somente no Core. Timeouts HTTP padrão:
+somente no Tracking e `SESSION_SECRET` somente no Core. Ao trocar credenciais AMQP, provisione os usuários correspondentes no broker;
+`CORE_AMQP_URL`/`TRACKING_AMQP_URL` não alteram usuários já existentes.
+Timeouts HTTP padrão:
 10 s para chamadas ao Core e 30 s para encaminhamento ao Tracking.
 
 ## Interface operacional
@@ -130,6 +155,12 @@ Os arquivos ficam em `src/fulfillflow/web/static/vendor`, são referenciados por
 versão e integridade e são servidos somente pela própria aplicação.
 
 ## Simulador externo de Carriers
+
+O modo padrão do simulador é assíncrono: imprime admissão separada da conclusão,
+consulta o Location no mesmo origin e aguarda até 30 s por evento
+(`--completion-timeout-seconds`). `RESULT_NOT_OBSERVED` significa timeout de
+observação; não prova perda nem rejeição. `--mode synchronous` permite usar a
+referência congelada v1.1. O modo assíncrono não adapta o loadgen histórico.
 
 O painel `/simulator` apenas documenta o uso. A execução real ocorre em processo
 externo por `scripts/simulate_carrier_events.py`, que usa somente a biblioteca
@@ -221,6 +252,16 @@ uv run alembic -c alembic_tracking.ini check
 uv run python -m fulfillflow.tracking
 ```
 
+Os workers são processos adicionais, com a mesma configuração do serviço
+proprietário e `AMQP_URL` apontando ao vhost provisionado. Em terminais próprios:
+
+```powershell
+# Ambiente Core, DATABASE_URL Core e AMQP_URL do usuário Core.
+uv run python -m fulfillflow.core.worker
+# Ambiente Tracking, DATABASE_URL Tracking e AMQP_URL do usuário Tracking.
+uv run python -m fulfillflow.tracking.worker
+```
+
 ## Testes e qualidade
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
@@ -231,21 +272,23 @@ O E2E sobe Core e Tracking em portas TCP distintas e chama o webhook público
 por processo externo. Os testes limpam apenas os bancos dedicados informados.
 
 ```powershell
-docker compose -p fulfillflow-v11-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v12-tests -f compose.test.yaml up -d --wait
 $env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core"
 $env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
+$env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
+$env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v12-tests-db-1'
 $env:TEST_LEGACY_DATABASE_URL = "postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy"
 ```
 
 O teste estrutural histórico cria e remove seu próprio container Docker, sem
 Locust ou campanha. Após os gates, remova somente a infraestrutura dedicada:
-`docker compose -p fulfillflow-v11-tests -f compose.test.yaml down --volumes`.
+`docker compose -p fulfillflow-v12-tests -f compose.test.yaml down --volumes`.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
 uv run pytest tests/unit/test_carrier_simulator.py -q
 uv run pytest tests/ui -q
-uv run pytest tests/e2e/test_external_simulator_journey.py -q
+uv run pytest tests/e2e -q
 uv run pytest
 uv run pytest --cov=fulfillflow --cov-report=term-missing
 uv run ruff check .
@@ -255,8 +298,9 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A v1.1 usa `1101_core` (cadastro, Orders, Shipments, Notifications e recibos)
-e `1101_tracking` (inbox e timeline), com metadados e graphs Alembic separados.
+A v1.2 usa `1201_core` e `1202_tracking`, com metadados e graphs separados.
+Ambos recebem outbox/inbox técnica/quarentena; Tracking adiciona resultado e
+conclusão opcionais. As bases v1.1 `1101_core`/`1101_tracking` são preservadas.
 Os testes verificam upgrade/check/downgrade/upgrade de ambos, ausência de FKs
 entre proprietários e rejeição de conexão com a credencial do outro serviço.
 
@@ -271,8 +315,7 @@ entre proprietários e rejeição de conexão com a credencial do outro serviço
 
 ## Transporte v1.2 — incremento I
 
-O checkout inclui infraestrutura de transporte durável em preparação; o webhook
-continua síncrono até a ativação do incremento II. Cada banco possui suas próprias
+O runtime assíncrono usa transporte durável. Cada banco possui suas próprias
 `message_outbox`, `message_inbox` e `message_quarantine`. ACK confirma persistência
 técnica; não representa conclusão de negócio. Itens `BLOCKED` não retomam sozinhos;
 a operação de rearme auditável pertence ao incremento III.
