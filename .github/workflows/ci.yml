@@ -129,7 +129,8 @@ jobs:
         env:
           POSTGRES_PASSWORD: fulfillflow-compose-ci-2026
         run: |
-          docker compose up --detach --no-build --wait --wait-timeout 120
+          docker compose up --detach --no-build
+          docker compose up --detach --no-build --wait --wait-timeout 120 core tracking broker
           curl --fail --silent http://127.0.0.1:8000/health/live
           curl --fail --silent http://127.0.0.1:8000/health/ready
           curl --fail --silent --show-error --dump-header /tmp/dashboard.headers --output /tmp/dashboard.html http://127.0.0.1:8000/

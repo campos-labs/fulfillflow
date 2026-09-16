@@ -22,7 +22,8 @@ encaminhamento autenticados continuam HTTP.
 O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 
 ```powershell
-docker compose up --build --wait
+docker compose up --build --detach
+docker compose up --detach --no-build --wait core tracking broker
 ```
 
 O projeto padrão `fulfillflow-v12` cria volumes PostgreSQL e RabbitMQ novos.
