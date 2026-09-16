@@ -1,9 +1,13 @@
-"""Three required loops; broker recovery never replaces durable local processing."""
+"""Required loops, bounded dependency pauses and process-owned shutdown."""
 
 import asyncio
-import logging
-from collections.abc import Awaitable, Callable
+import os
+import signal
+import threading
+import time
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 import aio_pika
 from sqlalchemy.exc import InterfaceError, OperationalError
@@ -13,35 +17,109 @@ from fulfillflow.config import Settings
 from fulfillflow.contracts.messages import MessageEnvelope
 from fulfillflow.db import Database
 from fulfillflow.db.migrations import SchemaNotCurrentError, schema_is_current
-from fulfillflow.messaging.amqp import declare_flow, publish_batch, receive
+from fulfillflow.messaging.amqp import DEPENDENCY_ERRORS, declare_flow, publish_batch, receive
+from fulfillflow.messaging.health import Heartbeat, heartbeat_path
 from fulfillflow.messaging.store import process_one
 from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.telemetry import configure, emit
 from fulfillflow.shared import Clock, SystemClock
 
 Application = Callable[[AsyncSession, MessageEnvelope, Clock], Awaitable[None]]
-_LOG = logging.getLogger(__name__)
-_DEPENDENCY_ERRORS = (
-    OSError,
-    TimeoutError,
-    aio_pika.exceptions.AMQPConnectionError,
-    aio_pika.exceptions.ChannelInvalidStateError,
-    OperationalError,
-    InterfaceError,
-)
 
 
-async def serve(settings: Settings, tables: MessageTables, application: Application) -> None:
+async def pause(stop: asyncio.Event, seconds: float) -> None:
+    try:
+        await asyncio.wait_for(stop.wait(), seconds)
+    except TimeoutError:
+        pass
+
+
+async def supervise(
+    loops: dict[str, Callable[[], Coroutine[Any, Any, None]]],
+    stop: asyncio.Event,
+    heartbeat: Heartbeat,
+    *,
+    grace: float = 15,
+    on_shutdown: Callable[[], None] | None = None,
+) -> None:
+    tasks = {asyncio.create_task(loop(), name=name) for name, loop in loops.items()}
+    stopped = asyncio.create_task(stop.wait())
+    failure = False
+    try:
+        while not stop.is_set():
+            heartbeat.write()
+            done, _ = await asyncio.wait(
+                tasks | {stopped}, timeout=0.5, return_when=asyncio.FIRST_COMPLETED
+            )
+            if done & tasks and not stop.is_set():
+                failure = True  # Even a normal return is unexpected unless shutdown began.
+                stop.set()
+        if on_shutdown is not None:
+            on_shutdown()
+        heartbeat.stopping = True
+        heartbeat.write()
+        _, pending = await asyncio.wait(tasks, timeout=max(0, grace - 1))
+        for task in pending:
+            task.cancel()
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=min(grace, 1))
+        if pending:
+            raise RuntimeError("WORKER_SHUTDOWN_TIMEOUT")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if failure or any(isinstance(result, Exception) for result in results):
+            raise RuntimeError("REQUIRED_LOOP_STOPPED")
+    finally:
+        stopped.cancel()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(stopped, *tasks, return_exceptions=True)
+        heartbeat.stopping = True
+        heartbeat.write()
+
+
+async def serve(
+    settings: Settings,
+    tables: MessageTables,
+    application: Application,
+    *,
+    stop: asyncio.Event | None = None,
+) -> None:
     if settings.amqp_url is None:
         raise ValueError("AMQP_URL is required for workers")
+    configure()
+    service = settings.service_role
     url = settings.amqp_url.get_secret_value()
     database = Database.from_settings(settings)
     clock = SystemClock()
-    outbound = "tracking.result.v1" if settings.service_role == "core" else "tracking.apply.v1"
-    inbound = "tracking.apply.v1" if settings.service_role == "core" else "tracking.result.v1"
+    shutdown = stop or asyncio.Event()
+    heartbeat = Heartbeat(heartbeat_path(service), service)
+    watchdog: threading.Timer | None = None
+
+    def start_watchdog() -> None:
+        nonlocal watchdog
+        if stop is None and watchdog is None:
+            # Last resort: cooperative cancellation or driver cleanup must not exceed 15 s.
+            watchdog = threading.Timer(15, lambda: os._exit(1))
+            watchdog.daemon = True
+            watchdog.start()
+
+    previous: dict[int, Any] = {}
+    if stop is None:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, lambda *_: loop.call_soon_threadsafe(shutdown.set))
+    outbound = "tracking.result.v1" if service == "core" else "tracking.apply.v1"
+    inbound = "tracking.apply.v1" if service == "core" else "tracking.result.v1"
+
+    async def dependency(stage: str, delay: int) -> int:
+        heartbeat.record(stage, "dependency_unavailable")
+        emit(service, stage, "paused", category="DEPENDENCY_UNAVAILABLE")
+        await pause(shutdown, delay)
+        return min(delay * 2, 30)
 
     async def publishing() -> None:
         delay = 1
-        while True:
+        while not shutdown.is_set():
             try:
                 connection = await aio_pika.connect(url, timeout=5)
                 async with connection:
@@ -51,18 +129,19 @@ async def serve(settings: Settings, tables: MessageTables, application: Applicat
                     await channel.declare_exchange(
                         outbound, aio_pika.ExchangeType.DIRECT, durable=True
                     )
-                    while True:
+                    while not shutdown.is_set():
+                        if channel.is_closed or connection.is_closed:
+                            raise ConnectionError("BROKER_UNAVAILABLE")
                         await publish_batch(database, tables, channel, clock)
+                        heartbeat.record("publish", "ready")
                         delay = 1
-                        await asyncio.sleep(0.5)
-            except _DEPENDENCY_ERRORS:
-                _LOG.warning("publication dependency unavailable")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
+                        await pause(shutdown, 0.5)
+            except DEPENDENCY_ERRORS:
+                delay = await dependency("publish", delay)
 
     async def receiving() -> None:
         delay = 1
-        while True:
+        while not shutdown.is_set():
             try:
                 connection = await aio_pika.connect(url, timeout=5)
                 async with connection:
@@ -73,14 +152,25 @@ async def serve(settings: Settings, tables: MessageTables, application: Applicat
                     await declare_flow(channel, inbound)
                     queue = await channel.get_queue(f"{inbound}.queue")
                     async with queue.iterator() as messages:
-                        async for message in messages:
-                            await receive(database, tables, message, inbound, clock.now())
-                            delay = 1
-            except _DEPENDENCY_ERRORS:
-                # Leaving the connection scope closes the channel without ACK on uncertain commit.
-                _LOG.warning("reception dependency unavailable")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
+                        pending = asyncio.create_task(messages.__anext__())
+                        try:
+                            while not shutdown.is_set():
+                                done, _ = await asyncio.wait({pending}, timeout=0.5)
+                                if done:
+                                    incoming = pending.result()
+                                    await receive(database, tables, incoming, inbound, clock.now())
+                                    delay = 1
+                                    if shutdown.is_set():
+                                        break
+                                    pending = asyncio.create_task(messages.__anext__())
+                                if channel.is_closed or connection.is_closed:
+                                    raise ConnectionError("BROKER_UNAVAILABLE")
+                                heartbeat.record("receive", "ready")
+                        finally:
+                            pending.cancel()
+                            await asyncio.gather(pending, return_exceptions=True)
+            except (*DEPENDENCY_ERRORS, StopAsyncIteration):
+                delay = await dependency("receive", delay)
 
     async def processing() -> None:
         delay = 1
@@ -88,26 +178,56 @@ async def serve(settings: Settings, tables: MessageTables, application: Applicat
         async def apply(session: AsyncSession, message: MessageEnvelope) -> None:
             await application(session, message, clock)
 
-        while True:
+        while not shutdown.is_set():
             try:
+                started = time.monotonic()
                 async with database.session() as session, session.begin():
                     worked = await process_one(session, tables.inbox, clock.now(), apply)
+                    activity = session.info.get("message_activity")
+                if activity:
+                    emit(
+                        service,
+                        "process",
+                        activity["state"],
+                        category=activity["reason"],
+                        message=activity,
+                        duration=time.monotonic() - started,
+                    )
+                heartbeat.record("process", "ready")
                 delay = 1
                 if not worked:
-                    await asyncio.sleep(0.5)
+                    await pause(shutdown, 0.5)
             except (OperationalError, InterfaceError):
-                _LOG.warning("local processing database unavailable")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
+                delay = await dependency("process", delay)
+
+    async def initialize_and_process() -> None:
+        delay = 1
+        while not shutdown.is_set():
+            try:
+                if not await schema_is_current(database.engine, Path(f"alembic_{service}.ini")):
+                    raise SchemaNotCurrentError("worker database schema is not current")
+                break
+            except (OperationalError, InterfaceError):
+                delay = await dependency("process", delay)
+        await processing()
 
     try:
-        if not await schema_is_current(
-            database.engine, Path(f"alembic_{settings.service_role}.ini")
-        ):
-            raise SchemaNotCurrentError("worker database schema is not current")
-        async with asyncio.TaskGroup() as group:
-            group.create_task(publishing())
-            group.create_task(receiving())
-            group.create_task(processing())
+        emit(service, "worker", "starting")
+        await supervise(
+            {"publish": publishing, "receive": receiving, "process": initialize_and_process},
+            shutdown,
+            heartbeat,
+            on_shutdown=start_watchdog,
+        )
+        emit(service, "worker", "stopped")
+    except Exception:
+        emit(service, "worker", "failed", category="REQUIRED_LOOP_STOPPED")
+        raise
     finally:
-        await database.dispose()
+        for previous_sig, handler in previous.items():
+            signal.signal(previous_sig, handler)
+        try:
+            await database.dispose()
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()

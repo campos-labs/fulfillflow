@@ -32,6 +32,7 @@ for source in (Base.metadata, TrackingBase.metadata):
             "message_outbox",
             "message_inbox",
             "message_quarantine",
+            "message_rearm",
         }:
             table.to_metadata(target_metadata)
 # Remove only the new field from the cloned model. Do not filter reflected database

@@ -273,7 +273,9 @@ São limites iniciais de operação funcional, ainda não validados. Aplicação
 total equivalente à v1.1. Uma comparação futura deve decidir explicitamente o
 orçamento de toda a topologia, sem multiplicá-lo por componente.
 
-Compose v1.2 usa projeto e volumes novos. Alembic mantém dois históricos de
+Compose v1.2 usa projeto e volumes novos. A identidade do nó RabbitMQ deve
+permanecer estável ao recriar seu container com o mesmo volume; preservar apenas
+o volume não autoriza mudar a identidade sob a qual os dados são localizados. Alembic mantém dois históricos de
 migração, com heads independentes. Verificar banco limpo e upgrade de uma cópia
 descartável representativa da v1.1; jamais migrar volume histórico para testar.
 Registros antigos `RECEIVED` sem outbox não são publicados automaticamente: devem

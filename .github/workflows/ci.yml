@@ -18,6 +18,7 @@ jobs:
       TEST_LEGACY_DATABASE_URL: postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy
       TEST_AMQP_URL: amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test
       TEST_V11_POSTGRES_CONTAINER: fulfillflow-ci-tests-db-1
+      TEST_V12_RABBITMQ_CONTAINER: fulfillflow-ci-tests-broker-1
       INTERNAL_API_SECRET: 9d8e5b6f749941feaf4c88390a3a94b2d80ab13c0a04496babd54cc878f611eb
       SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e
       CARRIER_ALPHA_WEBHOOK_SECRET: 18374b93133e4996980ef121a823921618481057613d4d119732569639ec7fc8
@@ -76,7 +77,11 @@ jobs:
           import xml.etree.ElementTree as ET
           cases = ET.parse("/tmp/functional.xml").findall(".//testcase")
           for module, minimum in (
-              ("test_message_transport", 20),
+              ("test_message_transport", 21),
+              ("test_message_operations", 18),
+              ("test_result_ordering", 1),
+              ("test_worker_dependencies", 8),
+              ("test_worker_lifecycle", 8),
               ("test_worker_recovery", 2),
               ("test_http_recovery", 2),
               ("test_commit_boundaries", 11),
@@ -129,8 +134,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: fulfillflow-compose-ci-2026
         run: |
-          docker compose up --detach --no-build
-          docker compose up --detach --no-build --wait --wait-timeout 120 core tracking broker
+          docker compose up --detach --no-build --wait --wait-timeout 120
           curl --fail --silent http://127.0.0.1:8000/health/live
           curl --fail --silent http://127.0.0.1:8000/health/ready
           curl --fail --silent --show-error --dump-header /tmp/dashboard.headers --output /tmp/dashboard.html http://127.0.0.1:8000/

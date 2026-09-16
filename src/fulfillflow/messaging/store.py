@@ -32,6 +32,8 @@ class Publication:
     message_id: UUID
     token: UUID
     body: bytes
+    attempts: int
+    generation: int
 
 
 async def put_message(
@@ -123,14 +125,19 @@ async def claim_publications(
                 state="LEASED",
                 lease_token=token,
                 lease_until=now + timedelta(seconds=30),
+                last_attempt_at=now,
             )
         )
-        publications.append(Publication(row["message_id"], token, row["body"]))
+        publications.append(
+            Publication(
+                row["message_id"], token, row["body"], row["attempts"] + 1, row["generation"]
+            )
+        )
     return publications
 
 
-async def mark_sent(session: AsyncSession, table: Table, item: Publication, now: datetime) -> None:
-    await session.execute(
+async def mark_sent(session: AsyncSession, table: Table, item: Publication, now: datetime) -> bool:
+    changed = await session.scalar(
         update(table)
         .where(
             table.c.message_id == item.message_id,
@@ -138,12 +145,28 @@ async def mark_sent(session: AsyncSession, table: Table, item: Publication, now:
             table.c.lease_token == item.token,
             table.c.lease_until > now,
         )
-        .values(state="SENT", finished_at=now, lease_token=None, lease_until=None, reason=None)
+        .values(
+            state="SENT",
+            attempts=item.attempts,
+            finished_at=now,
+            lease_token=None,
+            lease_until=None,
+            reason=None,
+        )
+        .returning(table.c.message_id)
     )
+
+    return changed is not None
 
 
 async def _item_failure(
-    session: AsyncSession, table: Table, row: RowMapping, now: datetime, *, retryable: bool
+    session: AsyncSession,
+    table: Table,
+    row: RowMapping,
+    now: datetime,
+    *,
+    retryable: bool,
+    category: str = "APPLICATION_CONFLICT",
 ) -> None:
     attempts = row["attempts"] + 1
     blocked = not retryable or attempts >= 5
@@ -158,7 +181,8 @@ async def _item_failure(
             if retryable and blocked
             else "ITEM_RETRY"
             if retryable
-            else "APPLICATION_CONFLICT",
+            else category,
+            last_attempt_at=now,
         )
     )
 
@@ -188,34 +212,65 @@ async def process_one(
     )
     if row is None:
         return False
+    envelope = None
     try:
         async with session.begin_nested():
-            await apply(session, decode_message(row["body"]))
+            envelope = decode_message(row["body"])
+            await apply(session, envelope)
     except RetryableItemError:
         await _item_failure(session, table, row, now, retryable=True)
     except DBAPIError as error:
-        if error.connection_invalidated or isinstance(error, (OperationalError, InterfaceError)):
+        sqlstate = getattr(error.orig, "sqlstate", None)
+        if sqlstate in ("40001", "40P01", "55P03", "57014"):
+            await _item_failure(session, table, row, now, retryable=True)
+        elif error.connection_invalidated or isinstance(error, (OperationalError, InterfaceError)):
             raise
+        else:
+            await _item_failure(session, table, row, now, retryable=False)
+    except (BlockedItemError, MessageConflictError):
         await _item_failure(session, table, row, now, retryable=False)
     except Exception:
         # Preserve a finite diagnostic for unexpected item failures; never log the body.
-        await _item_failure(session, table, row, now, retryable=False)
+        await _item_failure(
+            session, table, row, now, retryable=False, category="UNEXPECTED_ITEM_ERROR"
+        )
     else:
         await session.execute(
             update(table)
             .where(table.c.message_id == row["message_id"])
             .values(
                 state="DONE",
+                attempts=row["attempts"] + 1,
+                last_attempt_at=now,
                 finished_at=now,
                 reason=None,
             )
         )
+    result = (
+        (
+            await session.execute(
+                select(table.c.state, table.c.reason, table.c.attempts).where(
+                    table.c.message_id == row["message_id"]
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    session.info["message_activity"] = dict(
+        row, **result, request_id=envelope.request_id if envelope is not None else None
+    )
     return True
 
 
 async def retry_publication(
-    session: AsyncSession, table: Table, item: Publication, now: datetime
-) -> None:
+    session: AsyncSession,
+    table: Table,
+    item: Publication,
+    now: datetime,
+    *,
+    retryable: bool = True,
+) -> str | None:
     """Returned/nacked publication has a finite durable retry budget."""
     row = (
         (
@@ -234,17 +289,26 @@ async def retry_publication(
         .first()
     )
     if row is None:
-        return
+        return None
     attempts = row["attempts"] + 1
+    state = "BLOCKED" if not retryable or attempts >= 5 else "PENDING"
     await session.execute(
         update(table)
         .where(table.c.message_id == item.message_id)
         .values(
             attempts=attempts,
-            state="BLOCKED" if attempts >= 5 else "PENDING",
+            state=state,
             next_attempt_at=now + timedelta(seconds=(1, 5, 15, 60, 60)[attempts - 1]),
             lease_token=None,
             lease_until=None,
-            reason="PUBLISH_REJECTED",
+            reason=(
+                "UNEXPECTED_PUBLICATION_ERROR"
+                if not retryable
+                else "PUBLISH_RETRY_EXHAUSTED"
+                if attempts >= 5
+                else "PUBLISH_REJECTED"
+            ),
+            last_attempt_at=now,
         )
     )
+    return state

@@ -15,7 +15,7 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 | Arquitetura alvo e plano | Conferidos contra o código em 9d1d468; comando/recibo preservados |
 | I — Contratos e transporte durável | Concluído: PostgreSQL/RabbitMQ reais, revisão e CI aprovada no SHA `5a50f97` |
 | II — Fluxo assíncrono completo | Concluído: outboxes atômicas, 202/consulta, workers, clientes e recuperação local testados |
-| III — Recuperação e operação | Não iniciado |
+| III — Recuperação e operação | Concluído: rearme/diagnóstico, políticas, lifecycle/saúde e recuperação verificados |
 | IV — UI, verificação integrada e congelamento funcional | Não iniciado |
 | Comparação extensa | Adiada, sem execução autorizada |
 | Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
@@ -122,9 +122,12 @@ equivalentes das garantias e preservar cobertura dos caminhos HTTP remanescentes
   skips nos testes críticos de transporte e recuperação. Conferir o resultado
   pelo **SHA exato da entrega**, não apenas pelo nome da branch.
 
-Parada desta execução: **antes do III**. Rearme auditável de `BLOCKED`, lifecycle
-completo, healthcheck e diagnóstico operacional dos workers continuam pendentes
-no III; refinamento da UI e congelamento funcional permanecem no IV. Não houve
+Aceite I/II: CI aprovada em `f6bc1149e365650fce8eb6be3443d39ccc366852`,
+com 1.011 testes e cobertura de 88,30%; skips exclusivos de Windows,
+verificados localmente.
+
+Limite do aceite I/II: **antes do III**. Rearme auditável de `BLOCKED`, lifecycle
+completo, healthcheck e diagnóstico operacional dos workers ficaram para o III; refinamento da UI e congelamento funcional permanecem no IV. Não houve
 campanha, merge, tag/release, alteração de evidência congelada nem atualização de
 dependências existentes. A dependência nova é aio-pika com suas transitivas.
 
@@ -150,6 +153,48 @@ procedimento finito de recuperação demonstrável.
 **Aceite:** falhas injetadas produzem resultado esperado, pendência recuperável ou
 bloqueio explícito; evidências identificam fronteira e causa controlada. Não afirmar
 estabilidade prolongada ou solução do 503 histórico a partir desses testes.
+
+### Implementação do III
+
+- CLI proprietária de diagnóstico e rearme de inbox/outbox `BLOCKED`, com ID,
+  hash conferido contra os bytes, banco esperado e motivo explícito. Auditoria
+  e nova geração são atômicas; identidade/payload e conclusões anteriores são
+  preservados. Quarentena não é reenfileirada por essa operação.
+- Migrations `1202_core`/`1203_tracking`: auditoria e última tentativa, sem
+  fabricar atividade histórica. Contagens por etapa e backlog do inbox de
+  negócio permanecem distintos de mensagens prontas/sem ACK do broker.
+- Retry por item inclui falhas SQL transitórias; indisponibilidade de dependência
+  pausa o componente. Loops obrigatórios, encerramento até 15 s, heartbeat local,
+  healthcheck leve e logs JSON controlados completam a operação prevista.
+- DESIGN explicita a identidade estável do nó RabbitMQ ao reutilizar volume,
+  uma condição operacional da durabilidade existente. HTTP, ambos os outboxes
+  atômicos e Notifications permanecem
+  com os contratos existentes. Prometheus/OTel mais amplos, estabilidade prolongada
+  e campanhas continuam fora deste aceite.
+
+### Verificação do III — 2026-09-16
+
+- Validação focal PostgreSQL/RabbitMQ e validação funcional Windows: 217 casos
+  cobertos entre a passagem ampla e as correções focais; cobertura local **88,13%**.
+  Inclui oito cenários de queda/retorno no startup e com worker já ativo, CLI real,
+  deadlock, rearme concorrente, lease antiga e resultados fora de ordem.
+- Cinco testes estruturais legados aprovados. Após interrupção nativa do dump
+  de diagnóstico Python no Windows, essas verificações foram executadas em
+  processo separado, sem atualizar ferramentas ou enfraquecer asserções.
+- As expectativas de heads foram atualizadas para `1202_core`/`1203_tracking`.
+  Um 503 pontual de UI durante lentidão local passou em reexecução isolada, sem
+  mudar contrato ou timeout; isso não resolve nem reinterpreta o 503 histórico.
+- Ruff/formatação, Mypy, dez contratos de importação, Alembic heads/drift e build
+  aprovados. Smoke sequencial confirmou APIs e workers saudáveis, diagnóstico,
+  SIGTERM com código zero e mensagem persistente após recriação do broker com
+  identidade/volume preservados. Recursos isolados parados, dados preservados.
+- CI exige todos os cenários críticos sem skips; o resultado deve ser conferido
+  no SHA exato publicado. Nenhum benchmark, merge, tag/release ou atualização de
+  dependências foi realizado.
+
+Parada do aceite III: **antes do IV**. Próximo passo: refinamento da UI/simulador,
+demonstração e congelamento funcional conforme a seção seguinte. Observabilidade
+mais ampla e avaliação de estabilidade/capacidade continuam pendentes.
 
 ## 6. Incremento IV — Verificação integrada e referência funcional
 

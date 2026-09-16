@@ -20,12 +20,14 @@ from sqlalchemy import (
 
 @dataclass(frozen=True)
 class MessageTables:
+    owner: str
     outbox: Table
     inbox: Table
     quarantine: Table
+    rearm: Table
 
 
-def message_tables(metadata: MetaData) -> MessageTables:
+def message_tables(metadata: MetaData, owner: str) -> MessageTables:
     tables = []
     for name, states in (
         ("message_outbox", "'PENDING', 'LEASED', 'SENT', 'BLOCKED'"),
@@ -46,6 +48,7 @@ def message_tables(metadata: MetaData) -> MessageTables:
             Column("next_attempt_at", DateTime(timezone=True), nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("finished_at", DateTime(timezone=True)),
+            Column("last_attempt_at", DateTime(timezone=True)),
             Column("lease_token", Uuid),
             Column("lease_until", DateTime(timezone=True)),
             Column("reason", String(64)),
@@ -71,4 +74,22 @@ def message_tables(metadata: MetaData) -> MessageTables:
         CheckConstraint("octet_length(body) <= 65536", name="body_limit"),
         CheckConstraint("original_size >= octet_length(body)", name="original_size"),
     )
-    return MessageTables(tables[0], tables[1], quarantine)
+    rearm = Table(
+        "message_rearm",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("stage", String(16), nullable=False),
+        Column("message_id", Uuid, nullable=False),
+        Column("generation", Integer, nullable=False),
+        Column("body_sha256", CHAR(64), nullable=False),
+        Column("previous_attempts", Integer, nullable=False),
+        Column("previous_reason", String(64)),
+        Column("reason", String(240), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        UniqueConstraint("stage", "message_id", "generation", name="uq_message_rearm_generation"),
+        CheckConstraint("stage IN ('inbox', 'outbox')", name="stage"),
+        CheckConstraint("generation > 0 AND previous_attempts BETWEEN 0 AND 5", name="attempts"),
+        CheckConstraint("body_sha256 ~ '^[0-9a-f]{64}$'", name="body_hash"),
+        CheckConstraint("btrim(reason) <> ''", name="reason"),
+    )
+    return MessageTables(owner, tables[0], tables[1], quarantine, rearm)

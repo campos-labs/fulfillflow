@@ -22,8 +22,7 @@ encaminhamento autenticados continuam HTTP.
 O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 
 ```powershell
-docker compose up --build --detach
-docker compose up --detach --no-build --wait core tracking broker
+docker compose up --build --detach --wait
 ```
 
 O projeto padrão `fulfillflow-v12` cria volumes PostgreSQL e RabbitMQ novos.
@@ -32,15 +31,33 @@ CONNECT ao banco alheio. Os serviços `migrate-core` e `migrate-tracking` aplica
 os heads antes dos processos. Somente Core publica `127.0.0.1:8000`; Tracking,
 workers, PostgreSQL e RabbitMQ ficam na rede interna. O broker usa um vhost e
 dois usuários com permissões separadas para os fluxos de comando e resultado.
+O hostname do broker é estável (`broker` por padrão), pois a identidade do nó
+participa do caminho dos dados RabbitMQ. Antes de recriar um broker v1.2 existente
+criado sem hostname fixo, preserve sua identidade e registre o valor em `.env`:
+
+```powershell
+$env:RABBITMQ_HOSTNAME = docker inspect (docker compose ps -a -q broker) --format '{{.Config.Hostname}}'
+```
+
+Use o mesmo projeto (`-p`, quando aplicável) nessa inspeção e na subida. Não troque
+essa identidade ao reutilizar um volume. Os CLIs RabbitMQ usam `+S 1:1 +A 1`
+para não dimensionar seus processos de diagnóstico pelos CPUs do host; quotas,
+imagem e configuração do servidor permanecem as declaradas.
 
 Cada API usa 0,5 CPU, 384 MiB e pool 2/0; cada worker, 0,5 CPU, 384 MiB e pool 3/0.
 PostgreSQL usa 2 CPUs/2560 MiB e RabbitMQ, 0,5 CPU/512 MiB. São parâmetros
 funcionais, sem alegação de equivalência de recursos com a v1.1. Workers usam
 prefetch 8, lote 20, polling 500 ms, lease 30 s e timeout de confirm 5 s.
+Heartbeat atualiza a cada 500 ms: arquivo com mais de 5 s ou loop sem atividade
+por 45 s invalida a saúde. Dependência indisponível também invalida a saúde.
 
-Health/readiness das APIs não comprovam conclusão do trabalho. Healthcheck,
-lifecycle operacional completo e rearme auditável dos workers pertencem ao
-incremento III; não se deve considerar esta etapa uma validação operacional final.
+Health/readiness das APIs não comprovam conclusão do trabalho. Workers têm
+heartbeat local e healthcheck sem HTTP: exigem atividade dos três loops e
+dependências disponíveis. Saúde não implica ausência de `BLOCKED`, nem fila
+RabbitMQ vazia comprova conclusão. SIGTERM/SIGINT param admissão de trabalho e
+aguardam até 15 s; interrupções deixam trabalho durável. Compose reserva 20 s,
+incluindo margem de fechamento. Falha inesperada de loop encerra o processo
+com erro. Não há alegação de estabilidade prolongada.
 Não aponte os serviços a bancos ou volumes históricos.
 
 ```powershell
@@ -48,6 +65,56 @@ Invoke-WebRequest http://127.0.0.1:8000/health/live
 Invoke-WebRequest http://127.0.0.1:8000/health/ready
 Invoke-WebRequest http://127.0.0.1:8000/
 ```
+
+## Operação local do transporte
+
+Execute no projeto v1.2 autorizado (acrescente `-p` se usar outro nome).
+Cada CLI acessa somente o banco do próprio serviço e exige schema atual.
+Não há endpoint administrativo público.
+
+```powershell
+docker compose exec -T core-worker python -m fulfillflow.core.operations healthcheck
+docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations healthcheck
+docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose
+docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations diagnose
+docker compose exec -T broker rabbitmqctl list_queues -p fulfillflow-v12 name messages_ready messages_unacknowledged
+```
+
+Use `diagnose --id <UUID>` nos dois serviços para correlacionar mensagem,
+evento ou correlação; quarentena aceita seu ID local. O relatório apresenta
+estado, hash, geração, tentativas, atividade, publicação, decisão e finalização
+disponíveis, sem payloads. Contagens são por etapa: não some inbox/outbox/filas
+como total de eventos. `accepted_nonterminal` do Tracking conta eventos ainda
+pendentes, inclusive bloqueados; `legacy_pending` identifica registros sem outbox,
+sem recuperação automática. Banco e broker não formam fotografia global atômica.
+
+Falhas transitórias de item permitem cinco tentativas por geração, com esperas
+1/5/15/60 s. Conflitos e erros inesperados bloqueiam; rejeição permanente de negócio
+é terminal. Banco/broker indisponível pausa o componente, com espera limitada a
+30 s, sem esgotar os demais itens. Confirmação incerta aguarda a lease de 30 s
+e pode republicar a mesma identidade. Reiniciar worker não desbloqueia itens.
+
+Corrija a causa e informe o hash técnico, banco e motivo do rearme:
+
+```powershell
+$messageId = '<UUID-da-mensagem>'
+$expectedHash = '<body_sha256-do-diagnostico>'
+docker compose exec -T core-worker python -m fulfillflow.core.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_core --reason 'Causa corrigida e verificada'
+```
+
+Para Tracking use `tracking-worker`, `fulfillflow.tracking.operations` e
+`fulfillflow_tracking`; para publicação use `--stage outbox`. Somente `BLOCKED`
+pode ser rearmado: identidade/payload permanecem iguais, geração aumenta e
+as tentativas reiniciam junto com a auditoria do motivo e estado anterior.
+A CLI não reenfileira `DONE`/`SENT` ou quarentena. Bytes de quarentena ficam no
+banco proprietário; comandos não os exibem. Não inclua segredos no motivo.
+
+Workers emitem JSON INFO em stdout: serviço, etapa, IDs, tentativa, duração,
+resultado e categoria controlada, sem bodies, assinaturas ou exceções brutas.
+Essa instrumentação difere da v1.1; Prometheus/OTel mais amplos permanecem
+pendentes. Não há alegação de paridade de benchmark.
+
+## Contratos HTTP
 
 Além dos health checks, os contratos atuais sob `/api/v1` são:
 
@@ -278,6 +345,7 @@ $env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-cor
 $env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
 $env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v12-tests-db-1'
+$env:TEST_V12_RABBITMQ_CONTAINER = 'fulfillflow-v12-tests-broker-1'
 $env:TEST_LEGACY_DATABASE_URL = "postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy"
 ```
 
@@ -299,9 +367,9 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A v1.2 usa `1201_core` e `1202_tracking`, com metadados e graphs separados.
+A v1.2 usa `1202_core` e `1203_tracking`, com metadados e graphs separados.
 Ambos recebem outbox/inbox técnica/quarentena; Tracking adiciona resultado e
-conclusão opcionais. As bases v1.1 `1101_core`/`1101_tracking` são preservadas.
+conclusão opcionais; ambos registram auditoria de rearme e última tentativa. As bases v1.1 `1101_core`/`1101_tracking` são preservadas.
 Os testes verificam upgrade/check/downgrade/upgrade de ambos, ausência de FKs
 entre proprietários e rejeição de conexão com a credencial do outro serviço.
 
@@ -319,7 +387,7 @@ entre proprietários e rejeição de conexão com a credencial do outro serviço
 O runtime assíncrono usa transporte durável. Cada banco possui suas próprias
 `message_outbox`, `message_inbox` e `message_quarantine`. ACK confirma persistência
 técnica; não representa conclusão de negócio. Itens `BLOCKED` não retomam sozinhos;
-a operação de rearme auditável pertence ao incremento III.
+o rearme auditável está descrito na seção de operação local.
 
 Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
 

@@ -1,7 +1,5 @@
 """Core command receiver, local processor and result publisher entrypoint."""
 
-import logging
-
 from fulfillflow.asyncio_support import run_async
 from fulfillflow.config import Settings
 from fulfillflow.core.message_handler import apply_command
@@ -18,7 +16,6 @@ def main() -> None:
     except KeyboardInterrupt:
         return
     except Exception:
-        logging.getLogger(__name__).error("core worker stopped: required loop unavailable")
         raise SystemExit(1) from None
 
 

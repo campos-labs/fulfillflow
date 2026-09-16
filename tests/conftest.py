@@ -115,7 +115,7 @@ async def carrier_id(postgres_database: Database) -> UUID:
 
 async def _clear_business_rows(database: Database) -> None:
     async with database.engine.begin() as connection:
-        for table in ("message_inbox", "message_outbox", "message_quarantine"):
+        for table in ("message_inbox", "message_outbox", "message_quarantine", "message_rearm"):
             await connection.execute(text(f"DELETE FROM {table}"))
         await connection.execute(text("DELETE FROM notifications"))
         await connection.execute(text("DELETE FROM tracking_event_receipts"))
@@ -155,7 +155,7 @@ async def postgres_tracking_database(
 
     async def clear() -> None:
         async with database.engine.begin() as connection:
-            for table in ("message_inbox", "message_outbox", "message_quarantine"):
+            for table in ("message_inbox", "message_outbox", "message_quarantine", "message_rearm"):
                 await connection.execute(text(f"DELETE FROM {table}"))
             await connection.execute(text("DELETE FROM tracking_events"))
             await connection.execute(text("DELETE FROM carrier_event_inbox"))

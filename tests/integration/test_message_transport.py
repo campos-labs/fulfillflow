@@ -304,3 +304,22 @@ async def test_conflict_quarantine_preserves_original(owners, channel):
             await session.scalar(select(tables.quarantine.c.reason)) == "MESSAGE_IDENTITY_CONFLICT"
         )
         assert await session.scalar(select(func.count()).select_from(tables.inbox)) == 1
+
+
+async def test_unexpected_publication_is_blocked_not_retried_globally(owners, channel, monkeypatch):
+    from fulfillflow.messaging import amqp
+
+    database, tables = owners[0]
+    async with database.session() as session, session.begin():
+        await put_message(session, tables.outbox, result_message(), NOW)
+
+    async def broken(*args):
+        raise RuntimeError("sensitive implementation detail")
+
+    monkeypatch.setattr(amqp, "publish", broken)
+    assert await publish_batch(database, tables, channel, FixedClock(NOW)) == 1
+    async with database.session() as session:
+        row = (await session.execute(select(tables.outbox))).mappings().one()
+        assert row["state"] == "BLOCKED"
+        assert row["reason"] == "UNEXPECTED_PUBLICATION_ERROR"
+        assert row["attempts"] == 1

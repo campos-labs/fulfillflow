@@ -3,4 +3,4 @@
 from fulfillflow.db.base import Base
 from fulfillflow.messaging.tables import message_tables
 
-tables = message_tables(Base.metadata)
+tables = message_tables(Base.metadata, "core")

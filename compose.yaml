@@ -79,6 +79,9 @@ services:
     stop_grace_period: 30s
 
   broker:
+    hostname: "${RABBITMQ_HOSTNAME:-broker}"
+    environment:
+      RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +A 1"
     image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
     volumes:
       - v12_rabbitmq_data:/var/lib/rabbitmq
@@ -148,9 +151,13 @@ services:
     init: true
     cpus: 0.5
     mem_limit: 384m
-    stop_grace_period: 15s
+    stop_grace_period: 20s
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "core"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     depends_on:
       migrate-core:
         condition: service_completed_successfully
@@ -167,9 +174,13 @@ services:
     init: true
     cpus: 0.5
     mem_limit: 384m
-    stop_grace_period: 15s
+    stop_grace_period: 20s
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "tracking"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     depends_on:
       migrate-tracking:
         condition: service_completed_successfully
