@@ -27,7 +27,12 @@ if config.config_file_name is not None:
 target_metadata = MetaData(naming_convention=Base.metadata.naming_convention)
 for source in (Base.metadata, TrackingBase.metadata):
     for table in source.tables.values():
-        if table.name != "tracking_event_receipts":
+        if table.name not in {
+            "tracking_event_receipts",
+            "message_outbox",
+            "message_inbox",
+            "message_quarantine",
+        }:
             table.to_metadata(target_metadata)
 # Remove only the new field from the cloned model. Do not filter reflected database
 # objects: Alembic must still detect an unexpected column in a historical database.
