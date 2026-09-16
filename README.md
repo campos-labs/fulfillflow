@@ -165,8 +165,8 @@ estiverem disponíveis. 202 e fila vazia **não significam conclusão**.
 O ACK confirma a inbox técnica durável. O processador local retoma trabalho após
 reinício; falhas transitórias por item têm cinco tentativas por geração, com
 esperas de 1/5/15/60 s. Conflitos e esgotamento ficam `BLOCKED`, sem retomada
-automática. O rearme auditável será entregue no III; não altere esses estados
-manualmente para simular recuperação. Legado sem transporte tem progresso nulo;
+automática. Use a CLI de rearme auditável descrita na operação local; não altere
+esses estados manualmente para simular recuperação. Legado sem transporte tem progresso nulo;
 as migrations não criam comandos nem inventam resultados históricos.
 
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
