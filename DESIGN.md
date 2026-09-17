@@ -1,375 +1,394 @@
-# FulfillFlow — Arquitetura alvo v1.2
+# FulfillFlow — Arquitetura alvo v1.3
 
-## 1. Estado e autoridade
+## 1. Estado, autoridade e referência
 
-Este documento especifica a evolução autorizada de Tracking para admissão durável
-e coordenação por mensagens. **O alvo ainda não está implementado.** O estado de
-cada incremento pertence ao [RELEASE_PLAN.md](RELEASE_PLAN.md); o README descreve
-somente o comportamento executável. AGENTS define o método de trabalho.
+Alvo: extrair Notifications como serviço assíncrono, com persistência própria e
+entrega simulada, preservando Tracking assíncrono. **Este alvo não está implementado.**
+O desenho foi aprovado, com implementação autorizada dos incrementos I e II,
+sequencialmente, e parada antes do III. Commits por assunto e push somente na
+branch v1.3 estão autorizados, com conferência da CI do SHA final.
+O [RELEASE_PLAN](RELEASE_PLAN.md) registra incrementos e estado;
+AGENTS define como trabalhar; README continua descrevendo o runtime executável.
 
-A base é `v1.1.0-rc.1`, commit `217e29a230689da3bd6359790f0753b41a10a927`.
-O [DESIGN congelado da v1.1](https://github.com/campos-labs/fulfillflow/blob/217e29a230689da3bd6359790f0753b41a10a927/DESIGN.md)
-permanece a referência dos contratos não substituídos aqui, inclusive regras de
-domínio, adapters, segurança, UI e schemas públicos. Suas seções 1–29 são lidas
-com as substituições da seção 30. Referências históricas a essas seções continuam
-apontando àquela versão; não devem ser reinterpretadas pela numeração deste alvo.
+Base congelada: tag `v1.2.0-rc.1`, SHA
+`9b445f9b5466cd302c89f1deed7a9c051cb397ae`, branch de evolução
+`feature/v1.3-notifications-async`. O
+[DESIGN v1.2](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/DESIGN.md)
+rege os contratos não substituídos aqui, inclusive sua referência ao
+[DESIGN v1.1](https://github.com/campos-labs/fulfillflow/blob/217e29a230689da3bd6359790f0753b41a10a927/DESIGN.md).
+O aviso de alvo não implementado naquele DESIGN é histórico; o
+[RELEASE_PLAN congelado](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/RELEASE_PLAN.md)
+registra o aceite funcional e a proveniência da v1.2.
 
-Tag, imagens, dependências e evidências congeladas da v1.0/v1.1 não serão alteradas.
-A comparação v1.1 está suspensa e incompleta; a pré-release funcional não comprova
-capacidade, estabilidade geral ou causa do 503 histórico.
+Este desenho substitui a propriedade e criação local de Notification, sua fronteira
+de consulta e os trechos de topologia/operação correspondentes da v1.2. Mantém
+admissão 202, HMAC/bytes, comando e resultado Tracking, recibos, transições,
+idempotência, ordenação, timeline, conclusão de Order, segurança e HTTP restantes.
+Não altera tags, branches anteriores, imagens, locks ou evidências congeladas.
+Campanhas extensas seguem suspensas; não há conclusão nova sobre o 503 histórico.
 
-## 2. Escopo e topologia
+## 2. Comportamento inspecionado e mudança de fronteira
 
-Tracking recebe o webhook por HTTP, persiste o trabalho e responde sem esperar os
-efeitos no Core. Tracking envia um **comando** pelo RabbitMQ; Core aplica efeitos
-locais e publica um **resultado** pelo RabbitMQ; Tracking conclui inbox e timeline.
-Não haverá chamada HTTP de aplicação do comando nem fallback síncrono nesse fluxo.
+Na base, `core/events.py` reclama o recibo, trava Shipment e cria Notification
+somente para uma transição de Tracking com resultado **APPLIED**. O destinatário
+vem do email do Order, pelo contrato público de Shipments. A mesma transação
+avalia a conclusão do Order; `core/message_handler.py` acrescenta a outbox de
+resultado. Recibo repetido retorna a decisão original sem repetir efeitos.
 
-| Componente | Responsabilidade |
+`notifications/service.py` renderiza conteúdo determinístico: `EMAIL`, resultado
+`SIMULATED` ou `FAILED` para falha esperada e sanitizada. O banco Core impõe
+unicidade de `tracking_event_id` e FK restritiva de `shipment_id`. Lista, detalhe
+REST/HTML e contadores do dashboard consultam esse banco diretamente. Na v1.3,
+essas leituras e a simulação passam ao serviço Notifications.
+
+Não geram notificação: `NO_STATE_CHANGE`, `IGNORED_STALE`,
+`IGNORED_INVALID_TRANSITION`, rejeição, duplicata, criação de Shipment,
+cancelamento manual ou conclusão de Order por si só. O nome do evento abaixo
+não amplia esse conjunto. Uma transição posterior válida gera outra notificação,
+com sua própria identidade; não se deduplica por Shipment ou por status.
+
+## 3. Serviços e comunicação
+
+| Processo | Responsabilidade e dependências |
 | --- | --- |
-| Core API | Entrada pública, UI, Orders, Shipments, Carriers e consultas internas |
-| Tracking API | Autenticação do webhook, admissão e consultas de Tracking |
-| Core worker | Receber comandos, aplicar efeitos e publicar resultados |
-| Tracking worker | Publicar comandos e receber/aplicar resultados |
-| PostgreSQL 18 | Uma instância, dois bancos e roles segregados |
-| RabbitMQ | Transportar comandos e resultados duráveis |
+| Core API | Entrada pública, UI, Orders/Shipments/Carriers; banco Core; consultas HTTP a Tracking e Notifications |
+| Core worker | Aplicar comandos Tracking; banco Core; publicar resultado Tracking e fato para Notifications |
+| Tracking API / worker | Responsabilidades, banco e dois fluxos da v1.2 preservados |
+| Notifications API | HTTP interno autenticado de leitura e saúde; somente banco Notifications |
+| Notifications worker | Receber fatos, persistir inbox técnica e simular entrega; somente banco Notifications e RabbitMQ |
+| PostgreSQL 18 / RabbitMQ | Mesmas tecnologias e instâncias locais; terceiro banco/role e novo fluxo durável |
 
-APIs e workers do mesmo serviço compartilham código e banco próprios, com processos
-e entrypoints distintos. Worker não é um novo domínio nem expõe portas HTTP.
-Uma imagem de aplicação pode oferecer os quatro entrypoints. Somente Core API
-publica porta no host. Notifications **permanece no Core**, com persistência local
-e entrega simulada, sem consumidor independente ou integração externa.
+API e worker de cada serviço têm entrypoints/processos separados e implantação
+independente. Uma imagem de aplicação pode servir a todos; não exigir repositório
+ou imagem por processo. Só Core API publica porta de aplicação no host. O worker
+Notifications não tem HTTP; sua API de leitura resolve a necessidade de consulta.
+Não existe callback de Notifications para Tracking nem fluxo de resultado de
+notificação para Core. Core não mantém réplica dos registros de Notification.
 
-Permanecem HTTP: cliente→Core, encaminhamento Core→Tracking e consultas de Tracking
-ao cadastro de Carriers e às projeções de Shipments no Core. Nenhuma conexão,
-transação ou lock SQL pode permanecer retido durante HTTP ou publicação AMQP.
-A admissão ainda depende da consulta de Carrier no Core; esta versão não promete
-aceitar webhooks durante indisponibilidade completa do Core.
+Cada role acessa apenas seu banco. Não há FK, join, sessão SQL ou import de
+implementação entre serviços. DTOs explícitos em `contracts` não dependem de ORM
+ou cliente de transporte; `shared` continua sem negócio/infraestrutura.
+Módulos Core usam interfaces públicas locais; o cliente HTTP de Notifications
+usa DTOs de contrato, sem importar seu domínio, serviços, schemas internos ou ORM.
 
-Não entram: extração de Notifications, gateway, Kubernetes, cloud, autoscaling,
-broker em cluster, integração real de transportadoras/notificações ou matriz
-extensa de desempenho. Esses itens não são critérios de conclusão da v1.2.
+## 4. Fato publicável e contrato de mensagem
 
-## 3. Contratos preservados
+Novo evento **`shipment.status_changed.v1`**, Core → Notifications: uma transição
+de Shipment decorrente de comando Tracking foi aplicada e será confirmada no
+commit Core. É distinto de `tracking.result.v1`, que continua exclusivo de Tracking,
+com schema e significado inalterados. Notifications não consome comando nem resultado.
 
-- Python 3.13, FastAPI, Pydantic v2, SQLAlchemy async, psycopg 3, Alembic, PostgreSQL
-  18, Jinja2/HTMX/Bootstrap locais, uv e as verificações existentes permanecem.
-- HMAC-SHA256 usa timestamp, ID externo e bytes originais conforme o contrato
-  congelado. Autenticar antes de parsing/persistência; preservar limites, janela,
-  validação dos headers, comparação constante e `raw_body` byte a byte.
-- A restrição única `(carrier_id, external_event_id)` e o hash dos bytes decidem
-  idempotência. Identidade, timestamps originais e resultado não são regenerados.
-- Preservar `ApplyEventCommand`, seu hash canônico, a identidade determinística do
-  evento e os resultados aplicados/rejeitados já existentes. Envelope de transporte
-  não altera o conteúdo ou a identidade do comando de negócio.
-- Shipment mantém transições e os resultados `APPLIED`, `NO_STATE_CHANGE`,
-  `IGNORED_STALE` e `IGNORED_INVALID_TRANSITION`. Ordenação permanece a tupla
-  `(occurred_at, received_at, external_event_id)`; TrackingEvent é append-only.
-- Core conserva a transação local de recibo, Shipment, Notification e avaliação
-  de conclusão do Order. Locks de Shipment precedem Order; `READ COMMITTED`,
-  constraints e locks reais continuam sendo as autoridades de concorrência.
-- Não há acesso SQL entre bancos, imports entre implementações de serviços,
-  transação distribuída, promessa de exactly-once no transporte ou atomicidade global.
+Reutilizar a forma de envelope v1.2, validada por tipo explícito e extras proibidos:
 
-## 4. API: aceitação e conclusão
-
-### 4.1 Admissão
-
-`POST /api/v1/carriers/{carrier_code}/events` mantém rota, headers e payload de
-entrada. **A resposta de evento novo passa de 200 com conclusão para 202 com
-aceitação durável.** É uma alteração incompatível de semântica para clientes que
-dependem de conclusão imediata, mesmo preservando o prefixo `/api/v1`. UI,
-simulador, documentação e testes devem ser adaptados no mesmo incremento de ativação.
-Não declarar compatibilidade integral com a v1.1 nem mudar as imagens antigas.
-
-Após autenticação e consulta de Carrier, Tracking executa uma transação local:
-
-1. Resolve a identidade do inbox e a restrição única, preservando bytes e hash.
-2. Normaliza pelo adapter permitido e congela o comando de negócio.
-3. Persiste inbox `RECEIVED`, comando e outbox na mesma transação.
-4. Somente após commit confirmado devolve 202. Não aguarda publicação no broker.
-
-A separação histórica entre persistir a recepção e normalizar é substituída nesta
-admissão: um evento aceito para processamento sempre tem comando e outbox duráveis.
-Falha permanente de parsing/normalização autenticada persiste inbox `REJECTED`
-e devolve o erro documentado, sem criar trabalho de aplicação.
-
-| Condição | Resposta |
+| Campo | Significado neste evento |
 | --- | --- |
-| Evento novo aceito | 202, mesmo que um worker conclua antes da resposta chegar |
-| Mesmo ID/hash ainda pendente | 202, referenciando o inbox original |
-| Mesmo ID/hash já processado | 200, `DUPLICATE` e resultado original |
-| Mesmo ID/hash rejeitado | Erro permanente original, sem recriar trabalho |
-| Mesmo ID com bytes/hash diferentes | 409, sem sobrescrever o original |
-| HMAC, tamanho, media type ou Carrier inválido | Códigos e ausência/presença de persistência do contrato congelado |
-| Falha de infraestrutura na admissão | 503 sanitizado; commit incerto não significa ausência de efeitos |
+| `schema_version`, `type` | `1`, `shipment.status_changed.v1` |
+| `message_id` | UUID criado uma vez e persistido na outbox Core |
+| `event_id` | `ApplyEventCommand.event_id`, identidade causal já estável do efeito |
+| `correlation_id` | Inbox original de Tracking |
+| `causation_id` | `message_id` do comando recebido pelo Core |
+| `request_id` | Correlação original preservada, sem regeneração em retry |
+| `created_at` | `decided_at` do recibo Core, em UTC pelo Clock; instante da decisão, não do commit |
+| `payload` | Somente `shipment_id` UUID, `resulting_status` canônico e `recipient` snapshot |
+| `payload_sha256` | SHA-256 dos bytes canônicos do payload |
 
-O schema 202 contém `inbox_event_id`, `external_event_id`, `status=RECEIVED`,
-`received_at` e `request_id`. `Location` aponta à consulta pública do inbox e
-`Retry-After: 1` orienta polling. Duplicatas preservam a correlação original no
-trabalho; o request ID da resposta corresponde à requisição atual. Uma reentrega
-idêntica pode esclarecer admissão cujo commit/resposta ficou incerto.
+`event_id` será também `Notification.tracking_event_id`; ele existe antes da
+timeline de Tracking e não exige consulta a ela. Não duplicar esse ID no payload.
+`resulting_status` admite somente os seis status do comando atual (`POSTED`,
+`IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `EXCEPTION`, `RETURNED`). `recipient`
+é o email capturado durante a aplicação, sem espaços externos, não vazio e com
+máximo de 254 caracteres. Notifications não consulta Order para reobter destinatário.
+O canal fixo EMAIL e o mapeamento determinístico de template pertencem a Notifications;
+não transportar texto do Carrier, corpo renderizado, dados do Order ou raw webhook.
 
-Broker indisponível não impede 202 se as dependências de admissão e a transação
-local estiverem disponíveis. Isso acumula trabalho e não garante capacidade
-ilimitada de armazenamento ou prazo de conclusão.
+Manter serialização canônica/UTC da v1.2, limite de 64 KiB UTF-8, validação dos
+campos e correspondência de propriedades AMQP/envelope. Hash não autentica remetente:
+credenciais/permissões do broker autenticam o fluxo. Destinatário é dado restrito;
+não registrar payload, email, assinatura, segredo ou bytes de quarentena em logs.
 
-### 4.2 Consulta
+## 5. Publicação atômica e substituição da criação local
 
-`GET /api/v1/carrier-events/{inbox_event_id}` preserva os campos existentes e expõe
-o resultado terminal, `tracking_event_id` quando aplicável e `completed_at`.
-O timestamp de conclusão é obtido pelo Clock durante a transação de finalização;
-não representa uma medição exata do instante do commit ou do fsync.
-`processed_at` preserva a semântica existente, inclusive a decisão original de
-rejeição no Core; `completed_at` registra separadamente a finalização no Tracking.
+Uma transação Core confirma: inbox técnica do comando, recibo, alteração de
+Shipment, avaliação de Order, outbox `tracking.result.v1`, outbox
+`shipment.status_changed.v1` quando APPLIED e `DONE` da inbox técnica. A nova
+outbox substitui **integralmente** `NotificationsPublic.record_applied_transition`
+nesse caminho. Não há dual-write de Notification local/remota, fallback síncrono,
+publicação no router ou simulação no Core. Todos os caminhos de aplicação do Core
+devem passar por essa coordenação; seeds funcionais também não criam efeitos locais.
 
-O estado de negócio permanece `RECEIVED`, `PROCESSED` ou `REJECTED`. O progresso
-local adicional distingue `QUEUED`, `AWAITING_RESULT`, `COMPLETED` e
-`BLOCKED_LOCAL`, derivado do trabalho durável de Tracking. `AWAITING_RESULT` não
-prova que Core está processando: não se inventa uma visão global sincronizada.
-Erros posteriores são consultados no resultado; não podem alterar o HTTP já enviado.
-Falhas operacionais não viram rejeições de negócio. IDs desconhecidos retornam 404.
+Falha ao gravar a outbox local reverte o fato e todos os efeitos da transação.
+Isso é diferente de Notifications indisponível: a transação não consulta esse
+serviço nem faz I/O AMQP. Preservar locks de Shipment antes de Order e `READ COMMITTED`.
+Uma sessão por operação; nenhum lock/conexão SQL retido durante HTTP, publish ou ACK.
 
-## 5. Mensagens, identidade e segurança
+Unicidade `(type, event_id)` da outbox é a autoridade final junto ao recibo.
+Recibo duplicado retorna o resultado original, sem novo fato, mensagem, destinatário
+ou timestamp. Uma pendência existente é republicada com os mesmos bytes. Ausência
+indevida da outbox de um recibo v1.3 APPLIED é violação de integridade, não licença
+para reconstruí-la de dados mutáveis. Recibos legados seguem a seção 9.
 
-São dois contratos explícitos: `tracking.apply.v1` (comando Tracking→Core) e
-`tracking.result.v1` (resultado Core→Tracking). Resultado descreve uma decisão
-já persistida e não é um evento genérico destinado a futuros consumidores.
+O Core worker mantém dois loops explícitos de publicação, com claims filtrados
+por tipo **antes do limite do lote**, conexões/canais, lotes e backoffs separados.
+Uma falha ou backlog de Notifications não ocupa a frente da fila de resultados
+Tracking nem pausa sua publicação. Não acrescentar um processo só para separar
+esses loops. Uma falha inesperada de loop obrigatório encerra o worker; dependência
+indisponível é estado controlado daquele loop, sem interrupção dos demais.
+Essa independência cobre backlog e falhas controladas específicas do fluxo
+Notifications. Processo, banco, broker e recursos compartilhados continuam sujeitos
+a falhas comuns; os dois publicadores não são domínios independentes de falha.
 
-Envelope versionado, com campos tipados e extras rejeitados:
-`schema_version`, `type`, `message_id`, `event_id`, `correlation_id`,
-`causation_id`, `request_id`, `created_at`, `payload` e `payload_sha256`.
-`correlation_id` é o inbox original; no resultado, `causation_id` é o ID da mensagem
-de comando; no comando, é o ID do inbox original. IDs de mensagem são criados uma
-vez e persistidos. O payload do comando usa `ApplyEventCommand`; o payload de
-resultado contém `command_sha256` e `result`, cuja união aplicada/rejeitada
-permanece inalterada. Validar esse vínculo no Tracking antes de finalizar.
+Publicação usa os mecanismos existentes: `PENDING/LEASED/SENT/BLOCKED`, claim por
+`FOR UPDATE SKIP LOCKED`, token/lease, mensagem persistente, `mandatory`, confirms
+e atualização condicionada ao token após liberar a sessão SQL. Timeout/retorno ou
+confirm perdido não provam envio; repetir com a mesma identidade é permitido.
+`SENT` significa confirmação do broker, nunca simulação concluída.
 
-Serialização canônica e UTC são determinísticos. O hash de transporte cobre o
-payload canônico e não substitui HMAC ou autenticação do broker. Propriedades AMQP
-e envelope devem coincidir. Limitar o envelope a 64 KiB em UTF-8 e testar os limites
-dos schemas, sem transportar raw webhook, segredos ou assinaturas.
-Não usar pickle, import dinâmico, headers fornecidos pelo cliente para roteamento
-ou desserialização executável.
+## 6. Dados, idempotência, processamento e recuperação
 
-Outbox possui unicidade por `(type, event_id)`; a recepção técnica verifica tanto
-`message_id` quanto identidade lógica e hash. Duplicata idêntica reutiliza o
-resultado. Reutilização de identidade com conteúdo divergente é conflito técnico,
-preserva o original e é isolada para diagnóstico, sem efeitos adicionais.
+Notifications possui metadata, histórico Alembic e banco próprios: registros
+Notification, inbox técnica, quarentena e auditoria de rearme. Não precisa de
+outbox, publicador ou tabela vazia para imitar os outros serviços. UUIDs causais de
+Shipment/Tracking são referências externas sem FK; a unicidade nomeada de
+`tracking_event_id` permanece. Usar PostgreSQL nativo UUID/timestamptz, enums varchar
+com checks nomeados e índices para pendências e filtros existentes.
 
-## 6. Persistência, entrega e recuperação
+O consumidor aceita somente o evento autorizado. Persiste envelope imutável e
+identidade/hash na inbox técnica e só então dá ACK. Commit incerto: não confirmar,
+fechar canal e reconectar com backoff. Duplicata exata por `message_id` ou por
+`(type, event_id)` é inócua. Reutilização de identidade com payload ou metadados
+imutáveis divergentes é isolada em quarentena, preservando original e diagnóstico,
+sem novo efeito. Contrato desconhecido, inválido ou excessivo também exige
+quarentena durável limitada antes de ACK; falha ao preservar não autoriza descarte.
 
-### 6.1 Outboxes
+Se o efeito já tem registro importado `LEGACY`, o processador preserva integralmente
+esse registro e não simula novamente. Na mesma transação, grava a mensagem realmente
+recebida em quarentena com motivo `LEGACY_EVENT_SUPPRESSED` e conclui sua inbox
+técnica como `DONE`. Esse DONE significa disposição técnica concluída, não nova
+entrega. O diagnóstico distingue essa supressão de duplicata ASYNC: não há envelope
+histórico para provar igualdade de conteúdo, portanto não inventar hash, envelope
+ou tentativa anterior nem comparar o novo payload como se fosse o original.
+Uma reentrega exata da mensagem técnica já registrada permanece idempotente;
+divergências nessa identidade técnica seguem a quarentena de conflito normal.
+Falha ao persistir quarentena/DONE reverte ambos e deixa o trabalho retomável.
 
-Cada serviço possui outbox no próprio banco. A gravação acompanha a transação que
-cria o fato publicável. Estados: `PENDING`, `LEASED`, `SENT`, `BLOCKED`; armazenar
-tentativas, próxima tentativa, lease/token, identidade e motivo controlado.
+O processador local reclama a inbox com lock, renderiza o conteúdo atual da v1.2
+e confirma **Notification + `DONE` da inbox** em uma transação SQL local. Não chama
+provedor nem outro serviço. `Notification.id` é criado na primeira gravação
+confirmada e preservado; sua identidade lógica é `tracking_event_id`. Retry após
+rollback pode gerar outro UUID não observado, nunca uma segunda linha confirmada.
+`created_at` e `simulated_at` são obtidos pelo Clock durante a simulação (iguais no
+sucesso atual); deixam de representar execução na transação Core. O instante do
+fato permanece no envelope. Falha esperada de renderização/simulação persiste
+`FAILED`, detalhe sanitizado e `simulated_at=null`; é terminal, com inbox `DONE`.
 
-O publicador reclama lotes com `FOR UPDATE SKIP LOCKED`, confirma a transação,
-publica fora de qualquer sessão SQL retida e exige mensagem persistente,
-`mandatory` e publisher confirm. Somente confirmação positiva sem retorno permite
-marcar `SENT`, condicionada ao token da lease. Timeout, retorno ou perda de conexão
-não equivalem a publicação concluída. Lease expirada pode ser retomada; um dono
-antigo não pode sobrescrever uma lease nova. Confirmação perdida pode gerar nova
-publicação da mesma mensagem, nunca identidade nova.
+Erro operacional não cria `FAILED`: mantém trabalho `PENDING` ou `RETRY_WAIT`,
+com até cinco tentativas por geração e esperas 1, 5, 15 e 60 s; esgotamento ou erro
+inesperado leva a `BLOCKED`. Usar savepoint/lock e persistência de tentativas da
+v1.2; queda da conexão reverte a transação inteira, deixando trabalho retomável.
+Indisponibilidade global de banco/broker pausa com backoff 1–30 s sem consumir
+rapidamente tentativas por item. A política aplica-se também à nova outbox Core.
 
-### 6.2 Recepção técnica e aplicação
+Reinício retoma inbox após ACK mesmo com fila RabbitMQ vazia. Rearme local do
+proprietário exige ID, hash esperado, banco alvo e motivo; registra auditoria e
+nova geração atomicamente, sem mudar payload/identidade. Não rearma `DONE`, não
+ressimula `SIMULATED/FAILED` nem reenvia quarentena automaticamente. Não criar
+endpoint público administrativo. Ausência de FIFO não altera o fato consumido:
+eventos aplicados distintos são simulados independentemente, sem reavaliar estado
+atual do Shipment ou suprimir evento porque outro mais recente chegou primeiro.
 
-Cada consumidor primeiro valida e grava uma inbox técnica durável no banco do
-serviço receptor. **ACK ocorre após essa persistência**, transferindo a
-responsabilidade de recuperação do RabbitMQ para PostgreSQL. ACK não significa
-conclusão de negócio. Se o commit é incerto, não confirmar; fechar o canal e
-reconectar com espera, permitindo redelivery idempotente.
+Esta entrega demonstra **um registro simulado por efeito**, não exactly-once de
+transporte ou de provedor externo. Aqui o único efeito de entrega é SQL local,
+atômico com a inbox. Um provedor real traria uma fronteira remota e resultado
+incerto que essa transação não cobre; ele está fora do escopo.
 
-Um processador local reclama trabalho da inbox técnica com lock e executa apenas
-operações SQL locais. Estados: `PENDING`, `RETRY_WAIT`, `DONE`, `BLOCKED`.
-Não há AMQP dentro dessa transação.
-Uma falha pode reverter os efeitos sem perder a atualização de tentativa: usar
-savepoint dentro da transação que mantém o lock do trabalho. Se a conexão cair,
-o rollback integral deixa o item retomável; não fabricar um commit de diagnóstico.
+## 7. Consultas, indisponibilidade e experiência operacional
 
-| Serviço | Uma única transação de aplicação |
-| --- | --- |
-| Core | Inbox técnica + recibo/efeitos locais + outbox de resultado + `DONE` |
-| Tracking | Inbox técnica de resultado + timeline/finalização do inbox de negócio + `DONE` |
+Notifications API oferece `/internal/v1/notifications` (lista),
+`/internal/v1/notifications/{notification_id}` (detalhe),
+`/internal/v1/notification-counts` (contagens por SIMULATED/FAILED) e
+`/internal/v1/notification-status/{tracking_event_id}` (progresso por efeito).
+São consultas GET. Contagens retornam `simulated` e `failed` inteiros não negativos,
+sem filtros, e `observed_at` UTC; lista/detalhe usam os schemas públicos preservados.
+Autenticação via `X-FulfillFlow-Internal-Token` com segredo próprio Core↔Notifications e
+comparação constante; sem cookies, exposição pública ou autorização via URL do
+cliente. Reutilizar cliente HTTP técnico/erros/request ID existentes com destino
+explícito e validação dos DTOs; não reutilizar o segredo dos Carriers.
 
-No Core, um recibo existente idêntico fornece o resultado original; nunca repetir
-Notification, transição ou avaliação com novos timestamps. No Tracking, validar
-identidade e hash do comando antes de aplicar o resultado. Finalização duplicada
-é inócua; resultado divergente não substitui uma conclusão anterior.
+Core preserva `GET /api/v1/notifications` e `/{notification_id}`, campos de leitura,
+filtros `status`, `shipment_id`, `created_from/to` inclusivos, paginação
+1/25/máximo 100 e ordenação `created_at DESC, id DESC`. Lista contém apenas registros
+terminais; lista vazia não prova ausência de trabalho. Detalhe desconhecido é 404
+somente após resposta válida do proprietário. Falha de conexão, timeout, auth
+interna ou resposta inválida vira 503 `application/problem+json` sanitizado, nunca
+lista vazia, 404 artificial ou leitura de tabela antiga. A requisição de consulta
+tem timeout total configurável de 2 s inicialmente, sem retry HTTP automático.
 
-Reinício antes do commit deixa trabalho retomável; reinício após commit e antes
-de ACK/publicação pode causar duplicatas toleradas. O resultado permanece
-recuperável sem nova chamada do cliente enquanto o trabalho estiver retomável.
-Itens `BLOCKED` exigem o rearme auditável da seção 6.3; não há recuperação automática
-ilimitada. A garantia depende dos armazenamentos duráveis e de recuperação das
-dependências; perda permanente de disco não é coberta.
+Nova consulta Core: `GET /api/v1/notification-status/{tracking_event_id}`. Core lê
+recibo/outbox pelo contrato público local, fecha a transação e só então consulta
+Notifications quando necessário. Retorna 404 para recibo inexistente; decisão que
+não gera notificação retorna `required=false`, sem consulta remota. Para APPLIED,
+`required=true` e observações separadas, sem fingir snapshot distribuído:
 
-### 6.3 Tentativas e mensagens inválidas
+- `publication`: estado local `PENDING/LEASED/SENT/BLOCKED` ou null para legado;
+- `processing`: `NOT_RECEIVED/PENDING/RETRY_WAIT/BLOCKED/DONE`, observado no serviço;
+- `notification_id`, `status` (`SIMULATED/FAILED`) e `simulated_at`: nulos até haver
+  registro terminal; para legado importado, `processing=null` e registro original;
+- `origin`: `ASYNC` ou `LEGACY`; `core_observed_at` e `notifications_observed_at`
+  identificam instantes de leitura, além de `tracking_event_id`.
 
-Falha transitória atribuível a um item permite até cinco tentativas por geração,
-com esperas de 1, 5, 15 e 60 s. Contador, prazo e motivo são duráveis. Esgotamento
-leva a `BLOCKED`; erro permanente de negócio produz resultado terminal, sem retry.
-Erros inesperados ou conflitos de contrato são bloqueados com diagnóstico.
+Na variante `required=false`, preencher somente `tracking_event_id`, `required`
+e `core_observed_at`; os demais campos acima são null. Para APPLIED sem outbox,
+apenas um registro remoto explicitamente importado como `LEGACY` permite a
+variante legada. `NOT_RECEIVED` ou registro `ASYNC` sem outbox é 503 de integridade,
+nunca classificação de legado por ausência de trabalho local.
 
-Indisponibilidade global de banco/broker pausa o componente com backoff limitado,
-sem consumir rapidamente as tentativas de todos os itens. Separar essa condição
-de erro de item por categorias explícitas; não usar requeue imediato em loop.
+O endpoint interno de progresso retorna 200/`NOT_RECEIVED` para identidade ainda
+desconhecida em Notifications; quem decide a existência do fato é Core. O estado
+terminal remoto prevalece visualmente sobre publicação ainda pendente por confirm
+perdido. Dados inconsistentes são erro controlado, não conclusão inventada.
+Dependência remota indisponível retorna 503; a UI conserva a última observação e
+o resultado Core/Tracking, identificando falha de consulta. Não inferir perda,
+ausência de notificação ou entrega a partir de timeout, `SENT` ou fila vazia.
 
-Mensagem malformada/desconhecida é isolada em quarentena durável local antes de
-ACK. Guardar bytes técnicos com limite e acesso restrito, fingerprint e motivo;
-nunca despejá-los em logs. Se não for possível preservar, não confirmar nem
-descartar silenciosamente. Não depender de TTL ou dead-lettering para recuperar
-trabalho que já foi aceito.
+Notifications fora do ar não desfaz Shipment/Order nem bloqueia a conclusão
+Tracking: Core persiste o fato, o broker ou a outbox acumulam pendência e o serviço
+retoma após recuperação. A ordem entre resultado Tracking e simulação é livre.
+O compartilhamento físico de PostgreSQL/broker ainda permite falhas ou exaustão
+globais; não prometer isolamento de recursos ou armazenamento ilimitado.
 
-Uma CLI local do serviço proprietário poderá rearmar um item bloqueado por ID,
-hash esperado e motivo explícito, criando geração auditável de tentativas. Não
-reescreve payload/identidade, não reprocessa `DONE` nem opera bancos históricos
-por padrão. Não adicionar endpoint público administrativo.
+HTML preserva rotas, filtros, templates no servidor, CSRF e CSP. Dashboard obtém
+contagens remotas em consulta independente das contagens Core e as mostra como
+indisponíveis em falha, nunca zero. Página de notificação indisponível apresenta
+erro controlado; páginas de Order/Shipment continuam utilizáveis. Após resultado
+APPLIED, UI pode observar a nova consulta a cada segundo por até 30 s, encerrando
+em terminal, bloqueio, navegação ou prazo. Renovar observação apenas consulta;
+não reenvia webhook nem rearma trabalho. Prazo não é falha de negócio.
 
-### 6.4 Concorrência e ordenação
+DEMO mostrará separadamente 202, conclusão Tracking/Order e simulação, incluindo
+worker Notifications parado e retomada sem reenvio. O simulador de Carriers mantém
+seu contrato de esperar Tracking; concluir seu cenário não comprova Notifications.
+O aceite verifica as notificações pela consulta própria. Novas capturas v1.3 não
+substituem as anteriores; DEMO/README só serão atualizados ao ativar comportamento.
 
-Não presumir FIFO global entre usuários, filas ou réplicas. Core continua a
-decidir transições com locks e a tupla temporal congelada. Um comando antigo pode
-concluir como stale; todos os resultados válidos integram a timeline sem regressão
-de estado. A ordem de chegada dos resultados não muda suas decisões persistidas.
+## 8. Implantação, operação e reutilização delimitada
 
-## 7. Runtime e dados
+Manter versões/digests atuais de PostgreSQL/RabbitMQ e `uv.lock`; nenhuma ferramenta
+ou dependência de produção nova é necessária. Novo fluxo: exchange direct durável
+`shipment.status_changed.v1`, fila classic durável `shipment.status_changed.v1.queue`,
+routing key igual ao tipo, sem exclusive/auto-delete/TTL. Declarar binding antes
+de iniciar publicação, mesmo com consumidor desligado. Não alterar os dois fluxos
+Tracking. No projeto v1.3, usar vhost próprio, usuário Notifications com consumo
+apenas da nova fila; Core recebe permissão de publicar no novo fluxo, Tracking não.
+Testar permissões efetivas, inclusive declaração passiva/ativa necessária ao startup.
+AMQP e management permanecem internos; sem cluster ou alegação de HA.
 
-Adicionar somente RabbitMQ 4.x e cliente async `aio-pika`, com dependências
-transitivas necessárias. No incremento I, fixar versão exata compatível com Python
-3.13, lock e digest da imagem verificados; não atualizar o restante da stack.
-O adaptador AMQP fica fora de domain e shared; contratos de negócio permanecem
-independentes do cliente. Não introduzir framework genérico de eventos.
+Configuração por processo valida role `notifications`, DSN/banco esperado e head
+próprio; worker exige AMQP, API exige segredo interno; não exigir HMAC ou sessão
+HTML de Notifications. Core recebe URL interna e timeout de Notifications e o
+segredo desse vínculo. Nunca fornecer DSNs alheios aos processos. Health da API
+distingue liveness de readiness (banco/head); não depende de worker/broker para
+servir registros. Worker usa heartbeat/comando local, sem servidor HTTP, com
+estados de receive/process; Core distingue os dois publishers no diagnóstico.
+Loops obrigatórios mortos não podem aparentar saúde; backlog isolado não equivale
+a processo morto. Dependências e bloqueios devem estar visíveis separadamente.
 
-Topologia local: um broker, duas exchanges direct, duas filas duráveis, sem
-exclusive/auto-delete. Filas classic são suficientes para este contrato de nó
-único; não há alegação de alta disponibilidade. Nomes, bindings e versões são
-declarados e validados na inicialização. Usar vhost próprio, credenciais distintas
-e permissões mínimas por serviço. Management e AMQP não ficam expostos externamente;
-segredos vêm de settings. TLS e implantação externa exigem decisão própria.
+Reutilizar leases, ACK durável, retry, quarentena, auditoria, cliente HTTP e
+supervisão somente onde os contratos acima se aplicam. O código v1.2 infere dois
+fluxos a partir de core/else, fixa tipos nos checks SQL e exige publish/receive/process
+na saúde: ajustar explicitamente esses pontos e Import Linter, sem framework
+genérico, registry dinâmico, outbox fictícia em Notifications ou refatoração de Tracking.
 
-Parâmetros iniciais explícitos: um processo por worker, prefetch 8, lote de
-publicação 20, polling local de 500 ms, lease de 30 s e confirm timeout de 5 s.
-Polling, lotes e concorrência são parâmetros da implementação e influenciam a
-latência e a capacidade do fluxo completo. Seus valores efetivos devem acompanhar
-a identidade do runtime; uma diferença futura não será atribuível só ao RabbitMQ.
-Encerramento gracioso: parar admissão de trabalho no worker e aguardar até 15 s;
-fechar canais ao expirar. Trabalho incompleto permanece durável. Falha inesperada
-de qualquer loop obrigatório encerra o processo com erro, sem worker parcialmente
-ativo aparentando saúde. Heartbeat local e comando de healthcheck não exigem HTTP.
+Parâmetros iniciais: um processo por worker, prefetch 8, lote 20 por publisher,
+polling local 500 ms, lease 30 s, confirm timeout 5 s, shutdown até 15 s. Parar novos
+claims/entregas, aguardar trabalho em curso até o limite e fechar canais/sessões;
+trabalho incompleto permanece durável. Compose deve dar margem ao encerramento
+e permitir iniciar/reiniciar Notifications sem reiniciar Core/Tracking. Migrações
+são jobs explícitos por proprietário; não criar schema na API/worker nem condicionar
+readiness do Core ao serviço Notifications.
 
 | Processo | CPU | Memória | Pool SQL / overflow |
 | --- | --- | --- | --- |
-| Core API | 0,5 | 384 MiB | 2 / 0 |
-| Core worker | 0,5 | 384 MiB | 3 / 0 |
-| Tracking API | 0,5 | 384 MiB | 2 / 0 |
-| Tracking worker | 0,5 | 384 MiB | 3 / 0 |
+| Core API / worker | 0,5 / 0,5 | 384 / 384 MiB | 2 / 0; 3 / 0 |
+| Tracking API / worker | 0,5 / 0,5 | 384 / 384 MiB | 2 / 0; 3 / 0 |
+| Notifications API / worker | 0,5 / 0,5 | 384 / 384 MiB | 2 / 0; 3 / 0 |
 | PostgreSQL | 2 | 2560 MiB | — |
 | RabbitMQ | 0,5 | 512 MiB | — |
 
-São limites iniciais de operação funcional, ainda não validados. Aplicação soma
-2 CPUs/1536 MiB; broker acrescenta recursos. Não apresentar isso como orçamento
-total equivalente à v1.1. Uma comparação futura deve decidir explicitamente o
-orçamento de toda a topologia, sem multiplicá-lo por componente.
+Limites iniciais funcionais, ainda não validados: aplicação 3 CPUs/2304 MiB;
+topologia 5,5 CPUs/5376 MiB, excluindo jobs de migração/testes. Registrar pools,
+concorrência e parâmetros efetivos no aceite. Não afirmar equivalência de orçamento
+com v1.2 nem dimensionar por uma quantidade desejada de componentes.
 
-Compose v1.2 usa projeto e volumes novos. A identidade do nó RabbitMQ deve
-permanecer estável ao recriar seu container com o mesmo volume; preservar apenas
-o volume não autoriza mudar a identidade sob a qual os dados são localizados. Alembic mantém dois históricos de
-migração, com heads independentes. Verificar banco limpo e upgrade de uma cópia
-descartável representativa da v1.1; jamais migrar volume histórico para testar.
-Registros antigos `RECEIVED` sem outbox não são publicados automaticamente: devem
-ser inventariados como legado pendente. Uma migração não executa efeitos de negócio.
-Dados terminais existentes continuam consultáveis; novos campos precisam tolerar
-ausência de informação histórica sem inventar timestamps ou resultados.
-Para inbox legado sem trabalho de transporte, `progress` fica nulo; não o mostrar
-como enfileirado ou em recuperação automática.
+Logs JSON controlados preservam IDs/correlação e distinguem publicação, recepção,
+tentativa e conclusão. Diagnóstico proprietário mostra contagem/idade, tentativas,
+geração, motivo, última atividade e rearme; separar outbox Core, inbox Notifications,
+simulações terminais e filas ready/unacked. Não somar etapas como eventos únicos.
+Prometheus/OTel mais amplos continuam pendentes; logs não comprovam tracing.
 
-## 8. Observabilidade e operação
+## 9. Migrações, legado e dados de demonstração
 
-Preservar a política atual de access logs e mensagens Uvicorn. Acrescentar logs
-estruturados INFO para o novo fluxo de mensagens, em stdout, sem duplicação de
-handlers: horário UTC, serviço, etapa, identidades técnicas, tentativa, duração,
-resultado e categoria controlada de erro. Não registrar bodies, credenciais,
-assinaturas, argv, ambiente ou traces brutos em respostas públicas.
+Usar projeto/volumes v1.3 novos e identidade estável do nó RabbitMQ ao recriar seu
+container. Três históricos Alembic independentes. Evoluir Core para nova outbox/tipos
+e retirar a tabela Notification do modelo de negócio ativo; banco Notifications
+nasce com suas tabelas. Não modificar migrations antigas ou o head Tracking sem
+necessidade demonstrada. Preservar a reconstrução de metadata legada usada pelas
+migrations antigas e os caminhos de seeds históricos, sem adaptá-los silenciosamente.
 
-Essa instrumentação é uma diferença declarada da v1.2. Não retroaplicá-la às
-imagens v1.1 nem alegar paridade automática. Requisitos históricos mais amplos de
-logging, Prometheus e OpenTelemetry continuam pendentes; não são removidos nem
-declarados implementados por estes logs.
+Além de banco limpo, verificar upgrade **somente em cópia descartável** da v1.2.
+O corte é offline: suspender novos webhooks e escritores antigos, drenar trabalho
+retomável v1.2 e inventariar bloqueados; exportar Notifications pelo proprietário
+Core e importar pelo proprietário Notifications em comandos locais separados.
+Não há conexão SQL cruzada em runtime. Bloqueados ou pendências não resolvidas
+impedem o corte dessa cópia; não descartá-los nem misturar escritores v1.2/v1.3.
 
-Diagnóstico local deve mostrar contagem/idade de trabalho pendente e bloqueado,
-última atividade, publicação e conclusão por ID e motivos sanitizados. Distinguir
-mensagens no RabbitMQ (prontas e sem ACK), pendências de cada outbox/inbox técnica
-e eventos de negócio ainda não concluídos. ACK após persistência técnica permite
-fila RabbitMQ vazia com trabalho pendente no PostgreSQL; prefetch limita entregas
-sem ACK, não o acúmulo durável local.
+Importação é idempotente e verifica contagens e conteúdo completo por identidade;
+preserva IDs, destinatário, mensagem, status, erros e timestamps. Conteúdo divergente
+interrompe o corte. Registros copiados são `LEGACY`, sem inventar envelope, hash,
+tentativa ou tempo de recepção. Preservar tabela original Core como arquivo inativo,
+sem writes/leituras de runtime, e ativar apenas Notifications como proprietário
+consultável após verificação. Não apagar os dados originais nessa entrega.
+Representar essa tabela explicitamente na metadata de migrations do Core, separada
+do modelo de negócio ativo, para Alembic reconhecer sua retenção sem propor DROP
+nem desabilitar a detecção de drift das demais tabelas.
 
-Contagens técnicas são por etapa e não devem ser somadas como total de eventos.
-Usar o inbox de negócio do Tracking como referência de eventos aceitos ainda não
-terminais, incluindo bloqueados, e correlacionar etapas por identidade estável.
-Conservar horários de aceitação, decisão e finalização disponíveis, estado e
-categoria de falha; não inventar uma fotografia atômica entre bancos e broker.
-Esses dados servem à operação e aos testes funcionais, sem novo runner de carga.
-Saúde da API para admitir não equivale à saúde dos workers para concluir. Expor
-essa distinção na operação, inclusive broker indisponível com admissão disponível.
-Não prometer causa raiz quando os registros não a sustentarem.
+Recibos históricos APPLIED já correspondem a registros legados: nunca fabricar
+outbox para ressimulação nem usar ausência de outbox como pendência nova. O corte
+verifica esse vínculo e a consulta por ID original no novo proprietário. O alvo
+não promete upgrade online/rolling entre v1.2 e v1.3 nem rollback de esquema após
+novos eventos; recuperar falha do ensaio restaurando apenas a cópia descartável.
 
-## 9. UI e simulador
+Seed funcional v1.3 usa dados sintéticos determinísticos e o fluxo autorizado;
+seus IDs não colidem com campanhas antigas. Reexecução não duplica efeitos.
+Não portar loadgen, mudar dataset/pesos de benchmark ou tocar volumes históricos.
 
-A UI mantém templates no servidor e os controles CSRF/CSP existentes. Mostrar
-aceito/pendente, finalizado e rejeitado sem apresentar 202 como aplicação concluída.
-Polling a cada segundo termina ao obter estado terminal, sair da página ou
-esgotar os 30 segundos da observação local. Uma nova observação explícita apenas
-consulta o mesmo evento; não reenvia admissão. Erros de consulta preservam a tela
-e não alteram estado persistido. Prazo esgotado não significa rejeição ou perda. Atualizar timeline e resultado quando
-disponíveis, sem regras de negócio em templates.
+## 10. Verificação, aceite e limites
 
-O simulador reconhece 202, consulta `Location` com prazo configurável e apresenta
-separadamente aceitação e conclusão. Prazo esgotado significa resultado ainda não
-observado, não rejeição nem perda. Preservar modo explícito de cliente síncrono
-quando necessário para imagens antigas, sem modificar simuladores congelados.
+Testes acompanham cada incremento do RELEASE_PLAN, começando por contratos,
+constraints e migrations. PostgreSQL real para transações/locks/concorrência;
+RabbitMQ real para routing/permissões, confirms/ACK e reinício. Mocks apenas
+complementam falhas focais; CI não omite silenciosamente caminhos críticos.
 
-## 10. Verificação e limites de conclusão
+Verificar APPLIED e todas as exclusões da seção 2, destinatário congelado, ambos
+adapters, uma notificação por efeito, duplicatas simultâneas/divergentes, ordem de
+chegada invertida, rollback conjunto Core e rollback conjunto Notifications,
+queda antes/depois de commit/confirm/ACK, recuperação com fila vazia, esgotamento,
+rearme auditado, quarentena e lease antiga. Demonstrar conclusão de Shipment/Order
+e Tracking durante indisponibilidade de API/worker/banco Notifications, e ausência
+de starvation de resultados por falha do novo publisher. Validar também ausência
+de SQL retido em I/O, isolamento de roles, consultas/503/UI e legado sem ressimulação.
+Incluir teste focal de mensagem nova para efeito LEGACY: registro preservado,
+quarentena diagnosticável e DONE atômicos, replay sem nova simulação e sem fabricar
+metadados históricos; contrastar com duplicata ASYNC verificável.
 
-Testes acompanham cada incremento. PostgreSQL e RabbitMQ reais são obrigatórios
-para persistência, ACK, confirms, reinício e concorrência. Mocks servem a falhas
-focais, não substituem essas verificações.
+Preservar gate global de 80%, cobertura completa das regras críticas e testes de
+regressão Tracking. Aplicar Ruff/formatação, Mypy, Import Linter, pytest/cobertura,
+Alembic em cada banco afetado e build/smoke ao mudar runtime. O aceite funcional
+comprova fluxo, recuperação e operação limitada; não prova capacidade, estabilidade
+prolongada, entrega externa, HA ou observabilidade ampla.
 
-Cobrir: ambos adapters/HMAC/bytes; duplicata pendente e terminal; conflito de hash;
-rejeições antes/depois de 202; concorrência; ordering; conclusão de Order e uma
-Notification por efeito; publicação confirmada/retornada/incerta; queda antes e
-depois dos commits/ACK; resultado repetido; retomada após reinício; bloqueio e
-rearme explícito; quarentena; lease vencida e dono antigo; ausência de SQL retido
-durante HTTP/AMQP; indisponibilidade e retorno de dependências sem perda silenciosa.
-
-Barreiras e falhas injetadas controlam fronteiras transacionais. Limites de espera
-evitam testes pendurados. Verificações de reinício usam recursos descartáveis e
-dados sintéticos. Preservar cobertura global mínima de 80% e cobertura completa
-das regras críticas existentes; não enfraquecer testes para acomodar o novo fluxo.
-
-O aceite funcional não depende da matriz de desempenho. Após o fluxo, recuperação,
-UI e operação aprovados, congelar uma referência e **parar para decisão** sobre
-encerramento, comparação futura ou evolução. Não iniciar carga extensa ou outra
-extração automaticamente.
-
-Uma comparação posterior deverá separar eventos oferecidos, aceitos e concluídos;
-latência HTTP e ponta a ponta; backlog/idade; tempo e limite de drain; falhas e
-recursos totais. Polling de conclusão também tem custo. Mesma quantidade de usuários
-em carga fechada não garante mesma taxa oferecida quando a resposta muda para 202.
-Aplicar as distinções de backlog da seção 8 e registrar os parâmetros da seção 7,
-incluindo o polling local de 500 ms. Fila do broker vazia não encerra o drain:
-a conclusão precisa considerar o trabalho durável e os resultados de negócio.
-Não reutilizar o validador síncrono como se aceitação significasse conclusão.
-Protocolo e identidades novos exigem aprovação prévia e baselines afetadas próprias;
-resultados de campanhas diferentes continuam separados.
-
-## 11. Referências técnicas
-
-- [RabbitMQ: confirmações de publicação e acknowledgements](https://www.rabbitmq.com/docs/confirms).
-- [RabbitMQ: limites de dead-lettering](https://www.rabbitmq.com/docs/dlx).
-- [aio-pika](https://docs.aio-pika.com/).
-- [HTTP assíncrono: aceitação e consulta de resultado](https://learn.microsoft.com/en-us/azure/architecture/patterns/asynchronous-request-reply).
-
-Essas referências sustentam os mecanismos. Os limites e garantias do FulfillFlow
-são os definidos neste contrato, não propriedades presumidas de uma biblioteca.
+**Parar após o aceite funcional**, antes de campanha extensa ou publicação.
+Comparação futura exige decisão/protocolo próprios, distinguindo eventos oferecidos,
+aceitos, Tracking concluído e notificações simuladas, latências/backlogs/drain,
+recursos totais e instrumentação. Sem publicação, tag, merge ou evolução automática.
+Não entram provedores reais, cloud, Kubernetes, GitOps, autoscaling, novos brokers,
+framework de eventos ou componentes sem necessidade deste fluxo.

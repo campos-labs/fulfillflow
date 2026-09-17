@@ -2,7 +2,7 @@
 
 ## Authority and scope
 
-- Work only on the user-authorized v1.2 increment. DESIGN defines the asynchronous Tracking target; RELEASE_PLAN records implementation status. Preserve v1.0.0, v1.1.0-rc.1 and all frozen evidence.
+- Work only on the user-authorized v1.3 scope or increment. DESIGN defines asynchronous Notifications while preserving asynchronous Tracking; RELEASE_PLAN records implementation status. Planning does not authorize implementation. Preserve v1.0.0, v1.1.0-rc.1, v1.2.0-rc.1 and all frozen evidence.
 - Read the relevant sections of `DESIGN.md` before changing architecture, domain behavior, persistence, HTTP contracts, security, observability, seeds, or benchmarks.
 - For a targeted task, locate the applicable headings and avoid loading unrelated DESIGN sections into context.
 - Read inherited contracts from the frozen commit linked in DESIGN, using `git show <commit>:DESIGN.md` when needed. Do not load or copy the entire historical document for each task.
@@ -19,7 +19,7 @@
 5. Run focused checks first, then the broadest relevant validation available.
 6. Review the final diff for scope, secrets, accidental generated files, and DESIGN drift.
 
-For v1.2 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request. Resolve routine implementation choices autonomously; ask only for concrete contract or scope decisions.
+For v1.3 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request. Resolve routine implementation choices autonomously; ask only for concrete contract or scope decisions.
 
 Do not attempt the entire release in one undifferentiated change. Do not create empty placeholder files merely to reproduce the planned tree.
 
@@ -33,7 +33,7 @@ Do not attempt the entire release in one undifferentiated change. Do not create 
 - Prometheus client and configurable OpenTelemetry/OTLP; Jaeger is optional local infrastructure.
 - uv with `pyproject.toml` and committed `uv.lock`.
 - Multi-stage Dockerfile, Docker Compose and GitHub Actions.
-- RabbitMQ 4.x and aio-pika for the two Tracking command/result flows in DESIGN. Pin compatible versions and image digest during increment I; preserve unrelated locked dependencies.
+- RabbitMQ 4.x and aio-pika for the existing Tracking command/result flows and the Notifications event in DESIGN. Preserve the pinned versions, image digests and locked dependencies.
 
 Do not replace an approved component or add a production dependency without a concrete requirement. Update `uv.lock` whenever dependencies change; never edit it manually.
 
@@ -41,16 +41,16 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## Architecture boundaries
 
-- Core and Tracking retain separate databases and roles in one PostgreSQL instance. Their API and worker processes share only their owning service's database. Notifications stays in Core.
+- Core, Tracking and Notifications have separate databases and roles in one PostgreSQL instance in the v1.3 target. Each API and worker accesses only its owning service's database; Notifications remains local until the coordinated extraction increment.
 - Business modules are `orders`, `shipments`, `carriers`, `tracking` and `notifications`.
 - `shared` contains only stable technical primitives such as clock, IDs and pagination. It contains no business rules and depends on no business module or infrastructure framework.
-- Modules within a service communicate through Python public interfaces. Cross-service commands/results use the AMQP contracts in DESIGN; forwarding and queries retain the documented authenticated HTTP contracts. Do not import another service's business implementation or persistence.
+- Modules within a service communicate through Python public interfaces. Cross-service commands/results/events use the AMQP contracts in DESIGN; forwarding and queries use the documented authenticated HTTP contracts. Do not import another service's business implementation or persistence.
 - A module may access only its own ORM models and repositories.
 - Within a service, cross-module access goes through `public.py` or an explicitly public schema.
 - Routers and templates contain no business rules. ORM models are never API schemas.
 - `domain.py` must not depend on FastAPI, SQLAlchemy, AMQP clients, web, database or observability infrastructure.
 - Respect this dependency direction:
-  - Tracking uses explicit Core contracts, never in-process access to Core business modules. Keep the existing synchronous flow only until increment II activates its documented replacement.
+  - Tracking uses explicit Core contracts, never in-process access to Core business modules. Preserve its asynchronous command/result flow. Notifications consumes its own Core event, never the result destined for Tracking.
   - Shipments may use public Orders and Carriers contracts.
   - Orders, Carriers and Notifications do not depend on another business module unless DESIGN is revised first.
 - Keep Import Linter contracts executable. Do not hide forbidden imports behind local imports, `TYPE_CHECKING`, dynamic imports or re-exports.
@@ -64,7 +64,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Alembic is the only schema creation and evolution mechanism. Do not call `Base.metadata.create_all()` in runtime or integration tests.
 - Use independently scoped sessions per request or worker operation within the owning service. Never share an AsyncSession between concurrent tasks. Hold no SQL connection, transaction or lock during HTTP or AMQP I/O; close/release the SQL scope before publishing or acknowledging. Scripts and workers establish explicit transaction boundaries.
 - Repositories may query, add and `flush`; they never `commit` or `rollback` a coordinated transaction.
-- The coordinating service owns local transaction boundaries. Public module services within that service participate in its current transaction; no session or transaction spans Core and Tracking.
+- The coordinating service owns local transaction boundaries. Public module services within that service participate in its current transaction; no session or transaction spans services.
 - Do not add a generic Unit of Work abstraction unless current code demonstrates a concrete need; `AsyncSession` may serve as the transaction context.
 - Avoid implicit async ORM I/O and lazy-loading surprises. Load required relationships explicitly.
 - Foreign keys for business records use restrictive deletion. Do not add cascading deletion of business history.
@@ -79,8 +79,10 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Keep one secret per carrier, loaded from settings. Never log secrets, signatures or complete webhook bodies.
 - Treat the database unique constraint on `(carrier_id, external_event_id)` as the final idempotency authority.
 - Same event ID and same payload hash may resume or return the original result. Same event ID with a different hash is a conflict and never overwrites the original.
-- In v1.2, commit admission, normalized command and command outbox together before returning 202. Persist permanent admission rejection without creating application work.
+- Commit admission, normalized command and command outbox together before returning 202. Persist permanent admission rejection without creating application work.
 - Commit the Core receipt/effects and result outbox together. Finalize Tracking with the received result in a separate local transaction, preserving identities, timestamps and outcomes.
+- At v1.3 activation, replace local Notification creation with the independent event outbox in that same Core transaction, only for APPLIED transitions. Never dual-write or couple Notifications to Tracking results; isolate the two Core publishers.
+- Notifications commits its simulation record and technical-inbox completion together, with one record per tracking_event_id. Infrastructure failures remain retryable or BLOCKED, not FAILED simulations. Core queries Notifications through authenticated HTTP, never its database or a local fallback.
 - AMQP ACK follows durable technical-inbox persistence, not business completion. Durable local processing, bounded retries and explicit blocked states then own recovery. Never claim global atomicity or exactly-once transport.
 - Repositories inside a coordinated local transaction must not commit independently.
 - Core locks Shipment before Order; inbox locks stay in their owning database and never span network I/O. Preserve lock ordering in all worker paths.
@@ -91,7 +93,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## API, UI and security
 
-- Keep the public API under `/api/v1`. The explicit v1.2 exception is durable webhook acceptance with 202 and result polling; implement it together with clients/tests. Preserve other routes and semantics from the frozen reference linked in DESIGN.
+- Keep the public API under `/api/v1`. Preserve v1.2 durable webhook acceptance with 202 and result polling. The v1.3 Notifications queries/progress and eventual simulation follow DESIGN and must ship with clients/tests; preserve other frozen routes and semantics.
 - Use dedicated Pydantic schemas for create, read and list operations.
 - Return documented `application/problem+json` errors through global handlers, including framework validation, 404 and 405 responses.
 - Echo a valid `X-Request-ID` or generate a UUID; preserve the original correlation in durable messages and controlled logs. Do not claim tracing is implemented when it remains pending.
@@ -176,12 +178,12 @@ Do not add any of the following:
 - user authentication, SSO, OAuth, RBAC or multitenancy;
 - catalog, inventory, warehouse, payment, checkout, billing or ERP integration;
 - real carrier, email, SMS, WhatsApp or push integrations;
-- Kafka, Redis, Celery, Taskiq, additional brokers or workers outside the two service-owned flows authorized in DESIGN;
-- API Gateway, Kubernetes, AKS or mandatory cloud resources;
+- Kafka, Redis, Celery, Taskiq, additional brokers or workers outside the service-owned flows authorized in DESIGN;
+- API Gateway, Kubernetes, AKS, cloud infrastructure, GitOps or autoscaling;
 - React, Vue, Angular, Node.js build tooling or runtime CDN dependencies;
 - MinIO, Blob Storage or file storage;
 - AI/LLM features;
-- background reprocessing outside the durable Tracking command/result contract, extraction of Notifications or distributed rate limiting.
+- background reprocessing outside the durable Tracking/Notifications contracts, other service extractions or distributed rate limiting.
 
 If a task appears to require an excluded component, stop and explain the conflict instead of adding it.
 

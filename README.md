@@ -1,8 +1,11 @@
 # FulfillFlow
 
-Checkout de desenvolvimento **v1.2.0.dev0**, na linha de Tracking assíncrono.
-O [DESIGN](DESIGN.md) define os contratos e o [RELEASE_PLAN](RELEASE_PLAN.md)
-registra o aceite dos incrementos. As referências `v1.0.0` e `v1.1.0-rc.1`
+Alvo documental **v1.3 — Notifications assíncrono, ainda não implementado**,
+na branch `feature/v1.3-notifications-async`, baseada em `v1.2.0-rc.1`
+(`9b445f9b5466cd302c89f1deed7a9c051cb397ae`). O [DESIGN](DESIGN.md) define o
+alvo e o [RELEASE_PLAN](RELEASE_PLAN.md) registra o plano e seu estado.
+O código e os comandos abaixo ainda executam a v1.2 (`v1.2.0.dev0` no pacote),
+com Tracking assíncrono e Notifications no Core. As referências v1.0/v1.1/v1.2
 e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
 
 Core mantém Orders, Shipments, Notifications e Carriers. Tracking mantém HMAC,
@@ -384,8 +387,8 @@ entre proprietários e rejeição de conexão com a credencial do outro serviço
 ## Documentação
 
 - [Demonstração funcional](docs/DEMO.md): preparação e jornada pela API/UI.
-- [DESIGN](DESIGN.md): arquitetura alvo v1.2 e contratos preservados da base.
-- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos, aceite e estado da v1.2.
+- [DESIGN](DESIGN.md): alvo v1.3 ainda não implementado e contratos preservados.
+- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos e estado da preparação v1.3.
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
 - [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
 - [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.

@@ -1,358 +1,211 @@
-# FulfillFlow — Plano de entrega v1.2
+# FulfillFlow — Plano de entrega v1.3
 
-## 1. Objetivo e estado
+## 1. Objetivo, base e autorização
 
-Entregar Tracking com admissão durável e coordenação de comandos/resultados por
-RabbitMQ, mantendo Notifications no Core. Contratos pertencem ao
-[DESIGN.md](DESIGN.md); este documento define sequência, aceite e estado.
+Preparar a extração assíncrona de Notifications com banco próprio, consulta HTTP
+interna e entrega simulada. O [DESIGN](DESIGN.md) define contratos; este documento
+define sequência, critérios e estado. Prioridade: funcionamento e recuperação.
 
-Base: `v1.1.0-rc.1`, SHA `217e29a230689da3bd6359790f0753b41a10a927`.
-Branch: `feature/v1.2-tracking-async`. A v1.0 publicada e a pré-release v1.1
-permanecem congeladas. Nenhum merge para main é necessário para iniciar esta linha.
+Base: `v1.2.0-rc.1`, SHA `9b445f9b5466cd302c89f1deed7a9c051cb397ae`.
+Branch: `feature/v1.3-notifications-async`, criada diretamente desse SHA em checkout
+isolado para preservar as alterações do checkout v1.2. A tag anotada foi conferida
+pelo commit resolvido, sem mover referências existentes.
+
+**Autorização atual: implementar I e II, sequencialmente, com revisão e testes
+antes de avançar; parar antes do III.** O desenho está aprovado com esclarecimentos
+de supressão de mensagens LEGACY e limites de independência dos publicadores.
+Commits por assunto e push somente nesta branch estão autorizados, com conferência
+da CI do SHA final. III/IV, campanhas, publicação e merge permanecem não autorizados.
 
 | Marco | Estado |
 | --- | --- |
-| Arquitetura alvo e plano | Conferidos contra o código em 9d1d468; comando/recibo preservados |
-| I — Contratos e transporte durável | Concluído: PostgreSQL/RabbitMQ reais, revisão e CI aprovada no SHA `5a50f97` |
-| II — Fluxo assíncrono completo | Concluído: outboxes atômicas, 202/consulta, workers, clientes e recuperação local testados |
-| III — Recuperação e operação | Concluído: rearme/diagnóstico, políticas, lifecycle/saúde e recuperação verificados |
-| IV — UI, verificação integrada e congelamento funcional | Concluído funcionalmente; aceite vinculado à CI do SHA final da entrega |
-| Comparação extensa | Adiada, sem execução autorizada |
-| Tag/pré-release/release v1.2 | `v1.2.0-rc.1`: pré-release de aceite funcional; sem release estável |
+| Inspeção da referência, criação/consultas/idempotência e mecanismos v1.2 | Concluída sobre o SHA congelado |
+| Desenho e plano v1.3 | Aprovados; esclarecimentos incorporados |
+| I — Contratos e persistência | Em implementação |
+| II — Fluxo integrado | Não iniciado |
+| III — Recuperação e operação | Não iniciado |
+| IV — UI e aceite funcional | Não iniciado |
+| Comparação extensa / publicação | Suspensas; requerem decisão posterior |
 
-O checkout ativa o fluxo assíncrono da v1.2; a referência síncrona v1.1 permanece
-congelada. A comparação anterior continua suspensa/incompleta. Resultados e
-ressalvas estão em
-[V11_REVIEW.md](benchmarks/V11_REVIEW.md) e seu histórico vinculado. Nada neste plano
-autoriza retomar campanhas, reinterpretar o 503 ou reunir repetições de campanhas
-diferentes. Integridade/WAL históricos e cópia independente não confirmados
-permanecem pendências; não usar esses volumes no desenvolvimento.
+O [plano congelado v1.2](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/RELEASE_PLAN.md)
+preserva os aceites I–IV, CI, imagem local, lock, heads e proveniência da pré-release;
+o [README congelado](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/README.md)
+e o [DEMO congelado](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/docs/DEMO.md)
+preservam o comportamento demonstrado. Não reinterpretar esse aceite como benchmark.
+As referências v1.0/v1.1/v1.2, imagens e evidências permanecem intocadas. A comparação
+anterior continua suspensa/incompleta, conforme [V11_REVIEW](benchmarks/V11_REVIEW.md);
+não reunir campanhas ou concluir causa do 503 histórico.
 
-## 2. Método de execução
+## 2. Método e limites de execução
 
-Trabalhar por incremento autorizado, com testes e revisão do diff antes de avançar.
-Não produzir outra rodada de planejamento para escolhas internas já cobertas pelo
-DESIGN. Resolver autonomamente caminhos, erros de scripts, nomes privados e testes
-pertinentes. Parar apenas a parte dependente de conflito real de contrato, mudança
-de escopo, perda de evidência ou requisito externo indisponível.
+Trabalhar por incremento explicitamente autorizado, com testes desde a primeira
+mudança. Conferir DESIGN, código e estado do checkout; preservar alterações alheias.
+Escolhas privadas já cobertas pelo contrato são resolvidas autonomamente. Dividir
+cada incremento em mudanças coerentes, sem implementar toda a extração de uma vez.
 
-No início, conferir branch/base, alterações existentes e os trechos de código
-afetados. A arquitetura alvo substitui explicitamente a semântica do webhook e a
-coordenação HTTP; outras regras da referência permanecem. Apontar incompatibilidade
-concreta antes de implementar, sem legitimar divergência editando DESIGN depois.
+Não atualizar ferramentas/dependências alheias. A stack já possui tudo que este
+alvo requer; preservar `uv.lock` e digests existentes. Extensões técnicas devem ser
+estreitas, com regressão de Tracking, sem framework genérico ou serviços fictícios.
+Recursos de verificação têm projeto, nomes e volumes próprios e ownership conferido.
+Não executar carga, publicar imagens, criar tags, fazer merge ou alterar dados
+históricos. Runtime e ensaios funcionais de I/II usam somente recursos descartáveis próprios.
 
-Não atualizar ferramentas instaladas ou dependências alheias. Fixar somente as
-novas dependências autorizadas pelo resolver e registrar a imagem RabbitMQ por
-versão/digest. Usar recursos de teste isolados, nomes/volumes próprios e ownership
-verificado. Não parar processos históricos, restaurar bases preservadas ou executar
-Locust. Testes funcionais e demonstração curta são distintos de campanha de carga.
+## 3. Incremento I — Contratos e persistência
 
-## 3. Incremento I — Contratos e transporte durável
+**Resultado:** contrato do fato e persistência proprietária testados, mantendo o
+fluxo executável v1.2 até a ativação coordenada do II.
 
-**Resultado:** infraestrutura de mensagens verificável nos dois sentidos, sem
-alterar prematuramente a resposta pública da aplicação.
+1. Introduzir DTO do evento e consultas definidos no DESIGN §§4/7, serialização,
+   validação de IDs/timestamps/hash, limite e isolamento dos três tipos de mensagem.
+   Testar compatibilidade dos envelopes Tracking, payload mínimo, status permitidos,
+   snapshot do destinatário e rejeição de divergência.
+2. Criar metadata/histórico Alembic/banco/role Notifications e persistência de
+   Notification, inbox técnica, quarentena e auditoria, sem outbox fictícia.
+   Manter os campos terminais e unique por efeito; referências externas sem FK.
+   Ajustar checks/índices da outbox Core para o novo tipo, sem habilitar produção.
+3. Preparar classificação explícita de recibos legados e ensaio offline de cópia de
+   terminais conforme DESIGN §9. Testar importação idempotente, divergência, preservação
+   exata de conteúdo/IDs/timestamps e bloqueio do corte incompleto. Não fabricar
+   envelopes ou reaplicar efeitos antigos; não retirar ainda o escritor v1.2 ativo.
+   Cobrir mensagem nova para efeito LEGACY: preservar registro, persistir quarentena
+   LEGACY_EVENT_SUPPRESSED e DONE juntos, sem nova simulação/hash histórico.
+4. Estender fixtures/Compose de teste/CI para três bancos e o novo fluxo RabbitMQ,
+   com topologia pré-declarada e ACLs restritas. Exercitar transporte real do novo
+   envelope, inbox antes de ACK, constraints concorrentes e retomada após ACK.
+   Reutilizar primitivas existentes somente com composição estática explícita.
+5. Testar upgrade limpo e cópia descartável representativa da v1.2, heads/drift,
+   segregação de roles e capacidade de reconstruir schemas históricos. Preservar
+   migrations antigas, referências de seeds e caminho funcional ainda ativo.
 
-1. Conferir os contratos existentes de comando, recibo e resultado contra DESIGN
-   §§3–6. Definir envelopes, serialização canônica, limites, identidade lógica e
-   rejeição de divergências, com testes desde a primeira mudança.
-2. Acrescentar migrations locais para outbox, inbox técnica e quarentena, constraints
-   e índices de busca de pendências. Testar upgrade limpo e a partir de cópia
-   descartável representativa da v1.1, preservando registros existentes.
-3. Implementar claims/leases, publicação persistente com confirms/mandatory,
-   recepção durável antes de ACK e processamento local retomável. Compartilhar
-   apenas primitivas técnicas necessárias; não criar framework de mensageria.
-4. Fixar aio-pika e RabbitMQ, acrescentar Compose isolado de testes e configurar
-   RabbitMQ real na CI afetada. Não substituir verificações por skips silenciosos.
-5. Testar publicação nos dois sentidos, rejeição de roteamento, duplicatas,
-   confirmação perdida, commit/ACK incerto, lease expirada e constraints concorrentes.
+**Aceite:** unitários e PostgreSQL/RabbitMQ reais aprovados para os contratos
+introduzidos; rollback e unicidades verificados por sessões independentes;
+schemas novos isolados e fluxo v1.2 ainda funcional. Não declarar extração ativa
+por existirem tabelas ou fila. O legado não pode ser classificado apenas pela
+ausência de outbox, pois isso esconderia corrupção de recibo novo.
 
-**Aceite:** testes unitários e PostgreSQL/RabbitMQ reais aprovados; identidade e
-recuperação de transporte demonstradas; fluxo síncrono existente ainda verificável.
-Não declarar a v1.2 operacional por haver somente filas e tabelas.
-Demonstrar retomada local após reinício com uma mensagem já confirmada ao broker
-e ainda não aplicada. Persistir e dar ACK sem recuperar esse trabalho não atende
-ao aceite, mesmo com a fila RabbitMQ vazia.
+## 4. Incremento II — Fluxo integrado
 
-## 4. Incremento II — Fluxo assíncrono completo
+**Resultado:** APPLIED gera evento durável no Core e uma simulação eventual em
+Notifications; Core/Tracking concluem independentemente da disponibilidade do novo serviço.
 
-**Resultado:** evento novo recebe 202 após admissão durável e chega a resultado
-terminal por comandos e resultados AMQP, sem reentrega obrigatória do webhook.
-Esse caminho cobre trabalho retomável; bloqueio por esgotamento ou conflito exige
-o rearme explícito previsto, cuja operação completa é verificada no incremento III.
+1. Substituir a criação local de Notification pela outbox do fato na mesma transação
+   do recibo/Shipment/Order/inbox e outbox de resultado Tracking. Remover todos os
+   caminhos de simulação local, sem dual-write ou fallback. Testar rollback antes
+   de cada fronteira, replay do recibo, todos os resultados sem notificação e
+   destinatário congelado.
+2. Acrescentar no Core worker publisher por tipo, com claim/lote/canal/backoff
+   independentes. Ativar consumidor/processador Notifications com persistência
+   antes do ACK e transação Notification + DONE, simulação determinística e falha
+   esperada terminal distinta de infraestrutura. Nenhuma chamada remota no processor.
+   Testar isolamento de backlog/falhas controladas Notifications; preservar
+   encerramento por falha inesperada de loop obrigatório e limites comuns de
+   processo, banco, broker e recursos.
+3. Criar Notifications API interna, cliente Core e projeção de progresso por efeito.
+   Trocar REST/HTML/dashboard para leitura HTTP na mesma ativação que remove a leitura
+   local. Preservar schemas, filtros/paginação/ordem, auth e request ID; 503 controlado
+   e dashboard parcial em indisponibilidade. Fechar sessões antes de HTTP.
+4. Ativar entrypoints, configurações, migrações por proprietário e Compose v1.3 em
+   volumes novos. Ajustar Dockerfile, schema gates, fronteiras Import Linter e seeds
+   funcionais; arquivar tabela antiga apenas no corte coordenado. Atualizar README
+   com comandos executáveis e versão de desenvolvimento somente quando este runtime existir.
+5. Verificar ponta a ponta Alpha/Beta: 202, conclusão Tracking, Order FULFILLED e
+   quatro simulações esperadas; duplicatas pendentes/terminais não geram quinto efeito.
+   Validar chegada invertida de fatos, falha esperada FAILED e ausência de efeitos
+   para criação/cancelamento manual, rejeição, stale, inválido e NO_STATE_CHANGE.
 
-1. Integrar recepção/normalização/outbox atômicas de Tracking e idempotência
-   pendente/terminal. Implementar schema 202, Location e consulta de conclusão.
-2. Reutilizar a aplicação local idempotente do Core, adicionando a outbox de
-   resultado na mesma transação. Integrar o consumidor de resultados e a
-   finalização local do Tracking com as validações de identidade/hash.
-3. Criar entrypoints dos dois workers e ativar o Compose v1.2 com projeto, volumes,
-   credenciais, limites e pools do DESIGN. Remover do runtime v1.2 o endpoint e o
-   cliente de apply HTTP que o AMQP substitui; preservar as consultas HTTP previstas.
-4. Adaptar o caminho mínimo de UI/simulador para compreender 202, sem apresentar
-   pendência como sucesso concluído. Sincronizar README e versão de desenvolvimento
-   do pacote quando o runtime alvo se tornar executável; não publicar imagens/tags.
-5. Testar ponta a ponta ambos adapters, conflito de bytes, duplicatas antes/depois
-   do resultado, rejeições, timeline, Shipment, Notification e conclusão do Order.
-
-**Aceite:** fluxo completo em PostgreSQL/RabbitMQ reais; exatamente os efeitos
-permitidos pelo domínio; nenhuma transação SQL durante HTTP/AMQP; Import Linter
-coerente com a nova fronteira. Os testes de recuperação HTTP da v1.1 ficam na
-referência congelada; ao substituir caminhos no checkout v1.2, manter testes
-equivalentes das garantias e preservar cobertura dos caminhos HTTP remanescentes.
-
-### Evidências do aceite I/II — 2026-09-16
-
-- Implementação do II em `840cd91852a1c23db8c97af67da5b81a14d5f3cf`, seguida de
-  adaptação dos testes de consulta de Notifications e ações de Order ao 202.
-  DESIGN não foi alterado; Notifications permanece no Core.
-- Validação local: suíte unitária, nove casos novos de polling, controles com
-  PowerShell 7.6.5 e 186 casos de API/integração/UI/E2E/arquitetura. As quatro
-  asserções síncronas identificadas na passagem ampla foram corrigidas e
-  reexecutadas isoladamente. Cobertura integrada local: **86,80%**, gate de 80%.
-- Ruff, formatação, Mypy e os dez contratos de Import Linter aprovados. Alembic
-  confirmou `1201_core`/`1202_tracking`, sem drift; upgrade de registros v1.1
-  preservou conteúdo e deixou campos novos nulos, sem criar trabalho legado.
-- Testes reais demonstraram rollback do fato e da outbox juntos, interrupção
-  antes/depois dos commits, idempotência, locks, resultado divergente bloqueado
-  e retomada por processos novos após ACK com fila vazia, nos dois serviços.
-- Build e smoke no projeto isolado `fulfillflow-f05e-v12-runtime`: Alpha/Beta,
-  202 durante interrupção do broker, conclusão após seu retorno sem reenvio e
-  Order `FULFILLED`. Processos encerrados; imagens, volumes e dados preservados.
-- A CI executa suíte completa/cobertura sem duplicar suítes e exige ausência de
-  skips nos testes críticos de transporte e recuperação. Conferir o resultado
-  pelo **SHA exato da entrega**, não apenas pelo nome da branch.
-
-Aceite I/II: CI aprovada em `f6bc1149e365650fce8eb6be3443d39ccc366852`,
-com 1.011 testes e cobertura de 88,30%; skips exclusivos de Windows,
-verificados localmente.
-
-Limite do aceite I/II: **antes do III**. Rearme auditável de `BLOCKED`, lifecycle
-completo, healthcheck e diagnóstico operacional dos workers ficaram para o III; refinamento da UI e congelamento funcional permanecem no IV. Não houve
-campanha, merge, tag/release, alteração de evidência congelada nem atualização de
-dependências existentes. A dependência nova é aio-pika com suas transitivas.
+**Aceite:** fluxo real completo com PostgreSQL/RabbitMQ; publicação e leitura
+desacopladas de Notifications; UI mínima já honesta sobre defasagem e erro.
+Demonstrar resultado Tracking com worker Notifications parado e posterior
+simulação sem reenvio. Não manter asserts síncronos que confundam conclusão
+Tracking com simulação; substituí-los por verificação eventual delimitada.
+Testes de atomicidade Core agora exigem outbox do fato, não Notification local.
 
 ## 5. Incremento III — Recuperação e operação
 
-**Resultado:** falhas nas novas fronteiras têm estado durável, diagnóstico e
-procedimento finito de recuperação demonstrável.
+**Resultado:** fronteiras de falha recuperáveis ou bloqueadas explicitamente,
+com diagnóstico e procedimentos finitos.
 
-1. Completar políticas de retry por item e pausa de dependência, bloqueio,
-   quarentena, rearme explícito auditável e diagnóstico por ID. Não acrescentar
-   retries ilimitados ou reposição automática de testes encerrados.
-2. Implementar lifecycle dos workers, encerramento limitado, healthcheck e
-   sinalização de falha de loop obrigatório. Diferenciar saúde de admissão e
-   conclusão, sem adicionar portas HTTP aos workers.
-3. Acrescentar logs controlados do fluxo novo e comandos de inspeção local conforme
-   DESIGN §8. Preservar access logs atuais e registrar a diferença de observabilidade.
-4. Exercitar crash/restart antes/depois dos commits e ACK, indisponibilidade e
-   retorno de broker/bancos, conflito de conteúdo e resultado duplicado. Verificar
-   recuperação de trabalho aceito e ausência de efeitos duplicados.
-5. Testar concorrência real com múltiplos consumidores/sessões, resultado fora de
-   ordem, lease vencida com proprietário antigo e esgotamento/rearme de tentativas.
+1. Exercitar interrupção antes/depois de commit Core, publish/confirm, persistência
+   técnica/ACK e simulação/DONE. Reiniciar processos reais com recursos próprios,
+   inclusive após ACK com fila vazia; obter um único registro por efeito.
+2. Validar cinco tentativas/geração, intervalos pelo Clock, dependência global sem
+   consumo em massa, quarentena, conflito, leases expiradas/dono antigo e concorrência.
+   Completar CLI de diagnóstico/rearme Notifications e filtro do novo fluxo Core:
+   banco/ID/hash/motivo, auditoria atômica, preservação de DONE/FAILED e conteúdo.
+3. Com backlog Notifications mais antigo, provocar retorno/timeout/nack específico
+   de seu publisher e comprovar que tracking.result continua chegando. Parar
+   separadamente API, worker e acesso ao banco Notifications; verificar Core/Tracking,
+   503 de consulta e retomada. Queda global do broker segue a recuperação v1.2.
+4. Completar lifecycle, sinais e healthchecks por loops reais, sem exigir publisher
+   inexistente. Conferir readiness por banco/head, inicialização independente,
+   encerramento até 15 s, falha de loop obrigatório e dependências intermitentes.
+5. Registrar logs/diagnóstico sanitizados, backlog/idade por etapa, recursos,
+   identidade estável de broker/volume e parâmetros efetivos. Não apresentar
+   fila vazia, heartbeat ou SENT como entrega concluída. Testar redaction e ACLs.
+6. Executar o corte offline completo na cópia descartável, verificar todos os
+   registros antigos consultáveis pelo novo dono, replay sem nova simulação,
+   inventário sem pendência e ausência de escritores/leitores ativos antigos.
 
-**Aceite:** falhas injetadas produzem resultado esperado, pendência recuperável ou
-bloqueio explícito; evidências identificam fronteira e causa controlada. Não afirmar
-estabilidade prolongada ou solução do 503 histórico a partir desses testes.
+**Aceite:** testes reais de recuperação e smoke aprovados, sem perda silenciosa,
+dual-write ou bloqueio de Tracking causado pelo novo fluxo. Itens que atingem
+BLOCKED exigem rearme auditado; não prometer recuperação automática ilimitada,
+isolamento físico, estabilidade prolongada ou solução do 503 histórico.
 
-### Implementação do III
+## 6. Incremento IV — UI e aceite funcional
 
-- CLI proprietária de diagnóstico e rearme de inbox/outbox `BLOCKED`, com ID,
-  hash conferido contra os bytes, banco esperado e motivo explícito. Auditoria
-  e nova geração são atômicas; identidade/payload e conclusões anteriores são
-  preservados. Quarentena não é reenfileirada por essa operação.
-- Migrations `1202_core`/`1203_tracking`: auditoria e última tentativa, sem
-  fabricar atividade histórica. Contagens por etapa e backlog do inbox de
-  negócio permanecem distintos de mensagens prontas/sem ACK do broker.
-- Retry por item inclui falhas SQL transitórias; indisponibilidade de dependência
-  pausa o componente. Loops obrigatórios, encerramento até 15 s, heartbeat local,
-  healthcheck leve e logs JSON controlados completam a operação prevista.
-- DESIGN explicita a identidade estável do nó RabbitMQ ao reutilizar volume,
-  uma condição operacional da durabilidade existente. HTTP, ambos os outboxes
-  atômicos e Notifications permanecem
-  com os contratos existentes. Prometheus/OTel mais amplos, estabilidade prolongada
-  e campanhas continuam fora deste aceite.
+**Resultado:** jornada utilizável e evidência funcional revisável, sem publicação.
 
-### Verificação do III — 2026-09-16
+1. Refinar UI para separar conclusão Tracking/Order de publicação, pendência,
+   bloqueio e SIMULATED/FAILED. Polling limitado, falha de consulta conservando a
+   última observação, prazo sem rejeição inventada e nova observação sem reenvio.
+   Conferir dashboard parcial, filtros, detalhe e legado sem progresso fabricado.
+2. Atualizar `docs/DEMO.md` com demonstração curta: Notifications parado enquanto
+   Order conclui, retomada sem webhook novo, duplicata sem efeito adicional e consulta
+   indisponível sem perda de estado. Manter contrato do simulador de Carriers;
+   observar Notifications separadamente. Verificar em navegador real.
+3. Produzir capturas/evidências novas identificadas por versão, sem sobrescrever
+   as da v1.2. Sincronizar README apenas com comportamento efetivamente executável.
+4. Executar suíte integrada completa/cobertura, checks estáticos/arquiteturais,
+   Alembic e Docker build/smoke pertinentes. Conferir CI no SHA exato quando houver
+   autorização de commit/push; preparação local não equivale a CI aprovada.
+5. Entregar matriz de contratos conferidos, limitações, SHA/revisão, hash do lock,
+   heads, identidade da imagem local, digests de infraestrutura, recursos e parâmetros.
+   Registrar separadamente estado implementado, verificado e publicado.
 
-- Validação focal PostgreSQL/RabbitMQ e validação funcional Windows: 219 casos
-  cobertos entre a passagem ampla e as correções focais; cobertura local **88,13%**.
-  Inclui oito cenários de queda/retorno no startup e com worker já ativo, CLI real,
-  deadlock, rearme concorrente, lease antiga e resultados fora de ordem.
-  Regressão focal de 20 casos confirma que a duração da tentativa não consome
-  o intervalo de retry e que a conclusão recebe o instante após a aplicação.
-- Cinco testes estruturais legados aprovados. Após interrupção nativa do dump
-  de diagnóstico Python no Windows, essas verificações foram executadas em
-  processo separado, sem atualizar ferramentas ou enfraquecer asserções.
-- As expectativas de heads foram atualizadas para `1202_core`/`1203_tracking`.
-  Um 503 pontual de UI durante lentidão local passou em reexecução isolada, sem
-  mudar contrato ou timeout; isso não resolve nem reinterpreta o 503 histórico.
-- Ruff/formatação, Mypy, dez contratos de importação, Alembic heads/drift e build
-  aprovados. Smoke sequencial confirmou APIs e workers saudáveis, diagnóstico,
-  SIGTERM com código zero e mensagem persistente após recriação do broker com
-  identidade/volume preservados. Recursos isolados parados, dados preservados.
-- CI exige todos os cenários críticos sem skips; o resultado deve ser conferido
-  no SHA exato publicado. Nenhum benchmark, merge, tag/release ou atualização de
-  dependências foi realizado.
+**Aceite funcional:** todos os contratos do DESIGN demonstrados, gates preservados,
+sem comportamento stubado, falha conhecida em check obrigatório ou documentação
+divergente. Uma referência local revisável é suficiente para parar; criar tag,
+publicar imagem/pré-release ou comparar versões não faz parte deste aceite.
 
-Parada do aceite III: **antes do IV**. Próximo passo: refinamento da UI/simulador,
-demonstração e congelamento funcional conforme a seção seguinte. Observabilidade
-mais ampla e avaliação de estabilidade/capacidade continuam pendentes.
+## 7. Validação e controle de mudanças
 
-## 6. Incremento IV — Verificação integrada e referência funcional
+Testes focais primeiro e validação ampla conforme impacto. Comandos existentes:
+`uv sync --frozen`, `uv run pytest`, cobertura com `--cov=fulfillflow`,
+`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src` e
+`uv run lint-imports`. Usar Alembic upgrade/current/check em cada configuração
+proprietária afetada; registrar comandos Notifications somente quando implementados.
+Runtime requer `docker compose config`, build e smoke de APIs/workers afetados.
 
-**Resultado:** fluxo utilizável e referência rastreável, com limitações explícitas.
+PostgreSQL e RabbitMQ reais são obrigatórios nos caminhos pertinentes; CI não pode
+substituí-los por SQLite/mocks ou skips silenciosos. Manter cobertura global mínima
+de 80% e cobertura completa das regras críticas. Testes Windows/PowerShell pelo
+executável real quando esses fluxos mudarem; CI Linux não os substitui.
 
-1. Finalizar UI/HTMX e simulador: pendência, polling limitado pela jornada, rejeição,
-   timeout de observação e resultado. Verificar CSRF, CSP e assets locais.
-2. Atualizar DEMO e conferir visualmente uma jornada curta em ambiente isolado:
-   criar dados, enviar evento, observar pendência/conclusão, timeline, Notification,
-   conclusão de Order e duplicata. Capturas novas somente se necessárias para
-   documentar comportamento alterado; não substituir capturas históricas.
-3. Executar validação integrada final, migrations e build/smoke pertinentes.
-   Conferir fechamento de processos, isolamento de recursos e ausência de dados
-   reais/segredos em código, logs e artefatos.
-4. Atualizar estado neste plano e comportamento no README/DEMO. DESIGN registra
-   contrato vigente; documentação de benchmark continua indicando protocolos e
-   campanhas encerrados. Não replicar diário de execução em todos os documentos.
-5. Consolidar SHA, lock, imagens/digests, migrations, comandos, testes/CI do SHA
-   exato e limitações na descrição da entrega. Não criar outro documento de
-   passagem de contexto com conteúdo redundante.
-
-**Aceite:** API, persistência, recuperação, operação e UI coerentes; verificações
-obrigatórias aprovadas e identidade congelável. Lacunas de observabilidade mais
-amplas e comparação adiada continuam explícitas. Implementado, verificado,
-pré-release e release final são estados distintos.
-
-### Aceite funcional I–IV
-
-A conferência é por contrato, não pela quantidade de testes. Referência de entrada
-no IV: `25a1c03429447b954fda43f0ad1f2c612d8749b3`, com CI aprovada.
-
-| Contrato conferido | Evidência executável / observação |
-| --- | --- |
-| HMAC dos bytes, adapters, admissão durável 202, duplicata e conflito | `test_tracking_authentication.py`, `test_carrier_adapters.py`, `test_async_tracking.py`, `test_tracking_concurrency.py` |
-| Inbox/comando/outbox Tracking e recibo/efeitos/outbox Core atômicos; rejeição permanente distinta de falha operacional | `test_commit_boundaries.py`, `test_tracking_persistence.py`, `test_http_recovery.py` |
-| ACK técnico com recuperação local, confirms/leases, queda/retorno e idempotência dos efeitos | `test_message_transport.py`, `test_worker_recovery.py`, `test_worker_dependencies.py` |
-| Rearme auditado, limites por geração, concorrência e resultados fora de ordem | `test_message_operations.py`, `test_result_ordering.py`, `test_order_shipment_concurrency.py` |
-| Lifecycle, dependências e saúde distintos de conclusão | `test_worker_lifecycle.py`, `test_worker_dependencies.py`; smoke de ambos os workers |
-| Cliente distingue aceitação, conclusão/rejeição, falha de consulta e prazo | `test_carrier_simulator.py`, `test_external_simulator_journey.py`; execução real por PowerShell |
-| UI/HTMX, CSRF/CSP, projeção sanitizada, resultado e timeline | `tests/ui`, `test_inbox_presentation.py`; conferência em navegador real descrita abaixo |
-| Persistência e fronteiras preservadas | heads `1202_core`/`1203_tracking`, Alembic sem drift, dez contratos Import Linter; sem migration/dependência nova no IV |
-
-### Conferência do IV — 2026-09-16
-
-- Projeto exclusivo `fulfillflow-f05e-iv-demo`, porta local `18560`, volumes novos,
-  hostname RabbitMQ `iv-demo-broker`; imagens de revisão próprias, sem sobrescrever
-  imagens históricas. `uv.lock` permanece inalterado.
-- Navegador real: criação/confirmação por formulário, Shipment, admissão 202,
-  `QUEUED`/`AWAITING_RESULT`, consultas sucessivas, erro de consulta preservando
-  a aceitação, prazo de 30 s e nova observação; resultado atualizado automaticamente,
-  link/timeline com quatro `APPLIED`, quatro Notifications simuladas e Order `FULFILLED`.
-  Rejeição posterior ao 202 também foi conferida com motivo persistido e polling encerrado.
-  Reentrega dos mesmos bytes retornou `DUPLICATE`/`APPLIED`, sem quinto efeito.
-- Pendência foi produzida parando somente workers próprios; erro de consulta,
-  parando/restaurando somente a API Tracking própria. Nenhum atraso artificial
-  foi introduzido no runtime. A revisão visual corrigiu o acompanhamento do elemento
-  original da requisição após substituição HTMX. Registros legados não recebem indicação inventada de 202 ou resultado.
-  Capturas históricas não foram alteradas.
-- Testes focais de UI e simulador aprovados em Windows com PostgreSQL/RabbitMQ
-  reais nos caminhos pertinentes, incluindo rejeição, bloqueio, prazo e ausência
-  de reenvio. Ruff/formatação, Mypy e fronteiras aprovados. Upgrade de bancos novos,
-  heads/drift e build/smoke locais aprovados. A suíte integrada completa/cobertura
-  e build/smoke do workflow devem passar no SHA final publicado, informado na entrega.
-- Evidências de recuperação I–III continuam aplicáveis: o IV não altera outboxes,
-  aplicação de negócio, migrations, dependências ou protocolo AMQP. Verificações
-  Windows históricas dos scripts de benchmark permanecem válidas e não são
-  substituídas pelos skips de plataforma da CI Linux.
-
-Marco: parar no aceite funcional após aprovação da CI final; sem tag, release,
-merge ou campanha. Observabilidade mais ampla, estabilidade prolongada/capacidade
-não estão demonstradas; o 503 histórico permanece uma limitação documentada.
-A identidade de imagem construída e o SHA/CI exatos constam na entrega. O próximo
-passo recomendado é revisar e arquivar essa referência funcional; publicação ou
-comparação requer decisão própria, sem início automático.
-
-### Proveniência do fechamento v1.2.0-rc.1
-
-- Base funcional: `eb9b51727023cf83cf8574f5ff0b502af2c620a0`,
-  [CI aprovada](https://github.com/campos-labs/fulfillflow/actions/runs/35162502409):
-  1.057 testes funcionais e cinco estruturais, cobertura 89,36%; cenários críticos
-  sem skips. As 35 exclusões de plataforma da CI Linux não substituem Windows.
-- O commit de fechamento acrescenta somente documentação e as duas capturas reais
-  da v1.2 em `docs/assets/demo/v1.2/`. A tag anotada identifica esse commit exato;
-  sua CI e SHA ficam vinculados nas notas da pré-release. Código, contratos de
-  transporte, migrations, dependências e inputs do Dockerfile não mudam em relação
-  à base funcional. Não há nova demonstração completa nem campanha de desempenho.
-- Imagem **local** verificada: `fulfillflow:iv-eb9b51727023`, construída da base
-  funcional acima, com revisão registrada no label OCI. ID local (`docker image
-  inspect .Id`):
-  `sha256:e1b52f4bad4cc958e652bb2e63e5ce85425cb647dd3780d761b05231fb37b16a`.
-  Ela não foi reconstruída ou reetiquetada como imagem do commit documental.
-  O campo local `RepoDigests` não comprova publicação: **não há imagem publicada
-  nem digest de registry verificado para esta pré-release**.
-- `uv.lock` SHA-256:
-  `7a9f7944f751600a17aeacc0a54ea4ddf7d79c2a09b46fe17917919e0e6f9949`.
-  Heads verificados: `1202_core`/`1203_tracking`, sem drift. PostgreSQL 18 e
-  RabbitMQ 4.2.4 mantêm as referências upstream fixadas no Compose, distintas da
-  imagem local da aplicação.
-- Capturas novas mostram aceitação/pendência e resultado terminal do mesmo inbox,
-  sem substituir imagens históricas. Instruções da variante de pendência do DEMO
-  esclarecem que ela começa antes do envio e que prazo esgotado não envia os
-  passos restantes do cenário.
-
-O ciclo funcional encerra nesta pré-release; comparação extensa permanece
-suspensa. Capacidade, estabilidade prolongada e observabilidade ampla não estão
-concluídas. Nenhuma conclusão sobre a causa do 503 histórico foi obtida.
-A referência está apta a servir de base funcional a uma evolução posterior,
-sem autorizar sua implementação ou criar uma branch nessa direção.
-
-## 7. Validações e versionamento
-
-Executar testes focais primeiro. Ao concluir alterações transversais e no aceite
-final: Ruff, formatação, Mypy, Import Linter e suítes pytest pertinentes; ao final,
-suíte integrada completa e cobertura. Migrations exigem Alembic upgrade,
-verificação dos heads e drift. Runtime exige build e smoke das imagens afetadas.
-Os comandos existentes do AGENTS continuam sendo o ponto de partida; acrescentar
-somente comandos que já tenham sido implementados.
-
-CI deve executar testes críticos PostgreSQL/RabbitMQ sem skips e associar o resultado
-ao SHA revisado. Testes Windows/PowerShell são obrigatórios quando houver mudança
-nesses fluxos, pelo executável real disponível; CI Linux não os substitui. Não
-repetir suítes aprovadas sem mudança ou preocupação concreta que justifique.
-
-Fazer commits por assunto/incremento na branch v1.2 quando autorizado pela tarefa,
-sem reescrever histórico ou incluir arquivos alheios. Push, merge para main e
-publicação de tag/release seguem a autorização específica; não são consequência
-automática do aceite funcional. Tags existentes nunca são movidas. Uma nova
-pré-release deve apontar ao SHA exato verificado e expor suas limitações.
+Na preparação documental, validar diff, links locais/referências congeladas,
+coerência entre os quatro documentos, ausência de mudança executável e preservação
+do checkout original. Não iniciar testes de runtime, migrations ou containers por
+uma alteração exclusivamente documental. Não criar documento extra de handoff.
 
 ## 8. Pausa obrigatória após o aceite funcional
 
-Ao concluir IV, entregar síntese de comportamento, verificações, limitações e
-identidades. **Não iniciar a matriz extensa nem a v1.3.** Solicitar decisão única:
-encerrar este ciclo, preparar comparação delimitada ou propor evolução posterior.
-Se a tarefa autorizar somente I/II, a parada ocorre ao concluir esses incrementos;
-esta seção não amplia a autorização de implementação.
+**Ao concluir IV, parar antes de comparação extensa ou publicação.** Entregar
+resultado e limitações para decisão posterior. Não executar campanha, criar tag,
+publicar imagem/release, fazer merge, introduzir provedor real ou iniciar nova
+extração automaticamente. Se a autorização abranger somente um incremento,
+a parada ocorre no limite autorizado, sem esperar IV.
 
-Uma comparação futura terá pacote e protocolo próprios, podendo avaliar referências
-congeladas de várias versões com ferramenta identificada e adaptadores explícitos.
-Não exigirá alterar tags antigas. Deverá decidir previamente orçamento total,
-carga oferecida, admissão/conclusão, drain, falhas, observabilidade e controles do
-host. Pilotos e tentativas anteriores permanecem classificados e separados.
-
-## 9. Evolução posterior, não autorizada neste ciclo
-
-Notifications poderá ser avaliado como serviço assíncrono independente após uma
-referência funcional da v1.2. Isso exige contrato, propriedade dos dados, publicação,
-idempotência, consultas/UI e recuperação próprios; não basta criar outro consumidor.
-A branch futura parte da referência escolhida da v1.2, sem exigir publicação final
-ou matriz extensa concluída, desde que o aceite funcional necessário esteja aprovado.
-
-Restrição concreta da implementação atual: Notifications está no Core, participa
-da transação local de aplicação e tem unicidade por `tracking_event_id`. As
-consultas existentes continuam lendo os registros desse serviço. Esses vínculos
-são parte da referência preservada, não um contrato antecipado de extração.
-
-Esta intenção não autoriza componentes genéricos, eventos sem consumidor atual,
-infraestrutura cloud ou extração antecipada. A decisão e o plano dessa evolução
-pertencerão à branch futura; o DESIGN v1.2 continua restrito a Tracking.
+Comparação futura exige protocolo aprovado, identidades e orçamento total próprios,
+com eventos oferecidos/aceitos, Tracking concluído, Notifications simuladas,
+backlog/drain, latências, falhas e diferenças de observabilidade. Não alterar imagens
+congeladas para paridade nem reutilizar 202 como trabalho concluído. Provedores reais,
+cloud, Kubernetes, GitOps e autoscaling permanecem fora desta implementação.
