@@ -1,12 +1,12 @@
 # FulfillFlow
 
-**v1.3 em desenvolvimento — Notifications assíncrono (incrementos I/II)**,
+**v1.3 em desenvolvimento — Notifications assíncrono (incrementos I–III)**,
 na branch `feature/v1.3-notifications-async`, baseada em `v1.2.0-rc.1`
 (`9b445f9b5466cd302c89f1deed7a9c051cb397ae`). O [DESIGN](DESIGN.md) define o
 alvo e o [RELEASE_PLAN](RELEASE_PLAN.md) registra o plano e seu estado.
 O código e os comandos abaixo executam `v1.3.0.dev0`, com Tracking e Notifications
-assíncronos. Recuperação operacional completa (III) e aceite final/UI (IV) estão
-pendentes; a execução para antes do III. As referências v1.0/v1.1/v1.2
+assíncronos, com recuperação e operação do III. UI/DEMO e aceite funcional final
+pertencem ao IV, ainda não iniciado; a execução para antes dele. As referências v1.0/v1.1/v1.2
 e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
 
 Core mantém Orders, Shipments e Carriers. Tracking mantém HMAC,
@@ -94,11 +94,13 @@ docker compose exec -T core-worker python -m fulfillflow.core.operations healthc
 docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations healthcheck
 docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose
 docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations diagnose
-docker compose exec -T notifications-worker python -m fulfillflow.messaging.health --service notifications
+docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations healthcheck
+docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose
+docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose --flow shipment.status_changed.v1
 docker compose exec -T broker rabbitmqctl list_queues -p fulfillflow-v13 name messages_ready messages_unacknowledged
 ```
 
-Use `diagnose --id <UUID>` nos dois serviços para correlacionar mensagem,
+Use `diagnose --id <UUID>` nos três serviços para correlacionar mensagem,
 evento ou correlação; quarentena aceita seu ID local. O relatório apresenta
 estado, hash, geração, tentativas, atividade, publicação, decisão e finalização
 disponíveis, sem payloads. Contagens são por etapa: não some inbox/outbox/filas
@@ -127,8 +129,36 @@ as tentativas reiniciam junto com a auditoria do motivo e estado anterior.
 A CLI não reenfileira `DONE`/`SENT` ou quarentena. Bytes de quarentena ficam no
 banco proprietário; comandos não os exibem. Não inclua segredos no motivo.
 
-CLI completa de diagnóstico/rearme Notifications e filtro operacional do novo fluxo
-Core pertencem ao III. Não tratar os comandos existentes como aceite dessa operação.
+Notifications aceita somente `--stage inbox`; use seu proprietário e banco:
+
+```powershell
+docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose --id $messageId
+docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_notifications --reason 'Causa corrigida e verificada'
+```
+
+O resultado identifica proprietário, banco, ID, hash, motivo e nova geração.
+`SIMULATED` e `FAILED` são terminais e nunca autorizam outra simulação, mesmo se
+uma inconsistência externa marcar a inbox como `BLOCKED` (`TERMINAL_NOTIFICATION`).
+`LEGACY_EVENT_SUPPRESSED` preserva o legado, a quarentena diagnóstica e inbox DONE;
+não oferece replay/rearme. Duplicata ASYNC é verificada pelo envelope original;
+LEGACY não recebe envelope ou hash histórico inventado.
+
+Core permite `--flow shipment.status_changed.v1` em `diagnose` e `rearm`; filtro
+incompatível impede a mutação. Quarentena é explicitamente do proprietário inteiro,
+pois envelopes inválidos não permitem filtro seguro por fluxo. Use `--id` para
+inspecionar auditorias; o conteúdo da notificação não aparece no diagnóstico.
+
+Separe quatro observações: contagens/idade por etapa são backlog durável;
+`worker.stages` com `dependency_unavailable` é pausa de dependência; `reason`,
+`attempts` e `BLOCKED` descrevem falha de item; loop obrigatório inesperadamente
+encerrado faz o processo sair com erro. O heartbeat pode ficar fresco por até 5 s
+após morte abrupta: confira também o estado/exit code do processo. `stale`,
+`stopping` ou `unobserved` não comprovam sucesso nem diagnosticam sozinhos a causa.
+A observação é local ao arquivo do worker; rodar CLI em outro processo/container
+sem esse arquivo não observa sua saúde. `SENT`, fila vazia e saúde positiva não
+significam simulação concluída. Falhas comuns de processo, banco ou broker continuam
+compartilhadas; somente backlog e falhas controladas específicas dos publishers
+são independentes.
 
 Workers emitem JSON INFO em stdout: serviço, etapa, IDs, tentativa, duração,
 resultado e categoria controlada, sem bodies, assinaturas ou exceções brutas.
@@ -432,15 +462,55 @@ graphs separados. Notifications tem inbox/quarentena/auditoria e terminais;
 não possui outbox. As migrations anteriores permanecem preservadas. Os testes
 verificam upgrade/check/downgrade/upgrade, FKs somente locais e isolamento das roles.
 
-O corte legado é offline, com admissão/escritores parados e transporte drenado.
-O ensaio em cópia descartável usa `python -m fulfillflow.core.notification_legacy
---output <arquivo-novo> --expected-database <core>` e
-`python -m fulfillflow.notifications.cutover --help` para importação no dono novo.
-Não é suporte à migração online. A tabela antiga fica arquivada, sem acesso pelo
-runtime Core. Registros importados são LEGACY: preservam IDs, conteúdo e datas;
-mensagem posterior do mesmo efeito termina em quarentena
-`LEGACY_EVENT_SUPPRESSED` + inbox DONE, sem nova simulação ou envelope inventado.
-O roteiro operacional completo do corte fica no III.
+### Corte offline em cópia descartável
+
+O procedimento não é migração online. Trabalhe somente em cópias novas dos bancos
+Core/Tracking congelados e um banco Notifications vazio, com roles próprias.
+Não reutilize volumes históricos. Antes de exportar, pare admissão de webhooks e
+APIs antigas, drene os workers antigos e confira pelo CLI de cada proprietário:
+Tracking `accepted_nonterminal = 0`, `legacy_pending = 0`; inbox somente DONE e
+outbox somente SENT em ambos. BLOCKED e quarentena não se resolvem por apagar
+história. Resolva pendências antes do corte; em seguida pare todos os escritores.
+Nenhum processo antigo pode continuar escrevendo ou lendo Notifications no Core.
+
+Com as URLs dos bancos **descartáveis** já configuradas como na seção de testes,
+execute pelo checkout v1.3. O exportador aceita Core `1202_core`/`1301_core`, verifica
+seu transporte drenado e correspondência entre recibos APPLIED e registros antigos.
+Notifications exige `1301_notifications` e inbox vazia. Os comandos abortam se as
+pré-condições falharem; não altere SQL para contorná-las.
+
+```powershell
+$archive = Join-Path $env:TEMP ('fulfillflow-legacy-' + [guid]::NewGuid() + '.json')
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+uv run python -m fulfillflow.core.notification_legacy --output $archive --expected-database fulfillflow_core
+if ($LASTEXITCODE -ne 0) { throw 'Exportação offline recusada' }
+$archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+uv run alembic -c alembic_core.ini upgrade head
+if ($LASTEXITCODE -ne 0) { throw 'Migration Core falhou' }
+$env:DATABASE_URL = $env:TEST_NOTIFICATIONS_DATABASE_URL
+uv run alembic -c alembic_notifications.ini upgrade head
+if ($LASTEXITCODE -ne 0) { throw 'Migration Notifications falhou' }
+uv run python -m fulfillflow.notifications.cutover --input $archive --expected-database fulfillflow_notifications
+if ($LASTEXITCODE -ne 0) { throw 'Importação offline recusada' }
+if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $archiveHash) { throw 'Arquivo alterado' }
+```
+
+O arquivo contém os dados sintéticos originais: preserve-o localmente, sem incluí-lo
+no Git. Importar novamente o mesmo arquivo antes de iniciar consumo é idempotente;
+conteúdo, contagem ou IDs divergentes recusam a transação inteira. A tabela antiga
+fica arquivada, sem acesso pelo runtime Core. Só depois de conferir o inventário
+inicie os processos v1.3 apontando exclusivamente às cópias e consulte cada ID antigo
+por `GET /api/v1/notifications/{id}` no Core (HTTP interno autenticado). Confira
+conteúdo/datas originais e `origin=LEGACY` na consulta de progresso, sem publicação
+ou processamento fabricados. Replay do mesmo tracking_event_id produz somente
+`LEGACY_EVENT_SUPPRESSED` + inbox DONE, sem nova simulação.
+
+O ensaio automatizado completo usa os mesmos CLIs em processos reais, consulta HTTP
+e RabbitMQ, inclui reimportação e replay e não toca o histórico:
+
+```powershell
+uv run pytest tests/e2e/test_notification_cutover_cli.py -q
+```
 
 ## Documentação
 
@@ -456,8 +526,7 @@ O roteiro operacional completo do corte fica no III.
 Core/Tracking possuem `message_outbox`, `message_inbox` e `message_quarantine`;
 Notifications tem somente os mecanismos de recepção/recuperação. ACK confirma persistência
 técnica; não representa conclusão de negócio. Itens `BLOCKED` não retomam sozinhos;
-o rearme atual Core/Tracking está descrito na operação local. A CLI Notifications
-e o filtro operacional do novo fluxo Core permanecem no incremento III.
+o rearme por proprietário e o filtro do novo fluxo Core estão descritos na operação local.
 
 Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
 

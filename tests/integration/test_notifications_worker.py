@@ -37,8 +37,9 @@ async def eventually(check, task):
             await asyncio.sleep(0.05)
 
 
+@pytest.mark.parametrize("failure", ["timeout", "return", "nack"])
 async def test_notification_publisher_wait_does_not_hold_tracking_result(
-    postgres_database, postgres_settings, monkeypatch, tmp_path
+    postgres_database, postgres_settings, monkeypatch, tmp_path, failure
 ):
     settings = postgres_settings.model_copy(
         update={"amqp_url": SecretStr(os.environ["TEST_AMQP_URL"])}
@@ -56,7 +57,12 @@ async def test_notification_publisher_wait_does_not_hold_tracking_result(
         if message.type == FLOW:
             notification_waiting.set()
             await release_notification.wait()
-            raise TimeoutError("injected notification confirm uncertainty")
+            if failure == "timeout":
+                raise TimeoutError("injected notification confirm uncertainty")
+            if failure == "nack":
+                raise amqp.PublishNotConfirmedError("injected negative confirm")
+            await original_publish(channel, message)  # Real mandatory return: queue unbound below.
+            raise AssertionError("Unroutable publish unexpectedly succeeded")
         await original_publish(channel, message)
 
     monkeypatch.setattr(amqp, "publish", controlled_publish)
@@ -73,6 +79,9 @@ async def test_notification_publisher_wait_does_not_hold_tracking_result(
         async with connection:
             channel = await connection.channel()
             await declare_flow(channel, "tracking.result.v1")
+            if failure == "return":
+                queue = await channel.get_queue(f"{FLOW}.queue")
+                await queue.unbind(FLOW, routing_key=FLOW)
             await asyncio.wait_for(notification_waiting.wait(), 10)
             # Admit the result only once the Notifications publisher is already waiting.
             async with postgres_database.session() as session, session.begin():
@@ -99,6 +108,16 @@ async def test_notification_publisher_wait_does_not_hold_tracking_result(
             release_notification.set()
 
             async def notification_paused():
+                if failure != "timeout":
+                    async with postgres_database.session() as session:
+                        return (
+                            await session.scalar(
+                                select(core_tables.outbox.c.attempts).where(
+                                    core_tables.outbox.c.type == FLOW
+                                )
+                            )
+                            == 1
+                        )
                 if not path.exists():
                     return False
                 data = json.loads(path.read_text())
@@ -115,12 +134,17 @@ async def test_notification_publisher_wait_does_not_hold_tracking_result(
                     .mappings()
                     .one()
                 )
-                assert pending["state"] == "LEASED"
-                assert pending["attempts"] == 0
+                assert pending["state"] == ("LEASED" if failure == "timeout" else "PENDING")
+                assert pending["attempts"] == (0 if failure == "timeout" else 1)
+                if failure != "timeout":
+                    assert pending["reason"] == "PUBLISH_REJECTED"
     finally:
         release_notification.set()
         stop.set()
         await asyncio.wait_for(task, 16)
+        if failure == "return":
+            async with await aio_pika.connect(os.environ["TEST_AMQP_URL"], timeout=5) as cleanup:
+                await declare_flow(await cleanup.channel(), FLOW)
     assert not healthy(path, "core")
 
 

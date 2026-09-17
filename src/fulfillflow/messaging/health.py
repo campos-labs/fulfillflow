@@ -66,6 +66,31 @@ def healthy(path: Path, service: str, *, now: float | None = None) -> bool:
         return False
 
 
+def observation(path: Path, service: str, *, now: float | None = None) -> dict[str, Any]:
+    """Sanitized local observation, independent of durable backlog/business completion."""
+    current = time.monotonic() if now is None else now
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data["service"] != service:
+            return {"status": "unobserved", "stages": {}}
+        stages = {}
+        for stage in STAGES[service]:
+            entry = data["stages"][stage]
+            state = entry["state"]
+            if state not in ("starting", "ready", "dependency_unavailable"):
+                state = "unknown"
+            stages[stage] = {
+                "state": state,
+                "fresh": 0 <= current - entry["at"] < 45,
+            }
+        status = "observed" if 0 <= current - data["at"] < 5 else "stale"
+        if data["stopping"]:
+            status = "stopping"
+        return {"status": status, "stages": stages}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"status": "unobserved", "stages": {}}
+
+
 if __name__ == "__main__":
     import argparse
 

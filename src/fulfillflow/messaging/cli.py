@@ -15,22 +15,40 @@ from fulfillflow.asyncio_support import run_async
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
 from fulfillflow.db.migrations import schema_is_current
-from fulfillflow.messaging.health import healthy, heartbeat_path
+from fulfillflow.messaging.health import healthy, heartbeat_path, observation
 from fulfillflow.messaging.operations import RearmError, diagnose, rearm
-from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.tables import InboxTables, MessageTables
 from fulfillflow.shared import SystemClock
 
 BusinessDiagnostic = Callable[[AsyncSession, datetime, UUID | None], Awaitable[dict[str, Any]]]
 
 
-def main(service: str, tables: MessageTables, business: BusinessDiagnostic | None = None) -> None:
+RearmGuard = Callable[[AsyncSession, UUID], Awaitable[None]]
+
+
+def main(
+    service: str,
+    tables: MessageTables | InboxTables,
+    business: BusinessDiagnostic | None = None,
+    guard: RearmGuard | None = None,
+) -> None:
     parser = argparse.ArgumentParser(description="Owner-local durable transport operations")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("healthcheck")
     diagnostic = commands.add_parser("diagnose")
     diagnostic.add_argument("--id", type=UUID)
+    diagnostic.add_argument(
+        "--flow", choices=("tracking.apply.v1", "tracking.result.v1", "shipment.status_changed.v1")
+    )
     recovery = commands.add_parser("rearm")
-    recovery.add_argument("--stage", choices=("inbox", "outbox"), required=True)
+    recovery.add_argument(
+        "--stage",
+        choices=("inbox", "outbox") if isinstance(tables, MessageTables) else ("inbox",),
+        required=True,
+    )
+    recovery.add_argument(
+        "--flow", choices=("tracking.apply.v1", "tracking.result.v1", "shipment.status_changed.v1")
+    )
     recovery.add_argument("--id", type=UUID, required=True)
     recovery.add_argument("--expected-hash", required=True)
     recovery.add_argument("--reason", required=True)
@@ -43,6 +61,13 @@ def main(service: str, tables: MessageTables, business: BusinessDiagnostic | Non
         settings = Settings()
         if settings.service_role != service:
             raise RearmError("OWNER_MISMATCH")
+        allowed_flows = {
+            "core": {"tracking.apply.v1", "tracking.result.v1", "shipment.status_changed.v1"},
+            "tracking": {"tracking.apply.v1", "tracking.result.v1"},
+            "notifications": {"shipment.status_changed.v1"},
+        }
+        if args.flow is not None and args.flow not in allowed_flows[service]:
+            raise RearmError("FLOW_OWNER_MISMATCH")
         database = Database.from_settings(settings)
         try:
             if not await schema_is_current(database.engine, Path(f"alembic_{service}.ini")):
@@ -53,18 +78,37 @@ def main(service: str, tables: MessageTables, business: BusinessDiagnostic | Non
                 if args.command == "rearm":
                     if database_name != args.expected_database:
                         raise RearmError("DATABASE_MISMATCH")
+                    if guard is not None:
+                        await guard(session, args.id)
                     generation = await rearm(
-                        session, tables, args.stage, args.id, args.expected_hash, args.reason, now
+                        session,
+                        tables,
+                        args.stage,
+                        args.id,
+                        args.expected_hash,
+                        args.reason,
+                        now,
+                        args.flow,
                     )
-                    return dict(service=service, message_id=args.id, generation=generation)
-                report = await diagnose(session, tables, now, args.id)
+                    return dict(
+                        service=service,
+                        database=database_name,
+                        stage=args.stage,
+                        message_id=args.id,
+                        body_sha256=args.expected_hash,
+                        reason=args.reason.strip(),
+                        generation=generation,
+                    )
+                report = await diagnose(session, tables, now, args.id, args.flow)
                 if business is not None:
                     report["business"] = await business(session, now, args.id)
                 return dict(
                     service=service,
                     database=database_name,
                     observed_at=now,
+                    flow=args.flow,
                     worker_healthy=healthy(heartbeat_path(service), service),
+                    worker=observation(heartbeat_path(service), service),
                     broker="Separate observation: rabbitmqctl list_queues; not a completion signal",
                     counts_are_per_stage=True,
                     **report,

@@ -4,10 +4,10 @@
 
 Alvo: extrair Notifications como serviço assíncrono, com persistência própria e
 entrega simulada, preservando Tracking assíncrono. Contratos/persistência e fluxo
-integrado correspondem aos incrementos I/II; recuperação operacional completa e
-aceite funcional final permanecem nos incrementos III/IV ainda não autorizados.
-O desenho foi aprovado, com implementação autorizada dos incrementos I e II,
-sequencialmente, e parada antes do III. Commits por assunto e push somente na
+integrado correspondem aos incrementos I/II; recuperação e operação do III estão implementadas;
+o aceite funcional final permanece no IV ainda não autorizado.
+O desenho foi aprovado, com implementação autorizada do incremento III após I/II,
+com parada antes do IV. Commits por assunto e push somente na
 branch v1.3 estão autorizados, com conferência da CI do SHA final.
 O [RELEASE_PLAN](RELEASE_PLAN.md) registra incrementos e estado;
 AGENTS define como trabalhar; README continua descrevendo o runtime executável.

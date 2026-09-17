@@ -143,3 +143,28 @@ def test_active_heartbeat_cannot_hide_stale_loop(tmp_path):
     heartbeat.stages["process"]["at"] -= 46
     heartbeat.write()
     assert not healthy(heartbeat.path, "core")
+
+
+def test_local_observation_separates_staleness_dependency_and_stop_without_raw_content(tmp_path):
+    from fulfillflow.messaging.health import observation
+
+    path = tmp_path / "observation.json"
+    assert observation(path, "notifications")["status"] == "unobserved"
+    heartbeat = Heartbeat(path, "notifications")
+    heartbeat.record("receive", "ready")
+    heartbeat.record("process", "dependency_unavailable")
+    heartbeat.write()
+    report = observation(path, "notifications")
+    assert report["status"] == "observed"
+    assert report["stages"]["process"] == {"state": "dependency_unavailable", "fresh": True}
+    assert observation(path, "core")["status"] == "unobserved"
+    assert observation(path, "notifications", now=time.monotonic() + 46)["status"] == "stale"
+    heartbeat.record("process", "secret-not-a-state")
+    heartbeat.stopping = True
+    heartbeat.write()
+    report = observation(path, "notifications")
+    assert report["status"] == "stopping"
+    assert report["stages"]["process"]["state"] == "unknown"
+    assert "secret" not in str(report)
+    path.write_text("invalid")
+    assert observation(path, "notifications")["status"] == "unobserved"

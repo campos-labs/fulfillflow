@@ -11,19 +11,19 @@ Branch: `feature/v1.3-notifications-async`, criada diretamente desse SHA em chec
 isolado para preservar as alterações do checkout v1.2. A tag anotada foi conferida
 pelo commit resolvido, sem mover referências existentes.
 
-**Autorização atual: implementar I e II, sequencialmente, com revisão e testes
-antes de avançar; parar antes do III.** O desenho está aprovado com esclarecimentos
+**Autorização atual: implementar III a partir de
+`bb002dc84321856ca9cd57b8bb8374683010da74`; parar antes do IV.** O desenho está aprovado com esclarecimentos
 de supressão de mensagens LEGACY e limites de independência dos publicadores.
 Commits por assunto e push somente nesta branch estão autorizados, com conferência
-da CI do SHA final. III/IV, campanhas, publicação e merge permanecem não autorizados.
+da CI do SHA final. IV, campanhas, publicação e merge permanecem não autorizados.
 
 | Marco | Estado |
 | --- | --- |
 | Inspeção da referência, criação/consultas/idempotência e mecanismos v1.2 | Concluída sobre o SHA congelado |
 | Desenho e plano v1.3 | Aprovados; esclarecimentos incorporados |
 | I — Contratos e persistência | Concluído e revisado localmente; evidências abaixo |
-| II — Fluxo integrado | Concluído e revisado localmente; conferir CI do SHA enviado |
-| III — Recuperação e operação | Não iniciado |
+| II — Fluxo integrado | Concluído; CI do SHA bb002dc aprovada |
+| III — Recuperação e operação | Implementado e verificado localmente; CI do SHA enviado exigida |
 | IV — UI e aceite funcional | Não iniciado |
 | Comparação extensa / publicação | Suspensas; requerem decisão posterior |
 
@@ -48,7 +48,7 @@ alvo requer; preservar `uv.lock` e digests existentes. Extensões técnicas deve
 estreitas, com regressão de Tracking, sem framework genérico ou serviços fictícios.
 Recursos de verificação têm projeto, nomes e volumes próprios e ownership conferido.
 Não executar carga, publicar imagens, criar tags, fazer merge ou alterar dados
-históricos. Runtime e ensaios funcionais de I/II usam somente recursos descartáveis próprios.
+históricos. Runtime e ensaios funcionais de I–III usam somente recursos descartáveis próprios.
 
 ## 3. Incremento I — Contratos e persistência
 
@@ -172,16 +172,15 @@ Testes de atomicidade Core agora exigem outbox do fato, não Notification local.
   A rodada já havia carregado o teste anterior; não se repetiram os 1176 aprovados.
   XML conferido: todos os cenários críticos passaram sem skips. Junto dos cinco
   casos estruturais separados, os 1182 casos foram verificados.
-- Conferir a CI do SHA exato enviado nesta branch antes do relatório final. A CI
-  exige execução real dos cenários críticos, migrations e build/smoke. Resultado
-  local não é apresentado como aprovação remota; o link da execução fica no relatório.
+- CI anterior aprovada no SHA `bb002dc84321856ca9cd57b8bb8374683010da74`:
+  [execução 35174709946](https://github.com/campos-labs/fulfillflow/actions/runs/35174709946).
+  1142 testes funcionais e cinco estruturais aprovados; cobertura 88,56%.
+  Os 35 skips eram específicos de Windows e passaram localmente. O gate crítico
+  PostgreSQL/RabbitMQ não aceitou skips; migrations, checks e build/smoke aprovados.
 
-**Limite da entrega:** III permanece não iniciado. A CLI completa de operação
-Notifications, a matriz ampliada de interrupções/rearme/corte e os refinamentos
-de polling/DEMO do IV não estão aceitos. O ensaio de importação permanece offline
-e descartável. Não há exactly-once externo nem isolamento de falhas comuns dos
-recursos compartilhados. Recomenda-se iniciar III pela matriz de interrupções e
-rearme auditado, após autorização; nenhuma campanha ou publicação foi executada.
+**Limite do aceite II:** recuperação operacional completa e UI/DEMO finais não
+foram aceitas nessa etapa. III está agora autorizado; IV continua pendente.
+Não há exactly-once externo nem isolamento de falhas comuns dos recursos compartilhados.
 
 ## 5. Incremento III — Recuperação e operação
 
@@ -213,6 +212,79 @@ com diagnóstico e procedimentos finitos.
 dual-write ou bloqueio de Tracking causado pelo novo fluxo. Itens que atingem
 BLOCKED exigem rearme auditado; não prometer recuperação automática ilimitada,
 isolamento físico, estabilidade prolongada ou solução do 503 histórico.
+
+### Cobertura reutilizada e complementos do III
+
+| Contrato | Evidência I/II preservada | Complemento III |
+| --- | --- | --- |
+| Atomicidade Core e snapshot | `test_notification_core_flow`, `test_commit_boundaries` | Morte de processo antes/depois do commit e confirmação |
+| Inbox antes de ACK, conflito e quarentena | `test_notification_transport`, `test_message_transport` | Interrupção real da recepção e retomada com fila vazia |
+| Simulação + DONE; LEGACY; unicidade concorrente | `test_notifications_owned` | Interrupção real e guarda de terminais no rearme |
+| Retry, leases, lock e auditoria técnica | `test_message_operations`, `test_message_transport` | Aplicação à inbox Notifications, CLI e filtro Core |
+| Independência dos publishers, health e shutdown | `test_notifications_worker`, `test_worker_lifecycle`, `test_worker_dependencies` | Falhas específicas e lifecycle dos processos Notifications |
+| Importação offline e leitura HTTP | `test_notification_cutover`, `test_notifications_http` | Comandos reais, inventário e consulta após corte/replay |
+
+Reutilizar essas provas sem duplicar os cenários. Rodar regressão dos mecanismos
+compartilhados quando alterados e os complementos com infraestrutura descartável.
+
+### Entrega e validação do III
+
+CLI Notifications concluída com diagnóstico sanitizado, guarda de proprietário,
+ID/hash/motivo e geração, cinco tentativas e rearme auditado sob o lock da inbox.
+Nenhum terminal SIMULATED/FAILED/LEGACY permite nova simulação. Core ganhou filtro
+explícito do fato; heartbeat expõe somente estados controlados dos loops. Não houve
+mudança de evento, schema, dependência, ACL ou contrato de negócio Tracking.
+
+- `test_notification_recovery`: 11 cenários aprovados com interrupção abrupta de
+  processos nas fronteiras Core/confirm/inbox/ACK/simulação/DONE, reinício, lease
+  expirada, fila vazia após ACK, falha fatal e encerramento limitado. No Windows,
+  o teste de shutdown entrega SIGTERM pelo próprio processo (watcher exclusivo de
+  teste); Linux recebe SIGTERM externo. Cortes usam harness de teste, sem switches
+  de falha no runtime. Heartbeat após morte abrupta respeita sua janela de 5 s.
+- `test_notification_operations`: seis casos aprovados, incluindo concorrência de
+  dois CLIs reais, auditoria/rollback, limite de tentativas, filtro Core e terminais.
+  A regressão focal dos mecanismos compartilhados, ACLs, HTTP e atomicidade executou
+  93 casos aprovados, sem skips, incluindo esses seis e recuperação Tracking.
+- `test_notification_outages`, `test_notification_cutover_cli` e a extensão de
+  `test_notifications_worker`: nove casos aprovados, sem skips. API, worker e acesso
+  ao banco Notifications interrompidos separadamente; Order/Tracking concluem e a
+  retomada dispensa novo webhook. Corte completo via CLIs, reimportação, consulta
+  HTTP real e replay LEGACY mantêm arquivo/conteúdo/IDs/datas sem ressimulação.
+  Retorno obrigatório é produzido por RabbitMQ real; timeout e nack são injeções
+  controladas específicas do publisher, com tracking.result entregue pelo broker real.
+- `test_worker_lifecycle`: 13 casos unitários aprovados, incluindo observação local
+  sanitizada que distingue dependência, staleness e encerramento. Ao todo, 126 casos
+  distintos verificados localmente nessas rodadas focais; nenhum skip crítico.
+  As verificações Windows/PowerShell históricas não alteradas mantêm a evidência
+  de I/II; os novos CLIs/processos foram executados no Windows com Python 3.13.1.
+- Ruff, formatação, Mypy (116 arquivos), Import Linter (12 contratos) e diff check
+  aprovados. Jobs de migration do smoke aplicaram os três heads; `current
+  --check-heads` e `check` aprovados para `1301_core`, `1203_tracking` e
+  `1301_notifications`, sem drift ou migration nova.
+- Compose config/build/up --wait aprovados no projeto exclusivo
+  `fulfillflow-v13-iii-runtime`; três APIs/três workers saudáveis. Live/ready,
+  dashboard e consulta Notifications retornaram 200; CLIs reais nos containers
+  mostraram os loops esperados e somente bancos proprietários. SIGTERM também
+  verificado nos workers Docker. Recursos/pools/leases/prefetch permanecem os do
+  DESIGN; broker com hostname `broker` e volumes novos próprios. Sem carga.
+- Imagens locais novas, preservando as anteriores: `fulfillflow-core:v13-iii-local`
+  `sha256:0c2b7819c8349c03274d74584fea29767826d9013901e807f1523b1b2fa7031a`;
+  `fulfillflow-tracking:v13-iii-local`
+  `sha256:26cca5747c6012c8eb5a169b2662c85d9c06288636a9144ef49316428c813a07`;
+  `fulfillflow-notifications:v13-iii-local`
+  `sha256:db4060ae8e92059479d2596d23c05bab4652437b21f3d5acca7dd0604b56c35f`.
+  Digests de infraestrutura e hash do lock seguem os registrados no II.
+- CI mantém suíte completa/cobertura, checks, migrations e build/smoke. O gate sem
+  skips críticos passou a exigir os quatro novos módulos de recuperação/operação
+  e cinco casos de worker Notifications. Conferir a execução do SHA final após
+  push nesta branch; link/resultado exatos no relatório da tarefa, sem equiparar
+  validação local à aprovação remota.
+
+**Limite da entrega III:** parar antes do IV. Recomenda-se executar UI/polling e
+DEMO com observação conservadora da indisponibilidade, utilizando esses contratos
+já verificados. Não há migração online, isolamento de falhas comuns, exactly-once
+externo, estabilidade prolongada ou solução demonstrada para o 503 histórico.
+A pausa final permanece após IV, antes de comparações extensas ou publicação.
 
 ## 6. Incremento IV — UI e aceite funcional
 

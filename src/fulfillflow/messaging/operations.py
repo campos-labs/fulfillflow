@@ -10,7 +10,7 @@ from sqlalchemy import Table, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.contracts.messages import ResultEnvelope, decode_message
-from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.tables import InboxTables, MessageTables
 
 
 class RearmError(ValueError):
@@ -19,20 +19,25 @@ class RearmError(ValueError):
 
 async def rearm(
     session: AsyncSession,
-    tables: MessageTables,
+    tables: MessageTables | InboxTables,
     stage: str,
     message_id: UUID,
     expected_hash: str,
     reason: str,
     now: datetime,
+    flow: str | None = None,
 ) -> int:
-    if stage not in ("inbox", "outbox"):
+    if stage not in ("inbox", "outbox") or (
+        stage == "outbox" and not isinstance(tables, MessageTables)
+    ):
         raise RearmError("INVALID_STAGE")
     if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
         raise RearmError("INVALID_HASH")
     if not 3 <= len(reason.strip()) <= 240 or not reason.isprintable():
         raise RearmError("INVALID_REASON")
-    table = tables.inbox if stage == "inbox" else tables.outbox
+    table = (
+        tables.outbox if stage == "outbox" and isinstance(tables, MessageTables) else tables.inbox
+    )
     row = (
         (
             await session.execute(
@@ -44,6 +49,8 @@ async def rearm(
     )
     if row is None:
         raise RearmError("NOT_FOUND")
+    if flow is not None and row["type"] != flow:
+        raise RearmError("FLOW_MISMATCH")
     if row["state"] != "BLOCKED":
         raise RearmError("NOT_BLOCKED")
     if (
@@ -87,13 +94,17 @@ def safe_columns(table: Table) -> list[Any]:
 
 async def diagnose(
     session: AsyncSession,
-    tables: MessageTables,
+    tables: MessageTables | InboxTables,
     now: datetime,
     identity: UUID | None,
+    flow: str | None = None,
 ) -> dict[str, Any]:
     stages: dict[str, Any] = {}
-    matched_ids = {identity} if identity else set()
-    for stage, table in (("outbox", tables.outbox), ("inbox", tables.inbox)):
+    matched_ids = {identity} if identity and flow is None else set()
+    owned_stages = [("inbox", tables.inbox)]
+    if isinstance(tables, MessageTables):
+        owned_stages.insert(0, ("outbox", tables.outbox))
+    for stage, table in owned_stages:
         rows = (
             (
                 await session.execute(
@@ -103,7 +114,9 @@ async def diagnose(
                         func.min(table.c.created_at).label("oldest"),
                         func.max(table.c.last_attempt_at).label("last_attempt_at"),
                         func.max(table.c.finished_at).label("last_finished_at"),
-                    ).group_by(table.c.state)
+                    )
+                    .where(*([table.c.type == flow] if flow else []))
+                    .group_by(table.c.state)
                 )
             )
             .mappings()
@@ -118,11 +131,12 @@ async def diagnose(
                 (
                     await session.execute(
                         select(table).where(
+                            *([table.c.type == flow] if flow else []),
                             or_(
                                 table.c.message_id == identity,
                                 table.c.event_id == identity,
                                 table.c.correlation_id == identity,
-                            )
+                            ),
                         )
                     )
                 )
@@ -146,6 +160,7 @@ async def diagnose(
                         item["decision"] = envelope.payload.result.model_dump(mode="json")
                 items.append(item)
             stages[f"{stage}_items"] = items
+    stages["quarantine_scope"] = "owner-wide; invalid envelopes cannot be safely flow-filtered"
     stages["quarantine_count"] = await session.scalar(
         select(func.count()).select_from(tables.quarantine)
     )
