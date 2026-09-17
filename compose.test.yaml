@@ -27,6 +27,8 @@ services:
     image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
     hostname: v13-test-broker
     environment:
+      # Bound CLI diagnostics, not the broker scheduler count or CPU quota.
+      RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +A 1"
       RABBITMQ_DEFAULT_USER: v12_test
       RABBITMQ_DEFAULT_PASS: v12-isolated-broker-test
       RABBITMQ_DEFAULT_VHOST: fulfillflow-v12-test
