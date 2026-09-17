@@ -1,3 +1,6 @@
+{% set observing = progress.required and not progress.notification_id and progress.publication != 'BLOCKED' and progress.processing != 'BLOCKED' %}
+{% set observation_id = 'notification-' ~ progress.tracking_event_id %}
+<section data-observation-id="{{ observation_id }}" data-observation-poll="{{ 'true' if observing else 'false' }}" {% if observing %}hx-get="{{ path_for(request, 'web-notification-status', tracking_event_id=progress.tracking_event_id) }}" hx-trigger="observe" hx-request='{"timeout": 5000}' hx-target="#main-content" hx-swap="outerHTML"{% endif %}>
 <h1 class="h2">Notification progress</h1>
 <p>Tracking and Order completion are independent of notification simulation. No email is sent.</p>
 {% if not progress.required %}
@@ -10,5 +13,9 @@
 {% else %}
 <div class="alert alert-info" role="status">Notification simulation is pending. A completed Tracking result does not mean simulation has finished.</div>
 {% endif %}
-<dl class="detail-grid mt-3"><dt>Tracking event</dt><dd><code>{{ progress.tracking_event_id }}</code></dd><dt>Publication</dt><dd>{{ progress.publication|display }}</dd><dt>Processing</dt><dd>{{ progress.processing|display }}</dd><dt>Origin</dt><dd>{{ progress.origin|display }}</dd><dt>Core observation</dt><dd>{{ progress.core_observed_at|display }}</dd><dt>Notifications observation</dt><dd>{{ progress.notifications_observed_at|display }}</dd></dl>
-<a class="btn btn-outline-primary" href="{{ path_for(request, 'web-notification-status', tracking_event_id=progress.tracking_event_id) }}">Check again</a>
+<dl class="detail-grid mt-3"><dt>Tracking event</dt><dd><code>{{ progress.tracking_event_id }}</code></dd><dt>Publication</dt><dd>{{ "Not recorded for LEGACY" if progress.origin == "LEGACY" else progress.publication|display }}</dd><dt>Processing</dt><dd>{{ "Not recorded for LEGACY" if progress.origin == "LEGACY" else progress.processing|display }}</dd><dt>Simulation</dt><dd>{{ progress.status|display }}</dd><dt>Origin</dt><dd>{{ progress.origin|display }}</dd><dt>Core observation</dt><dd>{{ progress.core_observed_at|display }}</dd><dt>Notifications observation</dt><dd>{{ progress.notifications_observed_at|display }}</dd></dl>
+{% if progress.origin == 'LEGACY' %}<p>Imported LEGACY record. Original identity, content and dates are preserved; no historical transport progress is inferred.</p>{% endif %}
+<p data-observation-message role="status">{% if observing %}Observing for up to 30 seconds. Publication is not simulation completion.{% else %}Observation stopped. The recorded result is shown above.{% endif %}</p>
+<a class="btn btn-outline-primary" data-observation-renew="{{ observation_id }}" href="{{ path_for(request, 'web-notification-status', tracking_event_id=progress.tracking_event_id) }}" hx-get="{{ path_for(request, 'web-notification-status', tracking_event_id=progress.tracking_event_id) }}" hx-target="#main-content" hx-swap="outerHTML" hx-request='{"timeout": 5000}'>Check again</a>
+<p class="small text-body-secondary mt-2">Check again only reads current state. It never resends the webhook or rearms work.</p>
+</section>

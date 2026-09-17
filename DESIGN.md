@@ -5,9 +5,9 @@
 Alvo: extrair Notifications como serviço assíncrono, com persistência própria e
 entrega simulada, preservando Tracking assíncrono. Contratos/persistência e fluxo
 integrado correspondem aos incrementos I/II; recuperação e operação do III estão implementadas;
-o aceite funcional final permanece no IV ainda não autorizado.
-O desenho foi aprovado, com implementação autorizada do incremento III após I/II,
-com parada antes do IV. Commits por assunto e push somente na
+o incremento IV está autorizado para UI/DEMO e aceite funcional.
+O desenho foi aprovado, com implementação autorizada do incremento IV após I–III,
+com parada no aceite funcional, antes de comparação extensa ou publicação. Commits por assunto e push somente na
 branch v1.3 estão autorizados, com conferência da CI do SHA final.
 O [RELEASE_PLAN](RELEASE_PLAN.md) registra incrementos e estado;
 AGENTS define como trabalhar; README continua descrevendo o runtime executável.
@@ -270,7 +270,7 @@ DEMO mostrará separadamente 202, conclusão Tracking/Order e simulação, inclu
 worker Notifications parado e retomada sem reenvio. O simulador de Carriers mantém
 seu contrato de esperar Tracking; concluir seu cenário não comprova Notifications.
 O aceite verifica as notificações pela consulta própria. Novas capturas v1.3 não
-substituem as anteriores; DEMO/README só serão atualizados ao ativar comportamento.
+substituem as anteriores; DEMO/README descrevem o comportamento executável.
 
 ## 8. Implantação, operação e reutilização delimitada
 
@@ -316,7 +316,7 @@ readiness do Core ao serviço Notifications.
 | PostgreSQL | 2 | 2560 MiB | — |
 | RabbitMQ | 0,5 | 512 MiB | — |
 
-Limites iniciais funcionais, ainda não validados: aplicação 3 CPUs/2304 MiB;
+Limites usados no smoke funcional, sem validação de capacidade: aplicação 3 CPUs/2304 MiB;
 topologia 5,5 CPUs/5376 MiB, excluindo jobs de migração/testes. Registrar pools,
 concorrência e parâmetros efetivos no aceite. Não afirmar equivalência de orçamento
 com v1.2 nem dimensionar por uma quantidade desejada de componentes.

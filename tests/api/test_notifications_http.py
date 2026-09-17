@@ -349,3 +349,9 @@ async def test_legacy_progress_requires_imported_record_and_preserves_original_i
         assert (await client.get(f"/api/v1/notifications/{record.id}")).json() == record.model_dump(
             mode="json"
         )
+
+        legacy_page = await client.get(f"/notification-status/{record.tracking_event_id}")
+        assert "Not recorded for LEGACY" in legacy_page.text
+        assert "Imported LEGACY record" in legacy_page.text
+        assert 'data-observation-poll="false"' in legacy_page.text
+        assert 'hx-trigger="observe"' not in legacy_page.text

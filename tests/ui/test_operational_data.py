@@ -154,6 +154,10 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     assert "Simulation failed. No email was sent." in failed_detail.text
     assert "Notification rendering or simulation failed." in failed_detail.text
     assert "Resend" not in failed_detail.text
+    progress = await ui_client.get(f"/notification-status/{failed['tracking_event_id']}")
+    assert "Simulation failed" in progress.text
+    assert 'data-observation-poll="false"' in progress.text
+    assert 'hx-trigger="observe"' not in progress.text
 
 
 async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(

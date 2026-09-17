@@ -93,6 +93,7 @@ jobs:
               ("test_notification_cutover", 2),
               ("test_notifications_worker", 5),
               ("test_notification_operations", 6),
+              ("test_notification_observation", 5),
               ("test_notification_recovery", 11),
               ("test_notification_outages", 3),
               ("test_notification_cutover_cli", 1),

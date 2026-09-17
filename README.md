@@ -1,12 +1,12 @@
 # FulfillFlow
 
-**v1.3 em desenvolvimento — Notifications assíncrono (incrementos I–III)**,
+**v1.3 — Notifications assíncrono (incrementos I–IV)**,
 na branch `feature/v1.3-notifications-async`, baseada em `v1.2.0-rc.1`
 (`9b445f9b5466cd302c89f1deed7a9c051cb397ae`). O [DESIGN](DESIGN.md) define o
 alvo e o [RELEASE_PLAN](RELEASE_PLAN.md) registra o plano e seu estado.
 O código e os comandos abaixo executam `v1.3.0.dev0`, com Tracking e Notifications
-assíncronos, com recuperação e operação do III. UI/DEMO e aceite funcional final
-pertencem ao IV, ainda não iniciado; a execução para antes dele. As referências v1.0/v1.1/v1.2
+assíncronos, recuperação operacional e UI com observação limitada. O desenvolvimento
+para no aceite funcional do IV, antes de comparação extensa ou publicação. As referências v1.0/v1.1/v1.2
 e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
 
 Core mantém Orders, Shipments e Carriers. Tracking mantém HMAC,
@@ -270,7 +270,9 @@ As rotas HTML são:
 - `GET /notifications` e `GET /notifications/{notification_id}`: lista, filtros
   e detalhe somente leitura das simulações de Notification;
 - `GET /notification-status/{tracking_event_id}`: observação manual do progresso
-  independente, também acessível após APPLIED no inbox; polling refinado fica no IV;
+  independente, também acessível após APPLIED no inbox; polling por até 30 s,
+  encerrado em terminal/bloqueio/navegação, com renovação somente por GET e
+  última observação preservada em erro;
 - `GET /simulator`: painel estritamente instrucional para o cliente externo;
 - `GET /static/...`: assets versionados empacotados com a aplicação.
 
@@ -514,7 +516,7 @@ uv run pytest tests/e2e/test_notification_cutover_cli.py -q
 
 ## Documentação
 
-- [Demonstração congelada v1.2](docs/DEMO.md): jornada e capturas históricas; atualização v1.3 no IV.
+- [Demonstração funcional v1.3](docs/DEMO.md): reprodução, interrupções reais, retomada e capturas; referências históricas preservadas.
 - [DESIGN](DESIGN.md): contratos v1.3 e referências preservadas.
 - [RELEASE_PLAN](RELEASE_PLAN.md): incrementos, validação e limites da implementação v1.3.
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.

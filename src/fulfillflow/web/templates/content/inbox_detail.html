@@ -3,7 +3,7 @@
 <span data-observation-message role="status">{% if event.progress is none %}Legacy reception; business completion is pending.{% else %}Accepted (HTTP 202); business completion is pending.{% endif %}{% if event.progress in ('QUEUED', 'AWAITING_RESULT') %} Observing for up to 30 seconds.{% endif %}</span> Progress: {{ event.progress|display }}.
 {% if event.progress == 'BLOCKED_LOCAL' %}Local work is blocked and requires audited rearm.{% endif %}
 {% if event.progress is none %}Legacy pending record; no automatic transport work is recorded.{% endif %}
-<a class="alert-link" href="{{ path_for(request, 'web-inbox-detail', inbox_event_id=event.id) }}">Check again</a>
+<a class="alert-link" href="{{ path_for(request, 'web-inbox-detail', inbox_event_id=event.id) }}" {% if event.progress in ('QUEUED', 'AWAITING_RESULT') %}data-observation-renew="{{ event.id }}" hx-get="{{ path_for(request, 'web-inbox-detail', inbox_event_id=event.id) }}" hx-target="#main-content" hx-swap="outerHTML" hx-request='{"timeout": 5000}'{% endif %}>Check again</a>
 </div>
 {% elif event.status == 'REJECTED' %}
 <div class="alert alert-danger" role="status">Rejected. The persisted reason is shown below.</div>
