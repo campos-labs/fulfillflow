@@ -1,0 +1,14 @@
+<h1 class="h2">Notification progress</h1>
+<p>Tracking and Order completion are independent of notification simulation. No email is sent.</p>
+{% if not progress.required %}
+<div class="alert alert-secondary" role="status">This effect does not require a notification.</div>
+{% elif progress.notification_id %}
+<div class="alert {% if progress.status == 'SIMULATED' %}alert-success{% else %}alert-danger{% endif %}" role="status">{% if progress.status == 'SIMULATED' %}Simulation recorded. No email was sent.{% else %}Simulation failed. No email was sent.{% endif %}</div>
+<a class="btn btn-outline-primary" href="{{ path_for(request, 'web-notification-detail', notification_id=progress.notification_id) }}">View notification</a>
+{% elif progress.publication == 'BLOCKED' or progress.processing == 'BLOCKED' %}
+<div class="alert alert-warning" role="status">Notification work is blocked and requires audited recovery. Shipment and Order completion is unchanged.</div>
+{% else %}
+<div class="alert alert-info" role="status">Notification simulation is pending. A completed Tracking result does not mean simulation has finished.</div>
+{% endif %}
+<dl class="detail-grid mt-3"><dt>Tracking event</dt><dd><code>{{ progress.tracking_event_id }}</code></dd><dt>Publication</dt><dd>{{ progress.publication|display }}</dd><dt>Processing</dt><dd>{{ progress.processing|display }}</dd><dt>Origin</dt><dd>{{ progress.origin|display }}</dd><dt>Core observation</dt><dd>{{ progress.core_observed_at|display }}</dd><dt>Notifications observation</dt><dd>{{ progress.notifications_observed_at|display }}</dd></dl>
+<a class="btn btn-outline-primary" href="{{ path_for(request, 'web-notification-status', tracking_event_id=progress.tracking_event_id) }}">Check again</a>

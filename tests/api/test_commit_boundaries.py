@@ -1,13 +1,10 @@
 """Faults at actual SQL commit hooks, followed by redelivery over the public API."""
 
-import asyncio
-import os
 from datetime import timedelta
+from uuid import UUID
 
 import httpx
 import pytest
-from benchmarks.collectors import ExternalCommandError
-from benchmarks.collectors_v11 import SplitDatabaseProbe
 from sqlalchemy import event, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -18,7 +15,10 @@ from tests.service_pair import create_app
 from tests.support import FixedClock
 
 from fulfillflow.config import Settings
+from fulfillflow.contracts.messages import decode_message
+from fulfillflow.core.message_handler import apply_command
 from fulfillflow.db import Database
+from fulfillflow.messaging.store import BlockedItemError
 from fulfillflow.shipments.public import ShipmentReceipts
 from fulfillflow.tracking.repository import TrackingRepository
 
@@ -31,13 +31,7 @@ async def test_reconciliation_reads_real_owner_databases_and_rejects_receipt_cor
     postgres_tracking_database: Database,
     fixed_clock: FixedClock,
 ) -> None:
-    container = os.environ.get("TEST_V11_POSTGRES_CONTAINER")
-    if container is None:
-        pytest.skip(
-            "TEST_V11_POSTGRES_CONTAINER must identify the dedicated owner PostgreSQL container"
-        )
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
-    probe = SplitDatabaseProbe(container)
     async with (
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
@@ -58,16 +52,16 @@ async def test_reconciliation_reads_real_owner_databases_and_rejects_receipt_cor
         )
         assert response.status_code == 202
         await drain(postgres_database, postgres_tracking_database, fixed_clock)
-        assert await asyncio.to_thread(probe.reconcile) == {
-            "commands": 1,
-            "receipts": 1,
-            "finalized": 1,
-        }
-        observation = (await asyncio.to_thread(probe.event_observations, ["reconcile-event"]))[
-            "reconcile-event"
-        ]
-        assert observation.raw_body_sha256 == observation.payload_sha256
-        assert observation.notification_count == observation.matching_notification_count == 1
+        completed = (await client.get(response.headers["location"])).json()
+        notifications = (await client.get("/api/v1/notifications")).json()["items"]
+        assert len(notifications) == 1
+        assert notifications[0]["tracking_event_id"] == completed["tracking_event_id"]
+        assert notifications[0]["shipment_id"] == completed["result"]["shipment_id"]
+        async with postgres_database.session() as session:
+            receipt = await ShipmentReceipts(session).get(UUID(completed["tracking_event_id"]))
+        assert receipt.model_dump(mode="json") == completed["result"]
+        async with postgres_tracking_database.session() as session:
+            envelope = decode_message(await session.scalar(text("SELECT body FROM message_outbox")))
         async with postgres_database.engine.begin() as connection:
             await connection.execute(
                 text(
@@ -75,8 +69,10 @@ async def test_reconciliation_reads_real_owner_databases_and_rejects_receipt_cor
                     "jsonb_set(result, '{current_status}', '\"DELIVERED\"')"
                 )
             )
-        with pytest.raises(ExternalCommandError, match="receipt differs"):
-            await asyncio.to_thread(probe.reconcile)
+        with pytest.raises(BlockedItemError, match="RESULT_OUTBOX_CONFLICT"):
+            async with postgres_database.session() as session, session.begin():
+                await apply_command(session, envelope, fixed_clock)
+        assert (await client.get("/api/v1/notifications")).json()["items"] == notifications
 
 
 @pytest.mark.parametrize("peer", ["core", "tracking"])
@@ -207,7 +203,7 @@ async def test_commit_interruption_preserves_atomic_stage_and_recovers_locally(
         )
         assert await _counts(postgres_database, postgres_tracking_database) == (
             int(committed >= 2),
-            int(committed >= 2),
+            0,  # Notifications is a separate journey and has not been drained after this fault.
             int(committed >= 1),
             int(committed >= 3),
         )
@@ -223,7 +219,7 @@ async def test_commit_interruption_preserves_atomic_stage_and_recovers_locally(
             if original:
                 assert original.command is not None
         async with postgres_database.session() as session:
-            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == int(
+            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == 2 * int(
                 committed >= 2
             )
         # Only uncertain admission needs redelivery. Acknowledged application work resumes locally.

@@ -130,6 +130,7 @@ async def publish_batch(
     clock: Clock,
     *,
     flow: str | None = None,
+    stage: str = "publish",
 ) -> int:
     async with database.session() as session, session.begin():
         items = await claim_publications(session, tables.outbox, clock.now(), flow=flow)
@@ -164,7 +165,7 @@ async def publish_batch(
         service = tables.owner
         emit(
             service,
-            "publish",
+            stage,
             outcome,
             category=category,
             message=activity,

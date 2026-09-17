@@ -8,7 +8,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 from starlette.responses import Response
 
 from fulfillflow.config import Settings
@@ -50,11 +50,16 @@ class ServiceClient:
         settings: Settings,
         request_id: UUID,
         trace_headers: Sequence[tuple[bytes, bytes]] = (),
+        *,
+        secret: SecretStr | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
         self._request_id = request_id
         self._trace_headers = list(trace_headers)
+        self._secret = secret if secret is not None else settings.internal_api_secret
+        self._timeout_seconds = timeout_seconds
 
     async def request(
         self,
@@ -69,7 +74,7 @@ class ServiceClient:
         outgoing.update(self._trace_headers)
         outgoing.update(
             [
-                (INTERNAL_TOKEN_HEADER, self._settings.internal_api_secret.get_secret_value()),
+                (INTERNAL_TOKEN_HEADER, self._secret.get_secret_value()),
                 ("X-Request-ID", str(self._request_id)),
             ]
         )
@@ -80,6 +85,8 @@ class ServiceClient:
                 if self._settings.service_role == "tracking"
                 else self._settings.forwarding_timeout_seconds
             )
+            if self._timeout_seconds is not None:
+                budget = self._timeout_seconds
             async with asyncio.timeout(budget):
                 return await self._client.request(
                     method, path, content=content, headers=outgoing, params=params

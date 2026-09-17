@@ -4,17 +4,22 @@ import os
 
 import aio_pika
 
+from fulfillflow.config import DatabaseSettings
 from fulfillflow.core.message_handler import apply_command
 from fulfillflow.core.message_tables import tables as core_tables
 from fulfillflow.db import Database
 from fulfillflow.messaging.amqp import declare_flow, publish_batch, receive
 from fulfillflow.messaging.store import process_one
+from fulfillflow.notifications.message_handler import apply_notification
+from fulfillflow.notifications.message_tables import tables as notification_tables
 from fulfillflow.shared import Clock
 from fulfillflow.tracking.message_handler import apply_result
 from fulfillflow.tracking.message_tables import tables as tracking_tables
 
 
-async def drain(core: Database, tracking: Database, clock: Clock) -> None:
+async def drain(
+    core: Database, tracking: Database, clock: Clock, *, include_notifications: bool = True
+) -> None:
     connection = await aio_pika.connect(os.environ["TEST_AMQP_URL"], timeout=10)
     async with connection:
         channel = await connection.channel(publisher_confirms=True, on_return_raises=True)
@@ -26,7 +31,7 @@ async def drain(core: Database, tracking: Database, clock: Clock) -> None:
                 (tracking, tracking_tables, core, core_tables, "tracking.apply.v1", apply_command),
                 (core, core_tables, tracking, tracking_tables, "tracking.result.v1", apply_result),
             ):
-                work += await publish_batch(source, outgoing, channel, clock)
+                work += await publish_batch(source, outgoing, channel, clock, flow=flow)
                 queue = await channel.get_queue(f"{flow}.queue")
                 while message := await queue.get(fail=False, timeout=5):
                     await receive(target, incoming, message, flow, clock.now())
@@ -42,5 +47,44 @@ async def drain(core: Database, tracking: Database, clock: Clock) -> None:
                         break
                     work += 1
             if not work:
+                if include_notifications:
+                    await drain_notifications(core, clock)
                 return
         raise AssertionError("Message flow did not become idle within the bounded drain")
+
+
+async def drain_notifications(core: Database, clock: Clock) -> None:
+    """Observe the separate notification journey through its actual broker and database."""
+    settings = DatabaseSettings(
+        _env_file=None, database_url=os.environ["TEST_NOTIFICATIONS_DATABASE_URL"]
+    )
+    notifications = Database.from_settings(settings)
+    try:
+        connection = await aio_pika.connect(os.environ["TEST_AMQP_URL"], timeout=10)
+        async with connection:
+            channel = await connection.channel(publisher_confirms=True, on_return_raises=True)
+            flow = "shipment.status_changed.v1"
+            await declare_flow(channel, flow)
+            for _ in range(20):
+                work = await publish_batch(core, core_tables, channel, clock, flow=flow)
+                queue = await channel.get_queue(f"{flow}.queue")
+                while message := await queue.get(fail=False, timeout=5):
+                    await receive(notifications, notification_tables, message, flow, clock.now())
+                    work += 1
+
+                async def apply(session, envelope):
+                    await apply_notification(session, envelope, clock)
+
+                while True:
+                    async with notifications.session() as session, session.begin():
+                        processed = await process_one(
+                            session, notification_tables.inbox, clock.now(), apply, clock=clock
+                        )
+                    if not processed:
+                        break
+                    work += 1
+                if not work:
+                    return
+            raise AssertionError("Notifications did not become idle within bounded drain")
+    finally:
+        await notifications.dispose()

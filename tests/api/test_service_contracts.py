@@ -1,5 +1,7 @@
 """v1.1 real HTTP contracts and PostgreSQL commit-boundary recovery proofs."""
 
+import hashlib
+import os
 from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,7 +13,7 @@ from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.service_pair import create_app
 from tests.support import ContentionProbe, FixedClock, run_with_proven_contention
 
-from fulfillflow.config import Settings
+from fulfillflow.config import DatabaseSettings, Settings
 from fulfillflow.contracts.core import ApplyEventCommand
 from fulfillflow.db import Database
 from fulfillflow.shipments.public import ShipmentReceipts
@@ -26,10 +28,17 @@ def _headers(settings: Settings) -> dict[str, str]:
 async def _counts(core: Database, tracking: Database) -> tuple[int, int, int, int]:
     async with core.engine.connect() as connection:
         receipts = await connection.scalar(text("SELECT count(*) FROM tracking_event_receipts"))
-        notifications = await connection.scalar(text("SELECT count(*) FROM notifications"))
     async with tracking.engine.connect() as connection:
         inbox = await connection.scalar(text("SELECT count(*) FROM carrier_event_inbox"))
         events = await connection.scalar(text("SELECT count(*) FROM tracking_events"))
+    owner = Database.from_settings(
+        DatabaseSettings(_env_file=None, database_url=os.environ["TEST_NOTIFICATIONS_DATABASE_URL"])
+    )
+    try:
+        async with owner.engine.connect() as connection:
+            notifications = await connection.scalar(text("SELECT count(*) FROM notifications"))
+    finally:
+        await owner.dispose()
     return receipts, notifications, inbox, events
 
 
@@ -182,15 +191,19 @@ async def test_concurrent_core_receipts_preserve_original_result_and_outbox(
         monkeypatch.setattr(ShipmentReceipts, "claim", original)
         async with postgres_database.session() as session:
             before = (
-                await session.execute(text("SELECT message_id, body FROM message_outbox"))
-            ).one()
+                await session.execute(
+                    text("SELECT message_id, body FROM message_outbox ORDER BY type")
+                )
+            ).all()
         fixed_clock.current += timedelta(seconds=20)
         # Actual transport redelivery reuses the already persisted receipt/outbox identity.
         await drain(postgres_database, postgres_tracking_database, fixed_clock)
         async with postgres_database.session() as session:
             assert (
-                await session.execute(text("SELECT message_id, body FROM message_outbox"))
-            ).one() == before
+                await session.execute(
+                    text("SELECT message_id, body FROM message_outbox ORDER BY type")
+                )
+            ).all() == before
         assert await _counts(postgres_database, postgres_tracking_database) == (1, 1, 1, 1)
         assert (await client.get(accepted.headers["location"])).json()["result"][
             "result"
@@ -205,8 +218,9 @@ async def test_core_rejection_and_content_conflicts_replay_after_state_changes(
 ):
     from pydantic import ValidationError
 
+    from fulfillflow.contracts.messages import CommandEnvelope, canonical_bytes
     from fulfillflow.contracts.problems import EventIdentityConflictError
-    from fulfillflow.core.events import CoreEventService
+    from fulfillflow.core.message_handler import apply_command
 
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
     command = ApplyEventCommand(
@@ -234,8 +248,19 @@ async def test_core_rejection_and_content_conflicts_replay_after_state_changes(
             ApplyEventCommand.model_validate(command.model_dump() | invalid)
 
     async def submit(value):
-        async with postgres_database.session() as session:
-            return await CoreEventService(session, fixed_clock).apply(value)
+        message = CommandEnvelope(
+            message_id=UUID(int=97001),
+            event_id=value.event_id,
+            correlation_id=UUID(int=97002),
+            causation_id=UUID(int=97002),
+            request_id=UUID(int=97003),
+            created_at=command.received_at,
+            payload=value,
+            payload_sha256=hashlib.sha256(canonical_bytes(value)).hexdigest(),
+        )
+        async with postgres_database.session() as session, session.begin():
+            await apply_command(session, message, fixed_clock)
+            return await ShipmentReceipts(session).get(value.event_id)
 
     async with (
         app.router.lifespan_context(app),

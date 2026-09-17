@@ -1,15 +1,17 @@
 # FulfillFlow
 
-Alvo documental **v1.3 — Notifications assíncrono, ainda não implementado**,
+**v1.3 em desenvolvimento — Notifications assíncrono (incrementos I/II)**,
 na branch `feature/v1.3-notifications-async`, baseada em `v1.2.0-rc.1`
 (`9b445f9b5466cd302c89f1deed7a9c051cb397ae`). O [DESIGN](DESIGN.md) define o
 alvo e o [RELEASE_PLAN](RELEASE_PLAN.md) registra o plano e seu estado.
-O código e os comandos abaixo ainda executam a v1.2 (`v1.2.0.dev0` no pacote),
-com Tracking assíncrono e Notifications no Core. As referências v1.0/v1.1/v1.2
+O código e os comandos abaixo executam `v1.3.0.dev0`, com Tracking e Notifications
+assíncronos. Recuperação operacional completa (III) e aceite final/UI (IV) estão
+pendentes; a execução para antes do III. As referências v1.0/v1.1/v1.2
 e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
 
-Core mantém Orders, Shipments, Notifications e Carriers. Tracking mantém HMAC,
-adapters Alpha/Beta, inbox e timeline. Cada serviço possui banco, role e worker
+Core mantém Orders, Shipments e Carriers. Tracking mantém HMAC,
+adapters Alpha/Beta, inbox e timeline. Notifications possui os registros e a
+simulação de entrega. Cada serviço possui banco, role, API e worker
 próprios. Core continua sendo a entrada pública e serve a interface.
 
 Eventos novos recebem **202 após admissão durável**, com inbox, comando e outbox
@@ -20,6 +22,14 @@ ACK ocorrem fora da transação SQL. Não há atomicidade global nem exactly-onc
 O endpoint e o cliente internos de apply HTTP foram removidos; consultas e
 encaminhamento autenticados continuam HTTP.
 
+Somente transições Tracking `APPLIED` geram `shipment.status_changed.v1`, com
+destinatário congelado, na mesma transação Core do recibo, efeitos e resultado
+Tracking. Notifications persiste a inbox antes do ACK e grava simulação + DONE
+atomicamente. Não há escritor local ou fallback no Core. Backlog e falhas
+controladas do novo publicador não impedem `tracking.result`; processo, banco,
+broker e recursos compartilhados ainda têm falhas comuns. Simulação idempotente
+no banco não demonstra exactly-once em um provedor externo.
+
 ## Subida local com Docker Compose
 
 O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
@@ -28,15 +38,17 @@ O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 docker compose up --build --detach --wait
 ```
 
-O projeto padrão `fulfillflow-v12` cria volumes PostgreSQL e RabbitMQ novos.
-PostgreSQL inicializa `fulfillflow_core` e `fulfillflow_tracking`, com roles sem
-CONNECT ao banco alheio. Os serviços `migrate-core` e `migrate-tracking` aplicam
+O projeto padrão `fulfillflow-v13` cria volumes PostgreSQL e RabbitMQ novos.
+PostgreSQL inicializa `fulfillflow_core`, `fulfillflow_tracking` e
+`fulfillflow_notifications`, com roles sem CONNECT ao banco alheio. Os jobs
+`migrate-core`, `migrate-tracking` e `migrate-notifications` aplicam
 os heads antes dos processos. Somente Core publica `127.0.0.1:8000`; Tracking,
 workers, PostgreSQL e RabbitMQ ficam na rede interna. O broker usa um vhost e
-dois usuários com permissões separadas para os fluxos de comando e resultado.
+três usuários com permissões separadas para comando, resultado e fato Notifications.
 O hostname do broker é estável (`broker` por padrão), pois a identidade do nó
 participa do caminho dos dados RabbitMQ. Antes de recriar um broker v1.2 existente
-criado sem hostname fixo, preserve sua identidade e registre o valor em `.env`:
+criado sem hostname fixo, siga o README congelado. Para inspecionar a identidade
+de um broker do projeto atual, registre o valor em `.env`:
 
 ```powershell
 $env:RABBITMQ_HOSTNAME = docker inspect (docker compose ps -a -q broker) --format '{{.Config.Hostname}}'
@@ -49,13 +61,15 @@ imagem e configuração do servidor permanecem as declaradas.
 
 Cada API usa 0,5 CPU, 384 MiB e pool 2/0; cada worker, 0,5 CPU, 384 MiB e pool 3/0.
 PostgreSQL usa 2 CPUs/2560 MiB e RabbitMQ, 0,5 CPU/512 MiB. São parâmetros
-funcionais, sem alegação de equivalência de recursos com a v1.1. Workers usam
+funcionais: APIs/workers somam 3 CPUs/2304 MiB; com banco/broker, 5,5 CPUs/5376 MiB,
+sem jobs e sem alegação de equivalência com versões anteriores. Workers usam
 prefetch 8, lote 20, polling 500 ms, lease 30 s e timeout de confirm 5 s.
 Heartbeat atualiza a cada 500 ms: arquivo com mais de 5 s ou loop sem atividade
 por 45 s invalida a saúde. Dependência indisponível também invalida a saúde.
 
 Health/readiness das APIs não comprovam conclusão do trabalho. Workers têm
-heartbeat local e healthcheck sem HTTP: exigem atividade dos três loops e
+heartbeat local e healthcheck sem HTTP: Core exige quatro loops, Tracking três
+e Notifications dois (consumo/processamento), além de
 dependências disponíveis. Saúde não implica ausência de `BLOCKED`, nem fila
 RabbitMQ vazia comprova conclusão. SIGTERM/SIGINT param admissão de trabalho e
 aguardam até 15 s; interrupções deixam trabalho durável. Compose reserva 20 s,
@@ -71,7 +85,7 @@ Invoke-WebRequest http://127.0.0.1:8000/
 
 ## Operação local do transporte
 
-Execute no projeto v1.2 autorizado (acrescente `-p` se usar outro nome).
+Execute no projeto v1.3 descartável (acrescente `-p` se usar outro nome).
 Cada CLI acessa somente o banco do próprio serviço e exige schema atual.
 Não há endpoint administrativo público.
 
@@ -80,7 +94,8 @@ docker compose exec -T core-worker python -m fulfillflow.core.operations healthc
 docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations healthcheck
 docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose
 docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations diagnose
-docker compose exec -T broker rabbitmqctl list_queues -p fulfillflow-v12 name messages_ready messages_unacknowledged
+docker compose exec -T notifications-worker python -m fulfillflow.messaging.health --service notifications
+docker compose exec -T broker rabbitmqctl list_queues -p fulfillflow-v13 name messages_ready messages_unacknowledged
 ```
 
 Use `diagnose --id <UUID>` nos dois serviços para correlacionar mensagem,
@@ -112,6 +127,9 @@ as tentativas reiniciam junto com a auditoria do motivo e estado anterior.
 A CLI não reenfileira `DONE`/`SENT` ou quarentena. Bytes de quarentena ficam no
 banco proprietário; comandos não os exibem. Não inclua segredos no motivo.
 
+CLI completa de diagnóstico/rearme Notifications e filtro operacional do novo fluxo
+Core pertencem ao III. Não tratar os comandos existentes como aceite dessa operação.
+
 Workers emitem JSON INFO em stdout: serviço, etapa, IDs, tentativa, duração,
 resultado e categoria controlada, sem bodies, assinaturas ou exceções brutas.
 Essa instrumentação difere da v1.1; Prometheus/OTel mais amplos permanecem
@@ -138,6 +156,10 @@ Além dos health checks, os contratos atuais sob `/api/v1` são:
 - Notifications: consulta operacional paginada em `GET /api/v1/notifications`,
   com filtros por `status`, `shipment_id`, `created_from` e `created_to`, e
   detalhe em `GET /api/v1/notifications/{notification_id}`;
+- `GET /api/v1/notification-status/{tracking_event_id}` separa fato/publicação Core
+  da observação Notifications. `SIMULATED`/`FAILED` são terminais; `NOT_RECEIVED`,
+  `PENDING` e `BLOCKED` descrevem processamento. Ausência do recibo retorna 404;
+  falha de consulta retorna 503, sem transformar indisponibilidade em zero ou FAILED;
 - erros públicos, inclusive validação, 404 e 405, usam problem details e todas
   as respostas propagam um `X-Request-ID` válido.
 
@@ -183,13 +205,17 @@ as migrations não criam comandos nem inventam resultados históricos.
 Os defaults de secrets no `compose.yaml` são exclusivos do ambiente local
 isolado. Para sobrescrevê-los, copie `.env.example` para `.env` e substitua todos
 os placeholders. Mantenha `CORE_DB_PASSWORD`/`CORE_DATABASE_URL` e
-`TRACKING_DB_PASSWORD`/`TRACKING_DATABASE_URL` coerentes. `POSTGRES_PASSWORD`
+`TRACKING_DB_PASSWORD`/`TRACKING_DATABASE_URL` e
+`NOTIFICATIONS_DB_PASSWORD`/`NOTIFICATIONS_DATABASE_URL` coerentes. `POSTGRES_PASSWORD`
 pertence apenas à administração inicial. Alterar o `.env` não altera senhas de
-roles já criadas. `INTERNAL_API_SECRET` autentica as chamadas internas; HMAC fica
+roles já criadas. `INTERNAL_API_SECRET` autentica Core/Tracking;
+`NOTIFICATIONS_API_SECRET` é exclusivo das consultas Notifications. HMAC fica
 somente no Tracking e `SESSION_SECRET` somente no Core. Ao trocar credenciais AMQP, provisione os usuários correspondentes no broker;
-`CORE_AMQP_URL`/`TRACKING_AMQP_URL` não alteram usuários já existentes.
+`CORE_AMQP_URL`/`TRACKING_AMQP_URL`/`NOTIFICATIONS_AMQP_URL` não alteram usuários já existentes.
 Timeouts HTTP padrão:
-10 s para chamadas ao Core e 30 s para encaminhamento ao Tracking.
+10 s para chamadas ao Core, 30 s para encaminhamento ao Tracking e 2 s para
+Notifications, sem retry automático. Core obtém lista/detalhe/contagens por HTTP
+autenticado, sem SQL entre serviços nem conexão SQL retida durante a chamada.
 
 ## Interface operacional
 
@@ -213,6 +239,8 @@ As rotas HTML são:
   e detalhe sanitizado do inbox;
 - `GET /notifications` e `GET /notifications/{notification_id}`: lista, filtros
   e detalhe somente leitura das simulações de Notification;
+- `GET /notification-status/{tracking_event_id}`: observação manual do progresso
+  independente, também acessível após APPLIED no inbox; polling refinado fica no IV;
 - `GET /simulator`: painel estritamente instrucional para o cliente externo;
 - `GET /static/...`: assets versionados empacotados com a aplicação.
 
@@ -289,11 +317,11 @@ docker compose down --volumes
 ## Preparação funcional e execução por processos
 
 Com o Compose saudável, este comando cria um Order confirmado e duas Shipments
-pendentes, Alpha `V11ALPHA0001` e Beta `V11BETA0001`, pela API pública:
+pendentes, Alpha `V13ALPHA0001` e Beta `V13BETA0001`, pela API pública:
 
 ```powershell
 uv sync --frozen
-uv run python scripts/prepare_demo_v11.py --base-url http://127.0.0.1:8000
+uv run python scripts/prepare_demo_v13.py --base-url http://127.0.0.1:8000
 ```
 
 Referências e dados sintéticos são fixos; UUIDs e timestamps são atribuídos pela
@@ -301,11 +329,14 @@ aplicação. Repetir preserva os mesmos registros, inclusive após eventos, e um
 divergência nos dados esperados falha sem sobrescrevê-los. Uma preparação parcial
 pode ser retomada; ela não é uma transação entre bancos nem o seed do benchmark.
 Use o simulador acima com cada tracking code para preencher timeline e concluir
-o Order após entregar ambas as Shipments.
+o Order após entregar ambas as Shipments. A conclusão Tracking/Order não espera
+Notifications; consulte as simulações separadamente. O dashboard mantém contagens
+locais e mostra indisponibilidade explícita se a consulta Notifications falhar.
 
-Para executar aplicações no host, provisione os dois bancos PostgreSQL 18 com as
-roles segregadas do script `infrastructure/init-databases.sh`. Em dois terminais
-PowerShell, configure os secrets próprios, o token interno compartilhado e as URLs:
+Para executar aplicações no host, provisione os três bancos PostgreSQL 18 com as
+roles segregadas dos scripts `infrastructure/init-databases.sh` e
+`infrastructure/init-notifications-db.sh`. Em terminais separados,
+configure os secrets próprios, os tokens internos e as URLs:
 
 ```powershell
 # Terminal Core; DATABASE_URL aponta exclusivamente ao banco Core no host.
@@ -313,6 +344,8 @@ $env:SERVICE_ROLE = "core"
 $env:DATABASE_URL = "postgresql+psycopg://<core-role>:<password>@127.0.0.1:5432/fulfillflow_core"
 $env:APP_PORT = "8000"
 $env:TRACKING_BASE_URL = "http://127.0.0.1:8001"
+$env:NOTIFICATIONS_BASE_URL = "http://127.0.0.1:8002"
+# Configure também NOTIFICATIONS_API_SECRET com o token independente de Notifications.
 uv run alembic -c alembic_core.ini upgrade head
 uv run alembic -c alembic_core.ini current --check-heads
 uv run alembic -c alembic_core.ini check
@@ -331,6 +364,18 @@ uv run alembic -c alembic_tracking.ini check
 uv run python -m fulfillflow.tracking
 ```
 
+```powershell
+# Terminal Notifications; use o token independente também configurado no Core.
+$env:SERVICE_ROLE = "notifications"
+$env:DATABASE_URL = "postgresql+psycopg://<notifications-role>:<password>@127.0.0.1:5432/fulfillflow_notifications"
+$env:APP_PORT = "8002"
+$env:INTERNAL_API_SECRET = $env:NOTIFICATIONS_API_SECRET
+uv run alembic -c alembic_notifications.ini upgrade head
+uv run alembic -c alembic_notifications.ini current --check-heads
+uv run alembic -c alembic_notifications.ini check
+uv run python -m fulfillflow.notifications
+```
+
 Os workers são processos adicionais, com a mesma configuração do serviço
 proprietário e `AMQP_URL` apontando ao vhost provisionado. Em terminais próprios:
 
@@ -339,30 +384,34 @@ proprietário e `AMQP_URL` apontando ao vhost provisionado. Em terminais própri
 uv run python -m fulfillflow.core.worker
 # Ambiente Tracking, DATABASE_URL Tracking e AMQP_URL do usuário Tracking.
 uv run python -m fulfillflow.tracking.worker
+# Ambiente Notifications, banco e usuário AMQP exclusivos de Notifications.
+uv run python -m fulfillflow.notifications.worker
 ```
 
 ## Testes e qualidade
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
 não dependem de banco. Testes de repository/service, APIs persistentes, UI e E2E
-usam PostgreSQL 18 real. Configure os três bancos isolados abaixo; fixtures
+usam PostgreSQL 18 real. Configure os três bancos proprietários e o legado isolados abaixo; fixtures
 ausentes são explicitamente ignoradas e não constituem validação completa.
-O E2E sobe Core e Tracking em portas TCP distintas e chama o webhook público
+O E2E sobe as três APIs em portas TCP distintas e chama o webhook público
 por processo externo. Os testes limpam apenas os bancos dedicados informados.
 
 ```powershell
-docker compose -p fulfillflow-v12-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v13-tests -f compose.test.yaml up -d --wait
+docker exec --user rabbitmq fulfillflow-v13-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
 $env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core"
 $env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
+$env:TEST_NOTIFICATIONS_DATABASE_URL = "postgresql+psycopg://fulfillflow_notifications:v13-isolated-notifications-test@127.0.0.1:18541/fulfillflow_notifications"
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
-$env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v12-tests-db-1'
-$env:TEST_V12_RABBITMQ_CONTAINER = 'fulfillflow-v12-tests-broker-1'
+$env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v13-tests-db-1'
+$env:TEST_V12_RABBITMQ_CONTAINER = 'fulfillflow-v13-tests-broker-1'
 $env:TEST_LEGACY_DATABASE_URL = "postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy"
 ```
 
 O teste estrutural histórico cria e remove seu próprio container Docker, sem
 Locust ou campanha. Após os gates, remova somente a infraestrutura dedicada:
-`docker compose -p fulfillflow-v12-tests -f compose.test.yaml down --volumes`.
+`docker compose -p fulfillflow-v13-tests -f compose.test.yaml down --volumes`.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
@@ -378,37 +427,47 @@ uv run lint-imports
 docker compose config --quiet
 ```
 
-A v1.2 usa `1202_core` e `1203_tracking`, com metadados e graphs separados.
-Ambos recebem outbox/inbox técnica/quarentena; Tracking adiciona resultado e
-conclusão opcionais; ambos registram auditoria de rearme e última tentativa. As bases v1.1 `1101_core`/`1101_tracking` são preservadas.
-Os testes verificam upgrade/check/downgrade/upgrade de ambos, ausência de FKs
-entre proprietários e rejeição de conexão com a credencial do outro serviço.
+A v1.3 usa `1301_core`, `1203_tracking` e `1301_notifications`, com metadados e
+graphs separados. Notifications tem inbox/quarentena/auditoria e terminais;
+não possui outbox. As migrations anteriores permanecem preservadas. Os testes
+verificam upgrade/check/downgrade/upgrade, FKs somente locais e isolamento das roles.
+
+O corte legado é offline, com admissão/escritores parados e transporte drenado.
+O ensaio em cópia descartável usa `python -m fulfillflow.core.notification_legacy
+--output <arquivo-novo> --expected-database <core>` e
+`python -m fulfillflow.notifications.cutover --help` para importação no dono novo.
+Não é suporte à migração online. A tabela antiga fica arquivada, sem acesso pelo
+runtime Core. Registros importados são LEGACY: preservam IDs, conteúdo e datas;
+mensagem posterior do mesmo efeito termina em quarentena
+`LEGACY_EVENT_SUPPRESSED` + inbox DONE, sem nova simulação ou envelope inventado.
+O roteiro operacional completo do corte fica no III.
 
 ## Documentação
 
-- [Demonstração funcional](docs/DEMO.md): preparação e jornada pela API/UI.
-- [DESIGN](DESIGN.md): alvo v1.3 ainda não implementado e contratos preservados.
-- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos e estado da preparação v1.3.
+- [Demonstração congelada v1.2](docs/DEMO.md): jornada e capturas históricas; atualização v1.3 no IV.
+- [DESIGN](DESIGN.md): contratos v1.3 e referências preservadas.
+- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos, validação e limites da implementação v1.3.
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
 - [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
 - [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.
 
-## Transporte v1.2 — incremento I
+## Transporte durável
 
-O runtime assíncrono usa transporte durável. Cada banco possui suas próprias
-`message_outbox`, `message_inbox` e `message_quarantine`. ACK confirma persistência
+Core/Tracking possuem `message_outbox`, `message_inbox` e `message_quarantine`;
+Notifications tem somente os mecanismos de recepção/recuperação. ACK confirma persistência
 técnica; não representa conclusão de negócio. Itens `BLOCKED` não retomam sozinhos;
-o rearme auditável está descrito na seção de operação local.
+o rearme atual Core/Tracking está descrito na operação local. A CLI Notifications
+e o filtro operacional do novo fluxo Core permanecem no incremento III.
 
 Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
 
 ```powershell
-docker compose -p fulfillflow-v12-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v13-tests -f compose.test.yaml up -d --wait
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
-uv run pytest tests/integration/test_message_transport.py -q
+uv run pytest tests/integration/test_message_transport.py tests/integration/test_notification_transport.py tests/integration/test_notifications_worker.py -q
 ```
 
-Configure também `TEST_DATABASE_URL` e `TEST_TRACKING_DATABASE_URL` conforme a
+Configure também os três `TEST_*DATABASE_URL` proprietários conforme a
 seção de testes. Use projeto e volumes novos; não reutilize recursos históricos.
 A imagem de teste é RabbitMQ 4.2.4 Alpine, fixada por digest no Compose; o cliente
 é `aio-pika==9.5.8`. Os testes verificam confirmação, retorno, commit/ACK incerto,

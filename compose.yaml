@@ -1,4 +1,4 @@
-name: fulfillflow-v12
+name: fulfillflow-v13
 
 x-service-environment: &service-environment
   APP_ENV: "${APP_ENV:-local}"
@@ -32,6 +32,9 @@ x-core-environment: &core-environment
   SERVICE_ROLE: core
   DATABASE_URL: "${CORE_DATABASE_URL:-postgresql+psycopg://fulfillflow_core:fulfillflow-v12-core-local-2026@db:5432/fulfillflow_core}"
   SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
+  NOTIFICATIONS_BASE_URL: "http://notifications:8000"
+  NOTIFICATIONS_API_SECRET: "${NOTIFICATIONS_API_SECRET:-276c731d858844a3a6c5235d4d4d18e84aa09935bd4a4f098a734ad1a5a93a12}"
+  NOTIFICATIONS_HTTP_TIMEOUT_SECONDS: "${NOTIFICATIONS_HTTP_TIMEOUT_SECONDS:-2}"
   OTEL_SERVICE_NAME: fulfillflow-core
 
 x-tracking-environment: &tracking-environment
@@ -43,18 +46,32 @@ x-tracking-environment: &tracking-environment
   OTEL_SERVICE_NAME: fulfillflow-tracking
 
 x-core: &core
-  image: fulfillflow-core:v12-local
+  image: fulfillflow-core:v13-local
   build:
     context: .
     target: runtime
   environment: *core-environment
 
 x-tracking: &tracking
-  image: fulfillflow-tracking:v12-local
+  image: fulfillflow-tracking:v13-local
   build:
     context: .
     target: runtime
   environment: *tracking-environment
+
+x-notifications-environment: &notifications-environment
+  <<: *service-environment
+  SERVICE_ROLE: notifications
+  DATABASE_URL: "${NOTIFICATIONS_DATABASE_URL:-postgresql+psycopg://fulfillflow_notifications:fulfillflow-v13-notifications-local-2026@db:5432/fulfillflow_notifications}"
+  INTERNAL_API_SECRET: "${NOTIFICATIONS_API_SECRET:-276c731d858844a3a6c5235d4d4d18e84aa09935bd4a4f098a734ad1a5a93a12}"
+  OTEL_SERVICE_NAME: fulfillflow-notifications
+
+x-notifications: &notifications
+  image: fulfillflow-notifications:v13-local
+  build:
+    context: .
+    target: runtime
+  environment: *notifications-environment
 
 services:
   db:
@@ -65,9 +82,11 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-v12-admin-local-2026}"
       CORE_DB_PASSWORD: "${CORE_DB_PASSWORD:-fulfillflow-v12-core-local-2026}"
       TRACKING_DB_PASSWORD: "${TRACKING_DB_PASSWORD:-fulfillflow-v12-tracking-local-2026}"
+      NOTIFICATIONS_DB_PASSWORD: "${NOTIFICATIONS_DB_PASSWORD:-fulfillflow-v13-notifications-local-2026}"
     volumes:
-      - v12_postgres_data:/var/lib/postgresql
+      - v13_postgres_data:/var/lib/postgresql
       - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
+      - ./infrastructure/init-notifications-db.sh:/docker-entrypoint-initdb.d/30-notifications.sh:ro
     cpus: 2.0
     mem_limit: 2560m
     healthcheck:
@@ -84,13 +103,13 @@ services:
       RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +A 1"
     image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
     volumes:
-      - v12_rabbitmq_data:/var/lib/rabbitmq
-      - ./infrastructure/rabbitmq-v12.conf:/etc/rabbitmq/rabbitmq.conf:ro
-      - ./infrastructure/rabbitmq-v12.json:/etc/rabbitmq/definitions.json:ro
+      - v13_rabbitmq_data:/var/lib/rabbitmq
+      - ./infrastructure/rabbitmq-v13.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infrastructure/rabbitmq-v13.json:/etc/rabbitmq/definitions.json:ro
     cpus: 0.5
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -109,6 +128,16 @@ services:
   migrate-tracking:
     <<: *tracking
     command: ["alembic", "-c", "alembic_tracking.ini", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  migrate-notifications:
+    <<: *notifications
+    command: ["alembic", "-c", "alembic_notifications.ini", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
@@ -141,13 +170,24 @@ services:
       migrate-tracking:
         condition: service_completed_successfully
 
+  notifications:
+    <<: *notifications
+    command: ["python", "-m", "fulfillflow.notifications"]
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    depends_on:
+      migrate-notifications:
+        condition: service_completed_successfully
+
   core-worker:
     <<: *core
     command: ["python", "-m", "fulfillflow.core.worker"]
     environment:
       <<: *core-environment
       DB_POOL_SIZE: "3"
-      AMQP_URL: "${CORE_AMQP_URL:-amqp://core:fulfillflow-v12-core-amqp-local-2026@broker:5672/fulfillflow-v12}"
+      AMQP_URL: "${CORE_AMQP_URL:-amqp://core:fulfillflow-v12-core-amqp-local-2026@broker:5672/fulfillflow-v13}"
     init: true
     cpus: 0.5
     mem_limit: 384m
@@ -170,7 +210,7 @@ services:
     environment:
       <<: *tracking-environment
       DB_POOL_SIZE: "3"
-      AMQP_URL: "${TRACKING_AMQP_URL:-amqp://tracking:fulfillflow-v12-tracking-amqp-local-2026@broker:5672/fulfillflow-v12}"
+      AMQP_URL: "${TRACKING_AMQP_URL:-amqp://tracking:fulfillflow-v12-tracking-amqp-local-2026@broker:5672/fulfillflow-v13}"
     init: true
     cpus: 0.5
     mem_limit: 384m
@@ -187,6 +227,29 @@ services:
       broker:
         condition: service_healthy
 
+  notifications-worker:
+    <<: *notifications
+    command: ["python", "-m", "fulfillflow.notifications.worker"]
+    environment:
+      <<: *notifications-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${NOTIFICATIONS_AMQP_URL:-amqp://notifications:fulfillflow-v13-notifications-local-2026@broker:5672/fulfillflow-v13}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "notifications"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate-notifications:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
 volumes:
-  v12_rabbitmq_data:
-  v12_postgres_data:
+  v13_rabbitmq_data:
+  v13_postgres_data:

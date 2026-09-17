@@ -66,7 +66,9 @@ async def test_fresh_worker_recovers_acknowledged_work_with_empty_queue(
 
                 async with postgres_database.session() as session, session.begin():
                     assert await process_one(session, core_tables.inbox, fixed_clock.now(), apply)
-                await publish_batch(postgres_database, core_tables, channel, fixed_clock)
+                await publish_batch(
+                    postgres_database, core_tables, channel, fixed_clock, flow="tracking.result.v1"
+                )
                 result_queue = await channel.get_queue("tracking.result.v1.queue")
                 await receive(
                     postgres_tracking_database,
@@ -114,7 +116,16 @@ async def test_fresh_worker_recovers_acknowledged_work_with_empty_queue(
                 pytest.fail(f"Durable work was not recovered: {detail['progress']}")
             assert detail["result"]["current_status"] == "DELIVERED"
             async with postgres_database.session() as session:
-                assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+                assert await session.scalar(text("SELECT count(*) FROM notifications")) == 0
+                assert (
+                    await session.scalar(
+                        text(
+                            "SELECT count(*) FROM message_outbox "
+                            "WHERE type = 'shipment.status_changed.v1'"
+                        )
+                    )
+                    == 1
+                )
                 assert (
                     await session.scalar(text("SELECT count(*) FROM tracking_event_receipts")) == 1
                 )

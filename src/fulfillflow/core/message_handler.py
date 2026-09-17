@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fulfillflow.contracts.messages import (
     CommandEnvelope,
     MessageEnvelope,
+    NotificationEnvelope,
     ResultEnvelope,
     ResultPayload,
     canonical_bytes,
@@ -22,7 +23,20 @@ from fulfillflow.shared import Clock, new_uuid
 async def apply_command(session: AsyncSession, message: MessageEnvelope, clock: Clock) -> None:
     if not isinstance(message, CommandEnvelope):
         raise BlockedItemError("WRONG_MESSAGE_FLOW")
-    result = await CoreEventService(session, clock).apply_in_transaction(message.payload)
+    application = await CoreEventService(session, clock).apply_in_transaction(message.payload)
+    result = application.result
+    if application.notification is not None:
+        fact = NotificationEnvelope(
+            message_id=new_uuid(),
+            event_id=message.event_id,
+            correlation_id=message.correlation_id,
+            causation_id=message.message_id,
+            request_id=message.request_id,
+            created_at=result.decided_at,
+            payload=application.notification,
+            payload_sha256=hashlib.sha256(canonical_bytes(application.notification)).hexdigest(),
+        )
+        await put_message(session, tables.outbox, fact, clock.now())
     payload = ResultPayload(command_sha256=message.payload.content_hash(), result=result)
     existing_body = await session.scalar(
         select(tables.outbox.c.body).where(

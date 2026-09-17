@@ -41,7 +41,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## Architecture boundaries
 
-- Core, Tracking and Notifications have separate databases and roles in one PostgreSQL instance in the v1.3 target. Each API and worker accesses only its owning service's database; Notifications remains local until the coordinated extraction increment.
+- Core, Tracking and Notifications have separate databases and roles in one PostgreSQL instance. Each API and worker accesses only its owning service's database. Retained Core Notification metadata is an offline archive, never a runtime writer, reader or fallback.
 - Business modules are `orders`, `shipments`, `carriers`, `tracking` and `notifications`.
 - `shared` contains only stable technical primitives such as clock, IDs and pagination. It contains no business rules and depends on no business module or infrastructure framework.
 - Modules within a service communicate through Python public interfaces. Cross-service commands/results/events use the AMQP contracts in DESIGN; forwarding and queries use the documented authenticated HTTP contracts. Do not import another service's business implementation or persistence.

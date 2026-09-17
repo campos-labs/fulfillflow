@@ -13,8 +13,8 @@ from starlette.datastructures import FormData, UploadFile
 from starlette.requests import ClientDisconnect
 from starlette.types import Message
 
+from fulfillflow.contracts.notifications import NotificationStatus
 from fulfillflow.contracts.values import InboxStatus
-from fulfillflow.notifications.public import NotificationStatus
 from fulfillflow.orders.public import OrderStatus
 from fulfillflow.orders.schemas import OrderCreate
 from fulfillflow.shipments.public import ShipmentStatus

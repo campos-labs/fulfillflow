@@ -84,9 +84,17 @@ async def test_accepted_pending_duplicate_completion_and_bytes_conflict(
         )
         assert conflict.status_code == 409
         async with postgres_database.session() as session:
-            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
+                )
+                == 1
+            )
             assert await session.scalar(text("SELECT count(*) FROM tracking_event_receipts")) == 1
-            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == 1
+            assert await session.scalar(text("SELECT count(*) FROM message_outbox")) == 2
         async with postgres_tracking_database.session() as session:
             assert await session.scalar(text("SELECT count(*) FROM tracking_events")) == 1
 
@@ -174,7 +182,15 @@ async def test_tracking_finalization_failure_resumes_locally_without_repeating_c
         await drain(postgres_database, postgres_tracking_database, fixed_clock)
         async with postgres_database.session() as session:
             receipt = (await session.execute(text("SELECT * FROM tracking_event_receipts"))).one()
-            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
+                )
+                == 1
+            )
         async with postgres_tracking_database.session() as session:
             assert await session.scalar(text("SELECT count(*) FROM tracking_events")) == 0
             assert await session.scalar(text("SELECT state FROM message_inbox")) == "RETRY_WAIT"
@@ -190,7 +206,15 @@ async def test_tracking_finalization_failure_resumes_locally_without_repeating_c
             assert (
                 await session.execute(text("SELECT * FROM tracking_event_receipts"))
             ).one() == receipt
-            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
+                )
+                == 1
+            )
 
 
 @pytest.mark.parametrize(
@@ -242,7 +266,11 @@ async def test_result_identity_mismatch_blocks_without_business_rejection(
         async with postgres_database.session() as session, session.begin():
             await apply_command(session, command, fixed_clock)
         async with postgres_database.session() as session:
-            valid = decode_message(await session.scalar(text("SELECT body FROM message_outbox")))
+            valid = decode_message(
+                await session.scalar(
+                    text("SELECT body FROM message_outbox WHERE type='tracking.result.v1'")
+                )
+            )
         data = valid.model_dump(mode="json")
         if field == "command_sha256":
             data["payload"][field] = "0" * 64

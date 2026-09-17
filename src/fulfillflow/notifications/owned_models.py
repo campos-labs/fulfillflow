@@ -1,4 +1,4 @@
-"""Service-owned records staged alongside the Core legacy writer until cutover."""
+"""Service-owned simulated delivery records, including explicitly imported legacy history."""
 
 from datetime import datetime
 from uuid import UUID

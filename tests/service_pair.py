@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
 from fulfillflow.main import create_app as create_core
+from fulfillflow.notifications.app import create_app as create_notifications
 from fulfillflow.shared import Clock
 from fulfillflow.tracking.app import create_app as create_tracking
 
@@ -37,11 +38,27 @@ def create_app(
     )
     core.state.service_transport = ASGITransport(app=tracking, raise_app_exceptions=False)
     core.state.tracking_app = tracking
+    notifications_settings = settings.model_copy(
+        update={
+            "database_url": SecretStr(os.environ["TEST_NOTIFICATIONS_DATABASE_URL"]),
+            "service_role": "notifications",
+            "internal_api_secret": settings.notifications_api_secret,
+        }
+    )
+    notifications = create_notifications(notifications_settings, clock=clock)
+    core.state.notifications_transport = ASGITransport(
+        app=notifications, raise_app_exceptions=False
+    )
+    core.state.notifications_app = notifications
     original_lifespan = core.router.lifespan_context
 
     @asynccontextmanager
     async def pair_lifespan(application: FastAPI) -> AsyncIterator[None]:
-        async with original_lifespan(application), tracking.router.lifespan_context(tracking):
+        async with (
+            original_lifespan(application),
+            tracking.router.lifespan_context(tracking),
+            notifications.router.lifespan_context(notifications),
+        ):
             yield
 
     core.router.lifespan_context = pair_lifespan

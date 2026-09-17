@@ -13,6 +13,12 @@ from fulfillflow.api.dependencies import get_clock, get_session, get_settings
 from fulfillflow.api.queries import OrderDetailQuery
 from fulfillflow.api.schemas import OrderDetailRead
 from fulfillflow.config import Settings
+from fulfillflow.contracts.notifications import (
+    NotificationList,
+    NotificationRead,
+    NotificationStatus,
+    NotificationStatusView,
+)
 from fulfillflow.contracts.tracking import (
     CarrierEventList,
     CarrierEventRead,
@@ -21,13 +27,9 @@ from fulfillflow.contracts.tracking import (
     WebhookResponse,
 )
 from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.notification_queries import NotificationStatusQuery
+from fulfillflow.core.notifications_client import get_notifications
 from fulfillflow.core.tracking_client import forward_tracking
-from fulfillflow.notifications.public import NotificationService, NotificationStatus
-from fulfillflow.notifications.schemas import (
-    NotificationFilters,
-    NotificationList,
-    NotificationRead,
-)
 from fulfillflow.orders.public import (
     CreateOrderCommand,
     OrderService,
@@ -275,7 +277,7 @@ async def get_carrier_event(inbox_event_id: UUID, request: Request) -> Response:
     tags=["notifications"],
 )
 async def list_notifications(
-    session: SessionDependency,
+    request: Request,
     notification_status: Annotated[NotificationStatus | None, Query(alias="status")] = None,
     shipment_id: UUID | None = None,
     created_from: AwareDatetime | None = None,
@@ -284,21 +286,13 @@ async def list_notifications(
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> NotificationList:
     """List simulated Notification records through their operational projection."""
-    result = await NotificationService(session).list(
-        NotificationFilters(
-            status=notification_status,
-            shipment_id=shipment_id,
-            created_from=_as_datetime(created_from),
-            created_to=_as_datetime(created_to),
-        ),
+    return await get_notifications(request).list(
+        status=notification_status,
+        shipment_id=shipment_id,
+        created_from=_as_datetime(created_from),
+        created_to=_as_datetime(created_to),
         page=page,
         page_size=page_size,
-    )
-    return NotificationList(
-        items=[NotificationRead.from_notification(item) for item in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total=result.total,
     )
 
 
@@ -309,11 +303,25 @@ async def list_notifications(
 )
 async def get_notification(
     notification_id: UUID,
-    session: SessionDependency,
+    request: Request,
 ) -> NotificationRead:
     """Return one simulated Notification without exposing causal payload internals."""
-    return NotificationRead.from_notification(
-        await NotificationService(session).get(notification_id)
+    return await get_notifications(request).get(notification_id)
+
+
+@router.get(
+    "/notification-status/{tracking_event_id}",
+    response_model=NotificationStatusView,
+    tags=["notifications"],
+)
+async def get_notification_status(
+    tracking_event_id: UUID,
+    request: Request,
+    session: SessionDependency,
+    clock: ClockDependency,
+) -> NotificationStatusView:
+    return await NotificationStatusQuery(session, clock, get_notifications(request)).get(
+        tracking_event_id
     )
 
 

@@ -6,7 +6,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-STAGES = ("publish", "receive", "process")
+STAGES = {
+    "core": ("publish", "publish_notifications", "receive", "process"),
+    "tracking": ("publish", "receive", "process"),
+    "notifications": ("receive", "process"),
+}
 
 
 def heartbeat_path(service: str) -> Path:
@@ -18,7 +22,7 @@ class Heartbeat:
         self.path = path
         self.service = service
         self.stages: dict[str, dict[str, Any]] = {
-            stage: {"state": "starting", "at": time.monotonic()} for stage in STAGES
+            stage: {"state": "starting", "at": time.monotonic()} for stage in STAGES[service]
         }
         self.stopping = False
 
@@ -55,7 +59,7 @@ def healthy(path: Path, service: str, *, now: float | None = None) -> bool:
             and all(
                 data["stages"][stage]["state"] == "ready"
                 and 0 <= current - data["stages"][stage]["at"] < 45
-                for stage in STAGES
+                for stage in STAGES[service]
             )
         )
     except (OSError, ValueError, KeyError, TypeError):
@@ -66,6 +70,6 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Local worker heartbeat healthcheck")
-    parser.add_argument("--service", required=True, choices=("core", "tracking"))
+    parser.add_argument("--service", required=True, choices=tuple(STAGES))
     arguments = parser.parse_args()
     raise SystemExit(0 if healthy(heartbeat_path(arguments.service), arguments.service) else 1)

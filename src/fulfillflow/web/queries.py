@@ -7,11 +7,11 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fulfillflow.contracts.problems import ServiceProblemError
 from fulfillflow.contracts.tracking import CarrierEventFilters, CarrierEventSummaryRead
 from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.notifications_client import NotificationsClient
 from fulfillflow.core.tracking_client import TrackingClient
-from fulfillflow.notifications.public import NotificationService, NotificationStatus
-from fulfillflow.notifications.schemas import NotificationFilters
 from fulfillflow.orders.public import OrderService, OrdersPublic, OrderStatus
 from fulfillflow.orders.schemas import OrderFilters, OrderRead
 from fulfillflow.shared import Clock
@@ -59,7 +59,7 @@ class DashboardView:
     order_counts: dict[str, int]
     shipment_counts: dict[str, int]
     inbox_counts: dict[str, int]
-    notification_counts: dict[str, int]
+    notification_counts: dict[str, int] | None
     recent_events: list[CarrierEventSummaryRead]
 
 
@@ -78,11 +78,11 @@ async def get_dashboard(
     session: AsyncSession,
     clock: Clock,
     tracking: TrackingClient,
+    notifications: NotificationsClient,
 ) -> DashboardView:
     """Build the approved dashboard without direct model or repository access."""
     orders = OrderService(session, clock)
     shipments = ShipmentService(session, clock)
-    notifications = NotificationService(session)
 
     order_counts: dict[str, int] = {}
     for order_status in OrderStatus:
@@ -111,14 +111,14 @@ async def get_dashboard(
         )
         inbox_counts[inbox_status.value] = inbox_page.total
 
-    notification_counts: dict[str, int] = {}
-    for notification_status in NotificationStatus:
-        notification_page = await notifications.list(
-            NotificationFilters(status=notification_status),
-            page=1,
-            page_size=_COUNT_PAGE_SIZE,
-        )
-        notification_counts[notification_status.value] = notification_page.total
+    notification_counts: dict[str, int] | None = None
+    try:
+        counts = await notifications.counts()
+    except ServiceProblemError:
+        # A failed remote observation does not turn the owner's count into zero.
+        pass
+    else:
+        notification_counts = {"SIMULATED": counts.simulated, "FAILED": counts.failed}
 
     recent = await tracking.list_inbox(
         CarrierEventFilters(),

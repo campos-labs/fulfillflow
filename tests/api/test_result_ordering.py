@@ -93,7 +93,8 @@ async def test_reverse_results_and_stale_command_preserve_business_decisions(
                     decode_message(
                         await session.scalar(
                             select(core_tables.outbox.c.body).where(
-                                core_tables.outbox.c.correlation_id == identity
+                                core_tables.outbox.c.correlation_id == identity,
+                                core_tables.outbox.c.type == "tracking.result.v1",
                             )
                         )
                     )
@@ -122,5 +123,13 @@ async def test_reverse_results_and_stale_command_preserve_business_decisions(
             assert await session.scalar(text("SELECT count(*) FROM tracking_events")) == 2
         async with postgres_database.session() as session:
             assert await session.scalar(text("SELECT status FROM shipments")) == "DELIVERED"
-            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
+                )
+                == 1
+            )
             assert await session.scalar(text("SELECT status FROM orders")) == "FULFILLED"

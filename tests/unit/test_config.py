@@ -83,6 +83,11 @@ def test_internal_authentication_cannot_be_disabled_with_an_empty_token(settings
         Settings.model_validate(settings.model_dump() | {"internal_api_secret": ""})
 
 
+def test_core_requires_the_independent_notifications_secret(settings: Settings) -> None:
+    with pytest.raises(ValidationError, match="NOTIFICATIONS_API_SECRET must not be empty"):
+        Settings.model_validate(settings.model_dump() | {"notifications_api_secret": ""})
+
+
 def test_required_settings_cannot_be_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     for variable in (
         "DATABASE_URL",

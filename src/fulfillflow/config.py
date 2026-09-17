@@ -130,6 +130,9 @@ class Settings(DatabaseSettings):
             secrets = {"INTERNAL_API_SECRET": self.internal_api_secret.get_secret_value()}
             if self.service_role == "core":
                 secrets["SESSION_SECRET"] = self.session_secret.get_secret_value()
+                secrets["NOTIFICATIONS_API_SECRET"] = (
+                    self.notifications_api_secret.get_secret_value()
+                )
             elif self.service_role == "tracking":
                 secrets["CARRIER_ALPHA_WEBHOOK_SECRET"] = alpha_secret
                 secrets["CARRIER_BETA_WEBHOOK_SECRET"] = beta_secret
@@ -140,6 +143,8 @@ class Settings(DatabaseSettings):
 
         if not self.internal_api_secret.get_secret_value():
             raise ValueError("INTERNAL_API_SECRET must not be empty")
+        if self.service_role == "core" and not self.notifications_api_secret.get_secret_value():
+            raise ValueError("NOTIFICATIONS_API_SECRET must not be empty for Core")
 
         if self.otel_enabled and self.otel_exporter_otlp_endpoint is None:
             raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED=true")

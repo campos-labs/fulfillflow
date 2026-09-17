@@ -3,7 +3,9 @@
 ## 1. Estado, autoridade e referência
 
 Alvo: extrair Notifications como serviço assíncrono, com persistência própria e
-entrega simulada, preservando Tracking assíncrono. **Este alvo não está implementado.**
+entrega simulada, preservando Tracking assíncrono. Contratos/persistência e fluxo
+integrado correspondem aos incrementos I/II; recuperação operacional completa e
+aceite funcional final permanecem nos incrementos III/IV ainda não autorizados.
 O desenho foi aprovado, com implementação autorizada dos incrementos I e II,
 sequencialmente, e parada antes do III. Commits por assunto e push somente na
 branch v1.3 estão autorizados, com conferência da CI do SHA final.

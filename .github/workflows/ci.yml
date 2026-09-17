@@ -21,6 +21,7 @@ jobs:
       TEST_V11_POSTGRES_CONTAINER: fulfillflow-ci-tests-db-1
       TEST_V12_RABBITMQ_CONTAINER: fulfillflow-ci-tests-broker-1
       INTERNAL_API_SECRET: 9d8e5b6f749941feaf4c88390a3a94b2d80ab13c0a04496babd54cc878f611eb
+      NOTIFICATIONS_API_SECRET: 93eedccf87264c4dadf695a68cd2719579b7aebcd2b144aa98e873ac27c94c7c6
       SESSION_SECRET: 10446c73ec0243bcbb502e9d7e1739adf6d486aed57b44c1a2a1302478df599e
       CARRIER_ALPHA_WEBHOOK_SECRET: 18374b93133e4996980ef121a823921618481057613d4d119732569639ec7fc8
       CARRIER_BETA_WEBHOOK_SECRET: 1e30d7e5116e4ae39f61d6bd52896149bcabe2b6e21c4cd2a5105366ce4c2795
@@ -90,6 +91,10 @@ jobs:
               ("test_notification_permissions", 4),
               ("test_notifications_owned", 10),
               ("test_notification_cutover", 2),
+              ("test_notifications_worker", 3),
+              ("test_notification_core_flow", 4),
+              ("test_notifications_http", 10),
+              ("test_external_simulator_journey", 2),
               ("test_message_operations", 20),
               ("test_result_ordering", 1),
               ("test_worker_dependencies", 8),
@@ -132,7 +137,7 @@ jobs:
         run: docker compose -f compose.benchmark.yaml config --quiet
 
       - name: Build runtime image
-        run: docker compose build core tracking
+        run: docker compose build core tracking notifications
 
       - name: Build and smoke loadgen image
         run: |
@@ -158,8 +163,11 @@ jobs:
           docker compose exec -T core sh -c '[ "$(id -u)" -ne 0 ]'
 
           docker compose exec -T tracking sh -c '[ "$(id -u)" -ne 0 ]'
-          uv run python scripts/prepare_demo_v11.py
-          uv run python scripts/prepare_demo_v11.py
+          docker compose exec -T notifications sh -c '[ "$(id -u)" -ne 0 ]'
+          docker compose exec -T notifications python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready').close()"
+          docker compose exec -T notifications-worker python -m fulfillflow.messaging.health --service notifications
+          uv run python scripts/prepare_demo_v13.py
+          uv run python scripts/prepare_demo_v13.py
 
       - name: Show Compose logs on failure
         if: failure()

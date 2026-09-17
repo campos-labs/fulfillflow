@@ -499,7 +499,11 @@ async def test_two_concurrent_results_finalize_one_inbox_without_repeating_core(
         async with postgres_database.session() as session, session.begin():
             await apply_command(session, command, fixed_clock)
         async with postgres_database.session() as session:
-            result = decode_message(await session.scalar(text("SELECT body FROM message_outbox")))
+            result = decode_message(
+                await session.scalar(
+                    text("SELECT body FROM message_outbox WHERE type='tracking.result.v1'")
+                )
+            )
         probe = ContentionProbe()
         _hold_first_inbox_lock(monkeypatch, probe)
 
@@ -513,7 +517,15 @@ async def test_two_concurrent_results_finalize_one_inbox_without_repeating_core(
         async with postgres_tracking_database.session() as session:
             assert await session.scalar(text("SELECT count(*) FROM tracking_events")) == 1
         async with postgres_database.session() as session:
-            assert await session.scalar(text("SELECT count(*) FROM notifications")) == 1
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
+                )
+                == 1
+            )
             assert await session.scalar(text("SELECT count(*) FROM tracking_event_receipts")) == 1
 
 
@@ -613,6 +625,7 @@ async def test_two_concurrent_results_finalize_one_inbox_without_repeating_core(
 async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_notifications_database: Database,
     postgres_tracking_database: Database,
     fixed_clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
@@ -726,7 +739,7 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                         {"first": first_event_id, "second": second_event_id},
                     )
                 ).all()
-            async with postgres_database.session() as session:
+            async with postgres_notifications_database.session() as session:
                 notification_count = await session.scalar(
                     text("SELECT count(*) FROM notifications WHERE shipment_id = :shipment_id"),
                     {"shipment_id": shipment_id},
@@ -1323,9 +1336,16 @@ async def _post_apply_and_observe(core, tracking, client, settings, fixed_clock,
     async with core.session() as session:
         result = decode_message(
             await session.scalar(
-                text("SELECT body FROM message_outbox WHERE event_id=:id"), {"id": command.event_id}
+                text(
+                    "SELECT body FROM message_outbox "
+                    "WHERE type='tracking.result.v1' AND event_id=:id"
+                ),
+                {"id": command.event_id},
             )
         )
     async with tracking.session() as session, session.begin():
         await apply_result(session, result, fixed_clock)
+    from tests.async_flow import drain_notifications
+
+    await drain_notifications(core, fixed_clock)
     return await client.get(accepted.headers["location"])

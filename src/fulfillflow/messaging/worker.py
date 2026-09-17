@@ -6,6 +6,7 @@ import signal
 import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from fulfillflow.db.migrations import SchemaNotCurrentError, schema_is_current
 from fulfillflow.messaging.amqp import DEPENDENCY_ERRORS, declare_flow, publish_batch, receive
 from fulfillflow.messaging.health import Heartbeat, heartbeat_path
 from fulfillflow.messaging.store import process_one
-from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.tables import InboxTables, MessageTables
 from fulfillflow.messaging.telemetry import configure, emit
 from fulfillflow.shared import Clock, SystemClock
 
@@ -79,15 +80,32 @@ async def supervise(
 
 async def serve(
     settings: Settings,
-    tables: MessageTables,
+    tables: MessageTables | InboxTables,
     application: Application,
     *,
     stop: asyncio.Event | None = None,
 ) -> None:
     if settings.amqp_url is None:
         raise ValueError("AMQP_URL is required for workers")
-    configure()
     service = settings.service_role
+    if tables.owner != service:
+        raise ValueError("Worker tables must belong to its configured service")
+    outbound: tuple[tuple[str, str], ...]
+    if service == "core":
+        inbound = "tracking.apply.v1"
+        outbound = (
+            ("publish", "tracking.result.v1"),
+            ("publish_notifications", "shipment.status_changed.v1"),
+        )
+    elif service == "tracking":
+        inbound = "tracking.result.v1"
+        outbound = (("publish", "tracking.apply.v1"),)
+    else:
+        inbound = "shipment.status_changed.v1"
+        outbound = ()
+    if outbound and not isinstance(tables, MessageTables):
+        raise ValueError("Publishing workers require their own outbox")
+    configure()
     url = settings.amqp_url.get_secret_value()
     database = Database.from_settings(settings)
     clock = SystemClock()
@@ -108,8 +126,6 @@ async def serve(
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             previous[sig] = signal.signal(sig, lambda *_: loop.call_soon_threadsafe(shutdown.set))
-    outbound = "tracking.result.v1" if service == "core" else "tracking.apply.v1"
-    inbound = "tracking.apply.v1" if service == "core" else "tracking.result.v1"
 
     async def dependency(stage: str, delay: int) -> int:
         heartbeat.record(stage, "dependency_unavailable")
@@ -117,7 +133,7 @@ async def serve(
         await pause(shutdown, delay)
         return min(delay * 2, 30)
 
-    async def publishing() -> None:
+    async def publishing(stage: str, flow: str, publisher_tables: MessageTables) -> None:
         delay = 1
         while not shutdown.is_set():
             try:
@@ -126,18 +142,18 @@ async def serve(
                     channel = await connection.channel(
                         publisher_confirms=True, on_return_raises=True
                     )
-                    await channel.declare_exchange(
-                        outbound, aio_pika.ExchangeType.DIRECT, durable=True
-                    )
+                    await channel.declare_exchange(flow, aio_pika.ExchangeType.DIRECT, durable=True)
                     while not shutdown.is_set():
                         if channel.is_closed or connection.is_closed:
                             raise ConnectionError("BROKER_UNAVAILABLE")
-                        await publish_batch(database, tables, channel, clock)
-                        heartbeat.record("publish", "ready")
+                        await publish_batch(
+                            database, publisher_tables, channel, clock, flow=flow, stage=stage
+                        )
+                        heartbeat.record(stage, "ready")
                         delay = 1
                         await pause(shutdown, 0.5)
             except DEPENDENCY_ERRORS:
-                delay = await dependency("publish", delay)
+                delay = await dependency(stage, delay)
 
     async def receiving() -> None:
         delay = 1
@@ -215,8 +231,15 @@ async def serve(
 
     try:
         emit(service, "worker", "starting")
+        loops: dict[str, Callable[[], Coroutine[Any, Any, None]]] = {
+            "receive": receiving,
+            "process": initialize_and_process,
+        }
+        if isinstance(tables, MessageTables):
+            for stage, flow in outbound:
+                loops[stage] = partial(publishing, stage, flow, tables)
         await supervise(
-            {"publish": publishing, "receive": receiving, "process": initialize_and_process},
+            loops,
             shutdown,
             heartbeat,
             on_shutdown=start_watchdog,

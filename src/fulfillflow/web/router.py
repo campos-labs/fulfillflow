@@ -17,12 +17,9 @@ from fulfillflow.contracts.tracking import (
     CarrierEventFilters,
 )
 from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.notification_queries import NotificationStatusQuery
+from fulfillflow.core.notifications_client import get_notifications
 from fulfillflow.core.tracking_client import get_tracking
-from fulfillflow.notifications.public import NotificationService, NotificationStatus
-from fulfillflow.notifications.schemas import (
-    NotificationFilters,
-    NotificationRead,
-)
 from fulfillflow.orders.public import CreateOrderCommand, OrderService, OrderStatus
 from fulfillflow.orders.schemas import OrderFilters, OrderRead
 from fulfillflow.shared import Clock
@@ -106,7 +103,7 @@ async def dashboard(
     session: SessionDependency,
     clock: ClockDependency,
 ) -> Response:
-    view = await get_dashboard(session, clock, get_tracking(request))
+    view = await get_dashboard(session, clock, get_tracking(request), get_notifications(request))
     return render_page(
         request,
         "content/dashboard.html",
@@ -519,7 +516,6 @@ async def inbox_detail(
 @router.get("/notifications", name="web-notifications-list")
 async def list_notifications(
     request: Request,
-    session: SessionDependency,
 ) -> Response:
     try:
         raw = query_values(
@@ -529,13 +525,11 @@ async def list_notifications(
         query = parse_query(NotificationListQuery, raw)
     except (FormBoundaryError, ValidationError) as error:
         return _query_error(request, error)
-    result = await NotificationService(session).list(
-        NotificationFilters(
-            status=query.status,
-            shipment_id=query.shipment_id,
-            created_from=aware_datetime(query.created_from),
-            created_to=aware_datetime(query.created_to),
-        ),
+    result = await get_notifications(request).list(
+        status=query.status,
+        shipment_id=query.shipment_id,
+        created_from=aware_datetime(query.created_from),
+        created_to=aware_datetime(query.created_to),
         page=query.page,
         page_size=_PAGE_SIZE,
     )
@@ -545,8 +539,8 @@ async def list_notifications(
         title="Notifications",
         section="notifications",
         context={
-            "notifications": [NotificationRead.from_notification(item) for item in result.items],
-            "notification_statuses": tuple(NotificationStatus),
+            "notifications": result.items,
+            "notification_statuses": ("SIMULATED", "FAILED"),
             "filters": _filter_values(
                 request,
                 ("status", "shipment_id", "created_from", "created_to"),
@@ -560,17 +554,33 @@ async def list_notifications(
 async def notification_detail(
     request: Request,
     notification_id: UUID,
-    session: SessionDependency,
 ) -> Response:
-    notification = NotificationRead.from_notification(
-        await NotificationService(session).get(notification_id)
-    )
+    notification = await get_notifications(request).get(notification_id)
     return render_page(
         request,
         "content/notification_detail.html",
         title="Notification simulation",
         section="notifications",
         context={"notification": notification},
+    )
+
+
+@router.get("/notification-status/{tracking_event_id}", name="web-notification-status")
+async def notification_status(
+    request: Request,
+    tracking_event_id: UUID,
+    session: SessionDependency,
+    clock: ClockDependency,
+) -> Response:
+    progress = await NotificationStatusQuery(session, clock, get_notifications(request)).get(
+        tracking_event_id
+    )
+    return render_page(
+        request,
+        "content/notification_status.html",
+        title="Notification progress",
+        section="notifications",
+        context={"progress": progress},
     )
 
 

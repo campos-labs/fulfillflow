@@ -1,7 +1,7 @@
 [project]
 name = "fulfillflow"
-version = "1.2.0.dev0"
-description = "FulfillFlow Core and Tracking"
+version = "1.3.0.dev0"
+description = "FulfillFlow Core, Tracking and Notifications"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -165,11 +165,29 @@ name = "Notifications internals are imported only by Notifications"
 type = "protected"
 protected_modules = [
     "fulfillflow.notifications.domain",
-    "fulfillflow.notifications.models",
-    "fulfillflow.notifications.repository",
-    "fulfillflow.notifications.service",
+    "fulfillflow.notifications.owned_models",
+    "fulfillflow.notifications.owned_repository",
+    "fulfillflow.notifications.owned_service",
 ]
 allowed_importers = ["fulfillflow.notifications"]
+
+[[tool.importlinter.contracts]]
+name = "Core cannot import Notifications implementation or persistence"
+type = "forbidden"
+source_modules = [
+    "fulfillflow.main", "fulfillflow.core", "fulfillflow.api", "fulfillflow.web",
+    "fulfillflow.orders", "fulfillflow.shipments", "fulfillflow.carriers",
+]
+forbidden_modules = ["fulfillflow.notifications"]
+
+[[tool.importlinter.contracts]]
+name = "Notifications cannot import other service implementations"
+type = "forbidden"
+source_modules = ["fulfillflow.notifications"]
+forbidden_modules = [
+    "fulfillflow.main", "fulfillflow.core", "fulfillflow.api", "fulfillflow.web",
+    "fulfillflow.orders", "fulfillflow.shipments", "fulfillflow.carriers", "fulfillflow.tracking",
+]
 
 [[tool.importlinter.contracts]]
 name = "Core cannot import Tracking implementation or persistence"

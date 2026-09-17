@@ -1,6 +1,7 @@
 """Database-authoritative Core idempotency; no independent transaction boundary."""
 
 import hmac
+from uuid import UUID
 
 from pydantic import TypeAdapter
 from sqlalchemy import and_, or_, select, update
@@ -19,6 +20,11 @@ class ShipmentReceipts:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get(self, event_id: UUID) -> EventResult | None:
+        """Read the original decision within the caller-owned local transaction."""
+        record = await self._session.get(EventReceiptModel, event_id)
+        return _RESULT.validate_python(record.result) if record is not None else None
 
     async def claim(self, command: ApplyEventCommand) -> EventResult | None:
         """Wait on the unique index before reading a concurrent original result."""

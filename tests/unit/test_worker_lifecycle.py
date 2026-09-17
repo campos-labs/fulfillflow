@@ -11,21 +11,43 @@ from fulfillflow.messaging.telemetry import LOGGER, emit
 from fulfillflow.messaging.worker import pause, supervise
 
 
-def test_health_requires_fresh_ready_required_loops(tmp_path):
-    heartbeat = Heartbeat(tmp_path / "health.json", "tracking")
+@pytest.mark.parametrize(
+    "service,stages",
+    [
+        ("core", ("publish", "publish_notifications", "receive", "process")),
+        ("tracking", ("publish", "receive", "process")),
+        ("notifications", ("receive", "process")),
+    ],
+)
+def test_health_requires_fresh_ready_required_loops(tmp_path, service, stages):
+    heartbeat = Heartbeat(tmp_path / "health.json", service)
+    assert set(heartbeat.stages) == set(stages)
     heartbeat.write()
-    assert not healthy(heartbeat.path, "tracking")
-    for stage in ("publish", "receive", "process"):
+    assert not healthy(heartbeat.path, service)
+    for stage in stages:
         heartbeat.record(stage, "ready")
     heartbeat.write()
-    assert healthy(heartbeat.path, "tracking")
-    assert not healthy(heartbeat.path, "core")
-    assert not healthy(heartbeat.path, "tracking", now=time.monotonic() + 46)
+    assert healthy(heartbeat.path, service)
+    assert not healthy(heartbeat.path, "unknown-service")
+    assert not healthy(heartbeat.path, service, now=time.monotonic() + 46)
     heartbeat.record("receive", "dependency_unavailable")
     heartbeat.write()
-    assert not healthy(heartbeat.path, "tracking")
+    assert not healthy(heartbeat.path, service)
     heartbeat.path.write_text("invalid")
-    assert not healthy(heartbeat.path, "tracking")
+    assert not healthy(heartbeat.path, service)
+
+
+@pytest.mark.parametrize("state", ["starting", "dependency_unavailable"])
+def test_core_health_requires_both_publishers(tmp_path, state):
+    heartbeat = Heartbeat(tmp_path / "health.json", "core")
+    for stage in heartbeat.stages:
+        heartbeat.record(stage, "ready")
+    heartbeat.record("publish_notifications", state)
+    heartbeat.write()
+    assert not healthy(heartbeat.path, "core")
+    heartbeat.record("publish_notifications", "ready")
+    heartbeat.write()
+    assert healthy(heartbeat.path, "core")
 
 
 @pytest.mark.parametrize("failure", [True, False])
@@ -116,7 +138,7 @@ async def test_shutdown_allows_current_operation_to_commit(tmp_path):
 
 def test_active_heartbeat_cannot_hide_stale_loop(tmp_path):
     heartbeat = Heartbeat(tmp_path / "health.json", "core")
-    for stage in ("publish", "receive", "process"):
+    for stage in heartbeat.stages:
         heartbeat.record(stage, "ready")
     heartbeat.stages["process"]["at"] -= 46
     heartbeat.write()

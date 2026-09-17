@@ -2,7 +2,7 @@
 
 ## 1. Objetivo, base e autorização
 
-Preparar a extração assíncrona de Notifications com banco próprio, consulta HTTP
+Entregar a extração assíncrona de Notifications com banco próprio, consulta HTTP
 interna e entrega simulada. O [DESIGN](DESIGN.md) define contratos; este documento
 define sequência, critérios e estado. Prioridade: funcionamento e recuperação.
 
@@ -22,7 +22,7 @@ da CI do SHA final. III/IV, campanhas, publicação e merge permanecem não auto
 | Inspeção da referência, criação/consultas/idempotência e mecanismos v1.2 | Concluída sobre o SHA congelado |
 | Desenho e plano v1.3 | Aprovados; esclarecimentos incorporados |
 | I — Contratos e persistência | Concluído e revisado localmente; evidências abaixo |
-| II — Fluxo integrado | Em implementação |
+| II — Fluxo integrado | Concluído e revisado localmente; conferir CI do SHA enviado |
 | III — Recuperação e operação | Não iniciado |
 | IV — UI e aceite funcional | Não iniciado |
 | Comparação extensa / publicação | Suspensas; requerem decisão posterior |
@@ -140,6 +140,48 @@ Demonstrar resultado Tracking com worker Notifications parado e posterior
 simulação sem reenvio. Não manter asserts síncronos que confundam conclusão
 Tracking com simulação; substituí-los por verificação eventual delimitada.
 Testes de atomicidade Core agora exigem outbox do fato, não Notification local.
+
+### Verificação do II — 2026-09-17
+
+- Escritor local substituído pelas duas outboxes atômicas. Registro antigo permanece
+  como metadata de arquivo, sem leitor/escritor no runtime. Evento independente
+  somente para APPLIED, destinatário congelado e replay sem novo efeito.
+- Core tem dois publicadores com claims/canais/backoff separados; Notifications
+  consome e processa sem outbox. Três cenários reais verificaram publisher
+  Notifications aguardando/falhando enquanto Tracking publica, recepção e retomada
+  de inbox com fila vazia. Falha inesperada de loop obrigatório continua fatal.
+- API interna Notifications e cliente autenticado Core ativos; listagem/detalhe,
+  contagens, progresso por efeito e UI mínima usam HTTP. Casos de indisponibilidade,
+  pool SQL liberado, BLOCKED, FAILED, LEGACY e outbox ausente foram verificados.
+- Gates focais: 56 testes de Core/Tracking/persistência, 19 de HTTP/UI/E2E e
+  29 de workers/configuração aprovados. E2E usa seis processos reais e os dois
+  adapters; cada jornada termina com quatro simulações únicas. O cenário de
+  Notifications parado conclui Shipment/Order e retoma a simulação sem novo webhook.
+- Ruff, formatação, Mypy (158 arquivos) e 12 contratos Import Linter aprovados.
+  Ensaio estrutural histórico: cinco casos aprovados em container próprio.
+- Build local de três imagens v1.3 e smoke do projeto exclusivo
+  `fulfillflow-v13-ii-runtime` aprovados: APIs/workers saudáveis, processos não-root,
+  preparação HTTP repetida sem duplicar registros e três heads Alembic sem drift.
+  Recursos descartáveis do smoke foram removidos; imagens não foram publicadas.
+- `uv.lock` alterado somente na versão do próprio pacote para `1.3.0.dev0`, por
+  `uv lock`; nenhuma dependência externa ou digest atualizado. SHA-256 do arquivo:
+  `cb0ffc810f44df83bb644d406895478030b9a572301d10084880c1220d8431fc`.
+- Suíte ampla com cobertura: 1176 aprovados, zero skips/erros de execução e 88,54%
+  de cobertura. A única falha foi a expectativa antiga `v1.2.0.dev0` no teste de
+  leitura da versão; corrigida para `v1.3.0.dev0` e aprovada em execução focal.
+  A rodada já havia carregado o teste anterior; não se repetiram os 1176 aprovados.
+  XML conferido: todos os cenários críticos passaram sem skips. Junto dos cinco
+  casos estruturais separados, os 1182 casos foram verificados.
+- Conferir a CI do SHA exato enviado nesta branch antes do relatório final. A CI
+  exige execução real dos cenários críticos, migrations e build/smoke. Resultado
+  local não é apresentado como aprovação remota; o link da execução fica no relatório.
+
+**Limite da entrega:** III permanece não iniciado. A CLI completa de operação
+Notifications, a matriz ampliada de interrupções/rearme/corte e os refinamentos
+de polling/DEMO do IV não estão aceitos. O ensaio de importação permanece offline
+e descartável. Não há exactly-once externo nem isolamento de falhas comuns dos
+recursos compartilhados. Recomenda-se iniciar III pela matriz de interrupções e
+rearme auditado, após autorização; nenhuma campanha ou publicação foi executada.
 
 ## 5. Incremento III — Recuperação e operação
 

@@ -1,10 +1,12 @@
 """Post-request assertions over two independent database observations."""
 
+import os
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 
+from fulfillflow.config import DatabaseSettings
 from fulfillflow.db import Database
 
 
@@ -52,7 +54,6 @@ async def event_state(
                         "s.shipped_at, s.delivered_at, "
                         "s.updated_at AS shipment_updated_at, o.status AS order_status, "
                         "o.updated_at AS order_updated_at, "
-                        "(SELECT count(*) FROM notifications) AS notification_count, "
                         "(SELECT count(*) FROM tracking_event_receipts) AS receipt_count "
                         "FROM shipments s JOIN orders o ON o.id=s.order_id WHERE s.id=:shipment_id"
                     ),
@@ -63,22 +64,32 @@ async def event_state(
             .one()
         )
         state.update(shipment)
-        identifier = state["tracking_event_id"] or (state["command"] or {}).get("event_id")
-        if identifier is not None:
-            notification = (
-                (
-                    await connection.execute(
-                        text(
-                            "SELECT status AS notification_status, error_detail, "
-                            "message, simulated_at "
-                            "FROM notifications WHERE tracking_event_id=:id"
-                        ),
-                        {"id": UUID(str(identifier))},
-                    )
-                )
-                .mappings()
-                .one_or_none()
+    notifications = Database.from_settings(
+        DatabaseSettings(_env_file=None, database_url=os.environ["TEST_NOTIFICATIONS_DATABASE_URL"])
+    )
+    try:
+        async with notifications.engine.connect() as connection:
+            state["notification_count"] = await connection.scalar(
+                text("SELECT count(*) FROM notifications")
             )
-            if notification is not None:
-                state.update(notification)
+            identifier = state["tracking_event_id"] or (state["command"] or {}).get("event_id")
+            if identifier is not None:
+                notification = (
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT status AS notification_status, error_detail, "
+                                "message, simulated_at "
+                                "FROM notifications WHERE tracking_event_id=:id"
+                            ),
+                            {"id": UUID(str(identifier))},
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if notification is not None:
+                    state.update(notification)
+    finally:
+        await notifications.dispose()
     return state

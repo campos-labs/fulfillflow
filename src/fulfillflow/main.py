@@ -31,6 +31,7 @@ def create_app(
     alembic_config_path: Path = DEFAULT_ALEMBIC_CONFIG_PATH,
     clock: Clock | None = None,
     service_transport: httpx.AsyncBaseTransport | None = None,
+    notifications_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the application while deferring environment validation to startup."""
 
@@ -52,15 +53,26 @@ def create_app(
                     "database schema does not match the current Alembic head"
                 )
             application.state.schema_ready = True
-            async with httpx.AsyncClient(
-                base_url=str(resolved_settings.tracking_base_url),
-                timeout=httpx.Timeout(resolved_settings.forwarding_timeout_seconds),
-                transport=cast(
-                    httpx.AsyncBaseTransport | None, application.state.service_transport
-                ),
-                trust_env=False,
-            ) as service_client:
+            async with (
+                httpx.AsyncClient(
+                    base_url=str(resolved_settings.tracking_base_url),
+                    timeout=httpx.Timeout(resolved_settings.forwarding_timeout_seconds),
+                    transport=cast(
+                        httpx.AsyncBaseTransport | None, application.state.service_transport
+                    ),
+                    trust_env=False,
+                ) as service_client,
+                httpx.AsyncClient(
+                    base_url=str(resolved_settings.notifications_base_url),
+                    timeout=httpx.Timeout(resolved_settings.notifications_http_timeout_seconds),
+                    transport=cast(
+                        httpx.AsyncBaseTransport | None, application.state.notifications_transport
+                    ),
+                    trust_env=False,
+                ) as notifications_client,
+            ):
                 application.state.service_client = service_client
+                application.state.notifications_client = notifications_client
                 yield
         finally:
             application.state.schema_ready = False
@@ -76,6 +88,7 @@ def create_app(
     application.state.schema_ready = False
     application.state.clock = clock or SystemClock()
     application.state.service_transport = service_transport
+    application.state.notifications_transport = notifications_transport
     install_internal_auth(application)
     install_problem_handling(application)
     application.include_router(health_router)

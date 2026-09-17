@@ -79,7 +79,9 @@ def postgres_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
 
 @pytest.fixture
 async def postgres_database(
-    postgres_settings: Settings, postgres_tracking_database: Database
+    postgres_settings: Settings,
+    postgres_tracking_database: Database,
+    postgres_notifications_database: Database,
 ) -> AsyncIterator[Database]:
     """Yield a real database with business tables emptied in FK-safe order."""
     database = Database.from_settings(postgres_settings)
@@ -90,7 +92,7 @@ async def postgres_database(
         connection = await aio_pika.connect(url, timeout=10)
         async with connection:
             channel = await connection.channel()
-            for flow in ("tracking.apply.v1", "tracking.result.v1"):
+            for flow in ("tracking.apply.v1", "tracking.result.v1", "shipment.status_changed.v1"):
                 await declare_flow(channel, flow)
                 queue = await channel.get_queue(f"{flow}.queue")
                 await queue.purge()

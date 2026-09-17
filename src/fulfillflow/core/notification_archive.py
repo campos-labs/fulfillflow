@@ -1,4 +1,4 @@
-"""SQLAlchemy model owned exclusively by the Notifications module."""
+"""Retained Core archive metadata; no active Notification writer or runtime query."""
 
 from datetime import datetime
 from uuid import UUID
@@ -9,8 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from fulfillflow.db.base import Base
 
 
-class NotificationModel(Base):
-    """Persistent simulation record; no external delivery entity exists in v1.0.0."""
+class CoreLegacyNotificationModel(Base):
+    """Original table retained for verified offline cutover and schema reconstruction."""
 
     __tablename__ = "notifications"
     __table_args__ = (
@@ -67,6 +67,6 @@ class NotificationModel(Base):
 
 Index(
     "ix_notifications_status_created_at",
-    NotificationModel.status,
-    NotificationModel.created_at.desc(),
+    CoreLegacyNotificationModel.status,
+    CoreLegacyNotificationModel.created_at.desc(),
 )

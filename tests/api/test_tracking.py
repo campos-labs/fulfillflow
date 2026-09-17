@@ -17,11 +17,11 @@ from tests.service_pair import create_app
 from tests.support import FixedClock
 
 from fulfillflow.config import Settings
+from fulfillflow.core import message_handler as core_message_handler
 from fulfillflow.db import Database
 from fulfillflow.messaging.store import RetryableItemError
 from fulfillflow.notifications import domain as notification_domain
-from fulfillflow.notifications.public import NotificationsPublic
-from fulfillflow.shipments.public import ShipmentReceipts, ShipmentsPublic
+from fulfillflow.shipments.public import ShipmentsPublic
 from fulfillflow.tracking.public import calculate_signature
 from fulfillflow.tracking.repository import TrackingRepository
 
@@ -219,7 +219,10 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
 
             async with postgres_database.session() as session:
                 notification_count = await session.scalar(
-                    text("SELECT count(*) FROM notifications")
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
                 )
             counts = (*counts, notification_count)
 
@@ -445,7 +448,10 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
                 tracking_count = await session.scalar(text("SELECT count(*) FROM tracking_events"))
             async with postgres_database.session() as session:
                 notification_count = await session.scalar(
-                    text("SELECT count(*) FROM notifications")
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
                 )
 
     assert [response.status_code for response in responses] == [422, 422, 422, 202, 422]
@@ -529,7 +535,10 @@ async def test_pre_authentication_failures_never_create_an_inbox(
                 inbox_count = await session.scalar(text("SELECT count(*) FROM carrier_event_inbox"))
             async with postgres_database.session() as session:
                 notification_count = await session.scalar(
-                    text("SELECT count(*) FROM notifications")
+                    text(
+                        "SELECT count(*) FROM message_outbox "
+                        "WHERE type='shipment.status_changed.v1'"
+                    )
                 )
 
     assert invalid_signature.status_code == 401
@@ -633,7 +642,7 @@ async def test_local_commits_follow_the_design_persistence_order(
     steps: list[str] = []
     original_add_event = TrackingRepository.add_tracking_event
     original_persist_shipment = ShipmentsPublic.persist_tracking_status_locked
-    original_record_notification = NotificationsPublic.record_applied_transition
+    original_put_message = core_message_handler.put_message
     original_complete_order = ShipmentsPublic.complete_order_if_eligible_locked
     original_save_inbox = TrackingRepository.save_inbox
 
@@ -650,23 +659,10 @@ async def test_local_commits_follow_the_design_persistence_order(
         steps.append("shipment-flushed")
         return recipient
 
-    async def record_notification(
-        service: NotificationsPublic,
-        *,
-        shipment_id: UUID,
-        tracking_event_id: UUID,
-        recipient: str,
-        resulting_status: str,
-    ) -> Any:
-        notification = await original_record_notification(
-            service,
-            shipment_id=shipment_id,
-            tracking_event_id=tracking_event_id,
-            recipient=recipient,
-            resulting_status=resulting_status,
-        )
-        steps.append("notification-flushed")
-        return notification
+    async def record_notification(session, table, message, now):
+        await original_put_message(session, table, message, now)
+        if message.type == "shipment.status_changed.v1":
+            steps.append("notification-outbox-flushed")
 
     async def complete_order(
         service: ShipmentsPublic,
@@ -706,8 +702,8 @@ async def test_local_commits_follow_the_design_persistence_order(
                 persist_shipment,
             )
             monkeypatch.setattr(
-                NotificationsPublic,
-                "record_applied_transition",
+                core_message_handler,
+                "put_message",
                 record_notification,
             )
             monkeypatch.setattr(
@@ -736,8 +732,8 @@ async def test_local_commits_follow_the_design_persistence_order(
     assert steps == [
         "inbox-flushed",  # Admission saves command before any publication.
         "shipment-flushed",
-        "notification-flushed",
         "order-evaluated-after-lock",
+        "notification-outbox-flushed",
         "tracking-event-flushed",
         "inbox-flushed",
     ]
@@ -763,19 +759,20 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
     app = create_app(postgres_settings, postgres_database, clock=fixed_clock)
     event_id = "resume-after-rollback"
     raw_body = _alpha_body(event_id, "RESUME-AFTER-ROLLBACK", status="DELIVERED")
-    original_finalize = ShipmentReceipts.finalize
+    original_put_message = core_message_handler.put_message
     fully_flushed = False
 
-    async def fail_after_core_flushes(
-        repository: ShipmentReceipts, command: Any, result: Any
-    ) -> None:
+    async def fail_after_core_flushes(session, table, message, now) -> None:
         nonlocal fully_flushed
-        await original_finalize(repository, command, result)
+        await original_put_message(session, table, message, now)
+        if message.type != "tracking.result.v1":
+            return
         flushed = (
-            await repository._session.execute(
+            await session.execute(
                 text(
                     "SELECT s.status AS shipment_status, o.status AS order_status, "
-                    "(SELECT count(*) FROM notifications) AS notification_count, "
+                    "(SELECT count(*) FROM message_outbox "
+                    "WHERE type='shipment.status_changed.v1') AS notification_count, "
                     "(SELECT count(*) FROM tracking_event_receipts) AS receipt_count "
                     "FROM shipments s JOIN orders o ON o.id=s.order_id"
                 )
@@ -800,7 +797,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             carrier_code="carrier-alpha",
             tracking_code="RESUME-AFTER-ROLLBACK",
         )
-        monkeypatch.setattr(ShipmentReceipts, "finalize", fail_after_core_flushes)
+        monkeypatch.setattr(core_message_handler, "put_message", fail_after_core_flushes)
         failed = await _post_event(
             client,
             postgres_settings,
@@ -817,7 +814,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             shipment_id=shipment_id,
             event_id=event_id,
         )
-        monkeypatch.setattr(ShipmentReceipts, "finalize", original_finalize)
+        monkeypatch.setattr(core_message_handler, "put_message", original_put_message)
         async with postgres_database.session() as session:
             assert await session.scalar(text("SELECT state FROM message_inbox")) == technical_state
         fixed_clock.current += timedelta(seconds=2)
@@ -998,6 +995,7 @@ async def test_same_tracking_code_is_isolated_by_carrier(
 async def test_timeline_records_no_change_stale_and_invalid_transition_without_regression(
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_notifications_database: Database,
     postgres_tracking_database: Database,
     fixed_clock: FixedClock,
 ) -> None:
@@ -1053,7 +1051,7 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
                 f"/api/v1/shipments/{shipment_id}/tracking",
                 params={"page": 2, "page_size": 3},
             )
-            async with postgres_database.session() as session:
+            async with postgres_notifications_database.session() as session:
                 notification_event_ids = set(
                     (
                         await session.execute(

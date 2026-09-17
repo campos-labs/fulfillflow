@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from typing import Any
 
+import pytest
 from httpx import AsyncClient
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.notifications.public import (
+from fulfillflow.notifications import message_handler
+from fulfillflow.notifications.domain import (
     ExpectedNotificationFailure,
-    NotificationsPublic,
+    Notification,
+    build_notification,
 )
 from tests.async_flow import drain
 from tests.support import FixedClock
@@ -29,6 +32,7 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     postgres_database: Database,
     postgres_tracking_database: Database,
     fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     malicious = '<img src=x onerror="alert(1)">'
     raw_only = '<script id="raw-only">secret raw extension</script>'
@@ -78,18 +82,27 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
         del resulting_status
         raise ExpectedNotificationFailure
 
-    async with postgres_database.session() as session:
-        async with session.begin():
-            failed = await NotificationsPublic(
-                session,
-                fixed_clock,
-                renderer=fail_renderer,
-            ).record_applied_transition(
-                shipment_id=UUID(shipment["id"]),
-                tracking_event_id=UUID(str(outcomes[1]["tracking_event_id"])),
-                recipient="ui-recipient@example.test",
-                resulting_status="POSTED",
-            )
+    def failed_simulation(**kwargs: Any) -> Notification:
+        return build_notification(**kwargs, renderer=fail_renderer)
+
+    failed_order = await create_order(ui_client, reference="UI-FAILED-SIMULATION")
+    await confirm_order(ui_client, failed_order["id"])
+    failed_shipment = await create_shipment(
+        ui_client, failed_order["id"], tracking_code="UIFAILED0001"
+    )
+    with monkeypatch.context() as injected:
+        injected.setattr(message_handler, "build_notification", failed_simulation)
+        failed_admission = await send_alpha_event(
+            ui_client,
+            postgres_settings,
+            event_id="ui-simulation-failed",
+            tracking_code=failed_shipment["tracking_code"],
+            external_status="CREATED",
+            occurred_at=base,
+        )
+        assert failed_admission.status_code == 202
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
+    failed = (await ui_client.get("/api/v1/notifications?status=FAILED")).json()["items"][0]
 
     order_page = await ui_client.get(f"/orders/{order['id']}")
     shipment_page = await ui_client.get(f"/shipments/{shipment['id']}")
@@ -100,7 +113,7 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     simulated_api = await ui_client.get("/api/v1/notifications?status=SIMULATED")
     simulated_id = simulated_api.json()["items"][0]["id"]
     simulated_detail = await ui_client.get(f"/notifications/{simulated_id}")
-    failed_detail = await ui_client.get(f"/notifications/{failed.id}")
+    failed_detail = await ui_client.get(f"/notifications/{failed['id']}")
 
     assert "FULFILLED" in order_page.text
     assert "DELIVERED" in shipment_page.text
