@@ -18,7 +18,7 @@ from fulfillflow.messaging.store import (
     quarantine,
     retry_publication,
 )
-from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.tables import InboxTables, MessageTables
 from fulfillflow.messaging.telemetry import emit
 from fulfillflow.shared import Clock
 
@@ -36,7 +36,7 @@ class PublishNotConfirmedError(Exception):
     """A negative/absent confirm is never publication success."""
 
 
-FLOWS = ("tracking.apply.v1", "tracking.result.v1")
+FLOWS = ("tracking.apply.v1", "tracking.result.v1", "shipment.status_changed.v1")
 
 
 async def declare_flow(channel: AbstractChannel, flow: str) -> None:
@@ -78,7 +78,7 @@ async def publish(channel: AbstractChannel, envelope: MessageEnvelope) -> None:
 
 async def receive(
     database: Database,
-    tables: MessageTables,
+    tables: MessageTables | InboxTables,
     incoming: AbstractIncomingMessage,
     flow: str,
     now: datetime,
@@ -124,10 +124,15 @@ async def receive(
 
 
 async def publish_batch(
-    database: Database, tables: MessageTables, channel: AbstractChannel, clock: Clock
+    database: Database,
+    tables: MessageTables,
+    channel: AbstractChannel,
+    clock: Clock,
+    *,
+    flow: str | None = None,
 ) -> int:
     async with database.session() as session, session.begin():
-        items = await claim_publications(session, tables.outbox, clock.now())
+        items = await claim_publications(session, tables.outbox, clock.now(), flow=flow)
     for item in items:
         started = time.monotonic()
         envelope = None

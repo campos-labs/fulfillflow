@@ -15,6 +15,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
       TEST_DATABASE_URL: postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core
       TEST_TRACKING_DATABASE_URL: postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking
+      TEST_NOTIFICATIONS_DATABASE_URL: postgresql+psycopg://fulfillflow_notifications:v13-isolated-notifications-test@127.0.0.1:18541/fulfillflow_notifications
       TEST_LEGACY_DATABASE_URL: postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy
       TEST_AMQP_URL: amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test
       TEST_V11_POSTGRES_CONTAINER: fulfillflow-ci-tests-db-1
@@ -52,7 +53,10 @@ jobs:
       - name: Start isolated owner and legacy databases
         run: docker compose -p fulfillflow-ci-tests -f compose.test.yaml up -d --wait --wait-timeout 120
 
-      - name: Verify both owner migration graphs
+      - name: Install isolated v1.3 broker permissions
+        run: docker exec --user rabbitmq fulfillflow-ci-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
+
+      - name: Verify all owner migration graphs
         run: |
           uv run alembic -c alembic_core.ini upgrade head
           uv run alembic -c alembic_core.ini current --check-heads
@@ -61,6 +65,10 @@ jobs:
           uv run alembic -c alembic_tracking.ini upgrade head
           uv run alembic -c alembic_tracking.ini current --check-heads
           uv run alembic -c alembic_tracking.ini check
+          export DATABASE_URL="$TEST_NOTIFICATIONS_DATABASE_URL"
+          uv run alembic -c alembic_notifications.ini upgrade head
+          uv run alembic -c alembic_notifications.ini current --check-heads
+          uv run alembic -c alembic_notifications.ini check
 
       - name: Structural DatabaseProbe Docker integration
         run: uv run pytest tests/integration/test_benchmark_schema_contract.py -q
@@ -78,6 +86,10 @@ jobs:
           cases = ET.parse("/tmp/functional.xml").findall(".//testcase")
           for module, minimum in (
               ("test_message_transport", 21),
+              ("test_notification_transport", 8),
+              ("test_notification_permissions", 4),
+              ("test_notifications_owned", 10),
+              ("test_notification_cutover", 2),
               ("test_message_operations", 20),
               ("test_result_ordering", 1),
               ("test_worker_dependencies", 8),

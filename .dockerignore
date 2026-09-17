@@ -3,6 +3,7 @@
 .venv
 .uv-cache
 .uv-python
+build/
 .env
 .coverage
 .pytest_cache

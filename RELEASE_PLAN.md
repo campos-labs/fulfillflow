@@ -21,8 +21,8 @@ da CI do SHA final. III/IV, campanhas, publicação e merge permanecem não auto
 | --- | --- |
 | Inspeção da referência, criação/consultas/idempotência e mecanismos v1.2 | Concluída sobre o SHA congelado |
 | Desenho e plano v1.3 | Aprovados; esclarecimentos incorporados |
-| I — Contratos e persistência | Em implementação |
-| II — Fluxo integrado | Não iniciado |
+| I — Contratos e persistência | Concluído e revisado localmente; evidências abaixo |
+| II — Fluxo integrado | Em implementação |
 | III — Recuperação e operação | Não iniciado |
 | IV — UI e aceite funcional | Não iniciado |
 | Comparação extensa / publicação | Suspensas; requerem decisão posterior |
@@ -82,6 +82,27 @@ introduzidos; rollback e unicidades verificados por sessões independentes;
 schemas novos isolados e fluxo v1.2 ainda funcional. Não declarar extração ativa
 por existirem tabelas ou fila. O legado não pode ser classificado apenas pela
 ausência de outbox, pois isso esconderia corrupção de recibo novo.
+
+### Verificação do I — 2026-09-17
+
+- Contratos/DTOs, inbox sem outbox fictícia, processor SQL e importação proprietária
+  implementados sem ativar novos efeitos no Core. Heads `1301_core` e
+  `1301_notifications`; Tracking permanece `1203_tracking`.
+- PostgreSQL/RabbitMQ reais no projeto exclusivo `fulfillflow-v13-ii-tests`:
+  transporte, filtro antes do lote, ACK/commit, duplicata/conflito, ACLs, roles,
+  migrations/drift, concorrência, rollback, LEGACY/quarentena e importação aprovados.
+  O ensaio rebaixou somente o banco descartável ao head `1202_core`, importou os
+  terminais sem simulação e voltou ao head novo, preservando os registros.
+- Regressão unitária/arquitetura/API/transporte: 918 aprovados. Dez testes Windows
+  inicialmente omitidos por caminho do PowerShell foram executados com o caminho
+  real configurado e aprovados. Testes novos de contratos/persistência passaram
+  em rodadas focais; nenhum cenário crítico foi aceito por skip.
+- Ruff, formatação, Mypy e dez contratos Import Linter aprovados. Revisão encontrou
+  e corrigiu a ordem de limpeza da fixture conforme a FK local inbox→Notification.
+  Dependências, referências históricas e runtime v1.2 preservados nesta etapa.
+- O primeiro boot do broker descartável revelou cookie criado como root; corrigido
+  somente nesse volume e prevenido no healthcheck novo, executado como rabbitmq.
+  Nada foi alterado nos volumes históricos. Gate I encerrado antes de ativar II.
 
 ## 4. Incremento II — Fluxo integrado
 

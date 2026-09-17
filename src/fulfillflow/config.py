@@ -72,11 +72,14 @@ class Settings(DatabaseSettings):
     log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
     log_format: Literal["json", "console"] = "json"
 
-    service_role: Literal["core", "tracking"] = "core"
+    service_role: Literal["core", "tracking", "notifications"] = "core"
     amqp_url: SecretStr | None = None
     internal_api_secret: SecretStr
     core_base_url: AnyHttpUrl = AnyHttpUrl("http://core:8000")
     tracking_base_url: AnyHttpUrl = AnyHttpUrl("http://tracking:8000")
+    notifications_base_url: AnyHttpUrl = AnyHttpUrl("http://notifications:8000")
+    notifications_api_secret: SecretStr = SecretStr("")
+    notifications_http_timeout_seconds: float = Field(default=2, gt=0, le=60)
     service_http_timeout_seconds: float = Field(default=10, gt=0, le=60)
     forwarding_timeout_seconds: float = Field(default=30, gt=0, le=120)
     session_secret: SecretStr = SecretStr("")
@@ -127,7 +130,7 @@ class Settings(DatabaseSettings):
             secrets = {"INTERNAL_API_SECRET": self.internal_api_secret.get_secret_value()}
             if self.service_role == "core":
                 secrets["SESSION_SECRET"] = self.session_secret.get_secret_value()
-            else:
+            elif self.service_role == "tracking":
                 secrets["CARRIER_ALPHA_WEBHOOK_SECRET"] = alpha_secret
                 secrets["CARRIER_BETA_WEBHOOK_SECRET"] = beta_secret
             trivial = [name for name, value in secrets.items() if _is_trivial_secret(value)]

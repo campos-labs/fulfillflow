@@ -1,4 +1,4 @@
-"""Versioned, bounded messages for the two Tracking flows."""
+"""Versioned, bounded messages with explicit service-owned flow contracts."""
 
 import hashlib
 import json
@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     TypeAdapter,
     field_validator,
     model_validator,
@@ -81,7 +82,38 @@ class ResultEnvelope(Envelope):
         return self
 
 
-MessageEnvelope = Annotated[CommandEnvelope | ResultEnvelope, Field(discriminator="type")]
+class NotificationPayload(BaseModel):
+    """Immutable minimal fact; rendering and delivery belong to Notifications."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    shipment_id: UUID
+    resulting_status: Literal[
+        "POSTED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED", "EXCEPTION", "RETURNED"
+    ]
+    recipient: Annotated[str, StringConstraints(min_length=1, max_length=254)]
+
+    @field_validator("recipient")
+    @classmethod
+    def require_snapshot(cls, value: str) -> str:
+        if not value.strip() or value != value.strip():
+            raise ValueError("recipient must be nonempty and normalized")
+        return value
+
+
+class NotificationEnvelope(Envelope):
+    type: Literal["shipment.status_changed.v1"] = "shipment.status_changed.v1"
+    payload: NotificationPayload
+
+    @model_validator(mode="after")
+    def validate_payload_hash(self) -> Self:
+        if self.payload_sha256 != hashlib.sha256(canonical_bytes(self.payload)).hexdigest():
+            raise ValueError("payload hash mismatch")
+        return self
+
+
+MessageEnvelope = Annotated[
+    CommandEnvelope | ResultEnvelope | NotificationEnvelope, Field(discriminator="type")
+]
 _MESSAGE = TypeAdapter[MessageEnvelope](MessageEnvelope)
 
 

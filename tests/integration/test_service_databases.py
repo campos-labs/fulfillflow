@@ -16,7 +16,7 @@ from sqlalchemy.engine import make_url
         (
             "TEST_DATABASE_URL",
             "alembic_core.ini",
-            "1202_core",
+            "1301_core",
             {"orders", "shipments", "carriers", "notifications", "tracking_event_receipts"},
             "fulfillflow_tracking",
         ),
@@ -25,6 +25,13 @@ from sqlalchemy.engine import make_url
             "alembic_tracking.ini",
             "1203_tracking",
             {"carrier_event_inbox", "tracking_events"},
+            "fulfillflow_core",
+        ),
+        (
+            "TEST_NOTIFICATIONS_DATABASE_URL",
+            "alembic_notifications.ini",
+            "1301_notifications",
+            {"notifications"},
             "fulfillflow_core",
         ),
     ],
@@ -66,9 +73,11 @@ def test_owner_schema_roundtrip_and_credentials(
                     "SELECT tablename FROM pg_tables WHERE schemaname='public' "
                     "AND tablename <> 'alembic_version'"
                 )
-            } == tables | {"message_outbox", "message_inbox", "message_quarantine", "message_rearm"}
+            } == tables | {"message_inbox", "message_quarantine", "message_rearm"} | (
+                set() if variable == "TEST_NOTIFICATIONS_DATABASE_URL" else {"message_outbox"}
+            )
             assert all(
-                row[0] in tables
+                row[0] in tables | {"message_inbox"}
                 for row in connection.execute(
                     "SELECT confrelid::regclass::text FROM pg_constraint "
                     "WHERE contype='f' AND connamespace='public'::regnamespace"
@@ -81,6 +90,14 @@ def test_owner_schema_roundtrip_and_credentials(
             assert connection.execute(
                 "SELECT has_database_privilege(current_user, %s, 'CONNECT')", (foreign_database,)
             ).fetchone() == (False,)
+            for other in {
+                "fulfillflow_core",
+                "fulfillflow_tracking",
+                "fulfillflow_notifications",
+            } - {url.database}:
+                assert connection.execute(
+                    "SELECT has_database_privilege(current_user, %s, 'CONNECT')", (other,)
+                ).fetchone() == (False,)
         with pytest.raises(psycopg.OperationalError, match="permission denied for database"):
             psycopg.connect(
                 url.set(database=foreign_database).render_as_string(hide_password=False)

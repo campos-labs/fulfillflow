@@ -1,4 +1,4 @@
-name: fulfillflow-v12-tests
+name: fulfillflow-v13-tests
 
 services:
   db:
@@ -9,12 +9,14 @@ services:
       POSTGRES_PASSWORD: v11-isolated-admin-test
       CORE_DB_PASSWORD: v11-isolated-core-test
       TRACKING_DB_PASSWORD: v11-isolated-tracking-test
+      NOTIFICATIONS_DB_PASSWORD: v13-isolated-notifications-test
     ports:
       - "127.0.0.1:${TEST_POSTGRES_PORT:-18541}:5432"
     volumes:
       - isolated_test_data:/var/lib/postgresql
       - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
       - ./tests/postgres/legacy.sql:/docker-entrypoint-initdb.d/20-legacy.sql:ro
+      - ./infrastructure/init-notifications-db.sh:/docker-entrypoint-initdb.d/30-notifications.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --host=127.0.0.1 --username=postgres --dbname=postgres"]
       interval: 2s
@@ -23,6 +25,7 @@ services:
 
   broker:
     image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
+    hostname: v13-test-broker
     environment:
       RABBITMQ_DEFAULT_USER: v12_test
       RABBITMQ_DEFAULT_PASS: v12-isolated-broker-test
@@ -31,8 +34,9 @@ services:
       - "127.0.0.1:${TEST_AMQP_PORT:-18542}:5672"
     volumes:
       - isolated_broker_data:/var/lib/rabbitmq
+      - ./infrastructure/rabbitmq-v13.json:/etc/rabbitmq/v13-definitions.json:ro
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 2s
       timeout: 5s
       retries: 40

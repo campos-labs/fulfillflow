@@ -1,0 +1,134 @@
+{
+  "users": [
+    {
+      "name": "core",
+      "password_hash": "DBQaARkq1A27twNmIGwbtGYDwhN+k0Yda+Cz0ka7KFL1AZXF",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": []
+    },
+    {
+      "name": "tracking",
+      "password_hash": "DBQaAgYOCcjt2SgM/rge3SmARQNEgeTlvLdhAhzNuybItE+S",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": []
+    },
+    {
+      "name": "notifications",
+      "password_hash": "EwEAASwSYDFtmG1TJ537aZhkqR9SkbskLI/uIA/GDn1JqHja",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": []
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "fulfillflow-v13"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "core",
+      "vhost": "fulfillflow-v13",
+      "configure": "^(tracking\\.apply\\.v1|tracking\\.apply\\.v1\\.queue|tracking\\.result\\.v1|shipment\\.status_changed\\.v1)$",
+      "write": "^(tracking\\.result\\.v1|tracking\\.apply\\.v1\\.queue|shipment\\.status_changed\\.v1)$",
+      "read": "^(tracking\\.apply\\.v1|tracking\\.apply\\.v1\\.queue)$"
+    },
+    {
+      "user": "tracking",
+      "vhost": "fulfillflow-v13",
+      "configure": "^(tracking\\.result\\.v1|tracking\\.result\\.v1\\.queue|tracking\\.apply\\.v1)$",
+      "write": "^(tracking\\.apply\\.v1|tracking\\.result\\.v1\\.queue)$",
+      "read": "^(tracking\\.result\\.v1|tracking\\.result\\.v1\\.queue)$"
+    },
+    {
+      "user": "notifications",
+      "vhost": "fulfillflow-v13",
+      "configure": "^shipment\\.status_changed\\.v1(\\.queue)?$",
+      "write": "^shipment\\.status_changed\\.v1\\.queue$",
+      "read": "^shipment\\.status_changed\\.v1(\\.queue)?$"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "tracking.apply.v1",
+      "vhost": "fulfillflow-v13",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "tracking.result.v1",
+      "vhost": "fulfillflow-v13",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "shipment.status_changed.v1",
+      "vhost": "fulfillflow-v13",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "tracking.apply.v1.queue",
+      "vhost": "fulfillflow-v13",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "tracking.result.v1.queue",
+      "vhost": "fulfillflow-v13",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "shipment.status_changed.v1.queue",
+      "vhost": "fulfillflow-v13",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "tracking.apply.v1",
+      "vhost": "fulfillflow-v13",
+      "destination": "tracking.apply.v1.queue",
+      "destination_type": "queue",
+      "routing_key": "tracking.apply.v1",
+      "arguments": {}
+    },
+    {
+      "source": "tracking.result.v1",
+      "vhost": "fulfillflow-v13",
+      "destination": "tracking.result.v1.queue",
+      "destination_type": "queue",
+      "routing_key": "tracking.result.v1",
+      "arguments": {}
+    },
+    {
+      "source": "shipment.status_changed.v1",
+      "vhost": "fulfillflow-v13",
+      "destination": "shipment.status_changed.v1.queue",
+      "destination_type": "queue",
+      "routing_key": "shipment.status_changed.v1",
+      "arguments": {}
+    }
+  ]
+}

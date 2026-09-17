@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.contracts.messages import MessageEnvelope, decode_message, encode_message
-from fulfillflow.messaging.tables import MessageTables
+from fulfillflow.messaging.tables import InboxTables, MessageTables
 from fulfillflow.shared.clock import Clock
 
 
@@ -81,7 +81,11 @@ async def put_message(
 
 
 async def quarantine(
-    session: AsyncSession, tables: MessageTables, body: bytes, reason: str, now: datetime
+    session: AsyncSession,
+    tables: MessageTables | InboxTables,
+    body: bytes,
+    reason: str,
+    now: datetime,
 ) -> None:
     await session.execute(
         insert(tables.quarantine).values(
@@ -96,17 +100,23 @@ async def quarantine(
 
 
 async def claim_publications(
-    session: AsyncSession, table: Table, now: datetime, *, limit: int = 20
+    session: AsyncSession,
+    table: Table,
+    now: datetime,
+    *,
+    limit: int = 20,
+    flow: str | None = None,
 ) -> list[Publication]:
     rows = (
         (
             await session.execute(
                 select(table)
                 .where(
+                    *([table.c.type == flow] if flow is not None else []),
                     or_(
                         and_(table.c.state == "PENDING", table.c.next_attempt_at <= now),
                         and_(table.c.state == "LEASED", table.c.lease_until <= now),
-                    )
+                    ),
                 )
                 .order_by(table.c.created_at, table.c.message_id)
                 .limit(limit)

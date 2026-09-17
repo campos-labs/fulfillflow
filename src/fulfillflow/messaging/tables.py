@@ -27,42 +27,51 @@ class MessageTables:
     rearm: Table
 
 
-def message_tables(metadata: MetaData, owner: str) -> MessageTables:
-    tables = []
-    for name, states in (
-        ("message_outbox", "'PENDING', 'LEASED', 'SENT', 'BLOCKED'"),
-        ("message_inbox", "'PENDING', 'RETRY_WAIT', 'DONE', 'BLOCKED'"),
-    ):
-        table = Table(
-            name,
-            metadata,
-            Column("message_id", Uuid, primary_key=True),
-            Column("type", String(32), nullable=False),
-            Column("event_id", Uuid, nullable=False),
-            Column("correlation_id", Uuid, nullable=False),
-            Column("body", LargeBinary, nullable=False),
-            Column("body_sha256", CHAR(64), nullable=False),
-            Column("state", String(16), nullable=False),
-            Column("attempts", Integer, nullable=False),
-            Column("generation", Integer, nullable=False),
-            Column("next_attempt_at", DateTime(timezone=True), nullable=False),
-            Column("created_at", DateTime(timezone=True), nullable=False),
-            Column("finished_at", DateTime(timezone=True)),
-            Column("last_attempt_at", DateTime(timezone=True)),
-            Column("lease_token", Uuid),
-            Column("lease_until", DateTime(timezone=True)),
-            Column("reason", String(64)),
-            UniqueConstraint("type", "event_id", name=f"uq_{name}_type_event"),
-            CheckConstraint(f"state IN ({states})", name="state"),
-            CheckConstraint("type IN ('tracking.apply.v1', 'tracking.result.v1')", name="type"),
-            CheckConstraint("attempts BETWEEN 0 AND 5 AND generation >= 0", name="attempts"),
-            CheckConstraint("octet_length(body) <= 65536", name="body_limit"),
-            CheckConstraint("body_sha256 ~ '^[0-9a-f]{64}$'", name="body_hash"),
-            CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease_pair"),
-        )
-        Index(f"ix_{name}_pending", table.c.state, table.c.next_attempt_at)
-        tables.append(table)
-    quarantine = Table(
+@dataclass(frozen=True)
+class InboxTables:
+    owner: str
+    inbox: Table
+    quarantine: Table
+    rearm: Table
+
+
+_TRACKING_TYPES = ("tracking.apply.v1", "tracking.result.v1")
+
+
+def _message_table(metadata: MetaData, name: str, states: str, types: tuple[str, ...]) -> Table:
+    table = Table(
+        name,
+        metadata,
+        Column("message_id", Uuid, primary_key=True),
+        Column("type", String(32), nullable=False),
+        Column("event_id", Uuid, nullable=False),
+        Column("correlation_id", Uuid, nullable=False),
+        Column("body", LargeBinary, nullable=False),
+        Column("body_sha256", CHAR(64), nullable=False),
+        Column("state", String(16), nullable=False),
+        Column("attempts", Integer, nullable=False),
+        Column("generation", Integer, nullable=False),
+        Column("next_attempt_at", DateTime(timezone=True), nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("finished_at", DateTime(timezone=True)),
+        Column("last_attempt_at", DateTime(timezone=True)),
+        Column("lease_token", Uuid),
+        Column("lease_until", DateTime(timezone=True)),
+        Column("reason", String(64)),
+        UniqueConstraint("type", "event_id", name=f"uq_{name}_type_event"),
+        CheckConstraint(f"state IN ({states})", name="state"),
+        CheckConstraint("type IN (" + ", ".join(repr(kind) for kind in types) + ")", name="type"),
+        CheckConstraint("attempts BETWEEN 0 AND 5 AND generation >= 0", name="attempts"),
+        CheckConstraint("octet_length(body) <= 65536", name="body_limit"),
+        CheckConstraint("body_sha256 ~ '^[0-9a-f]{64}$'", name="body_hash"),
+        CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease_pair"),
+    )
+    Index(f"ix_{name}_pending", table.c.state, table.c.next_attempt_at)
+    return table
+
+
+def _quarantine_table(metadata: MetaData) -> Table:
+    return Table(
         "message_quarantine",
         metadata,
         Column("id", Uuid, primary_key=True),
@@ -74,7 +83,10 @@ def message_tables(metadata: MetaData, owner: str) -> MessageTables:
         CheckConstraint("octet_length(body) <= 65536", name="body_limit"),
         CheckConstraint("original_size >= octet_length(body)", name="original_size"),
     )
-    rearm = Table(
+
+
+def _rearm_table(metadata: MetaData, *, inbox_only: bool = False) -> Table:
+    return Table(
         "message_rearm",
         metadata,
         Column("id", Uuid, primary_key=True),
@@ -87,9 +99,34 @@ def message_tables(metadata: MetaData, owner: str) -> MessageTables:
         Column("reason", String(240), nullable=False),
         Column("created_at", DateTime(timezone=True), nullable=False),
         UniqueConstraint("stage", "message_id", "generation", name="uq_message_rearm_generation"),
-        CheckConstraint("stage IN ('inbox', 'outbox')", name="stage"),
+        CheckConstraint(
+            "stage = 'inbox'" if inbox_only else "stage IN ('inbox', 'outbox')", name="stage"
+        ),
         CheckConstraint("generation > 0 AND previous_attempts BETWEEN 0 AND 5", name="attempts"),
         CheckConstraint("body_sha256 ~ '^[0-9a-f]{64}$'", name="body_hash"),
         CheckConstraint("btrim(reason) <> ''", name="reason"),
     )
-    return MessageTables(owner, tables[0], tables[1], quarantine, rearm)
+
+
+def message_tables(
+    metadata: MetaData, owner: str, *, outbox_types: tuple[str, ...] = _TRACKING_TYPES
+) -> MessageTables:
+    outbox = _message_table(
+        metadata, "message_outbox", "'PENDING', 'LEASED', 'SENT', 'BLOCKED'", outbox_types
+    )
+    inbox = _message_table(
+        metadata, "message_inbox", "'PENDING', 'RETRY_WAIT', 'DONE', 'BLOCKED'", _TRACKING_TYPES
+    )
+    return MessageTables(owner, outbox, inbox, _quarantine_table(metadata), _rearm_table(metadata))
+
+
+def notification_message_tables(metadata: MetaData) -> InboxTables:
+    inbox = _message_table(
+        metadata,
+        "message_inbox",
+        "'PENDING', 'RETRY_WAIT', 'DONE', 'BLOCKED'",
+        ("shipment.status_changed.v1",),
+    )
+    return InboxTables(
+        "notifications", inbox, _quarantine_table(metadata), _rearm_table(metadata, inbox_only=True)
+    )

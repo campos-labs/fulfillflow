@@ -37,6 +37,7 @@ def internal_test_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "INTERNAL_API_SECRET", "76a9e82ae9ca4a81b9ea9e13d4e4af77301827de7a1240419899cba88bb13e53"
     )
+    monkeypatch.setenv("NOTIFICATIONS_API_SECRET", "notifications-test-internal-secret-independent")
 
 
 @pytest.fixture
@@ -159,6 +160,43 @@ async def postgres_tracking_database(
                 await connection.execute(text(f"DELETE FROM {table}"))
             await connection.execute(text("DELETE FROM tracking_events"))
             await connection.execute(text("DELETE FROM carrier_event_inbox"))
+
+    await clear()
+    try:
+        yield database
+    finally:
+        await clear()
+        await database.dispose()
+
+
+@pytest.fixture
+def postgres_notifications_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
+    url = os.environ.get("TEST_NOTIFICATIONS_DATABASE_URL")
+    if url is None:
+        pytest.skip(
+            "TEST_NOTIFICATIONS_DATABASE_URL must identify a dedicated PostgreSQL 18 database"
+        )
+    monkeypatch.setenv("DATABASE_URL", url)
+    command.upgrade(Config("alembic_notifications.ini"), "head")
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        service_role="notifications",
+        database_url=url,
+        internal_api_secret="notifications-test-internal-secret-independent",
+    )
+
+
+@pytest.fixture
+async def postgres_notifications_database(
+    postgres_notifications_settings: Settings,
+) -> AsyncIterator[Database]:
+    database = Database.from_settings(postgres_notifications_settings)
+
+    async def clear() -> None:
+        async with database.engine.begin() as connection:
+            for name in ("notifications", "message_inbox", "message_quarantine", "message_rearm"):
+                await connection.execute(text(f"DELETE FROM {name}"))
 
     await clear()
     try:

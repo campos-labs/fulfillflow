@@ -47,6 +47,10 @@ def test_service_secrets_are_scoped_to_the_verifying_process(
         carrier_beta_webhook_secret="0e6fad758c2e43d2baad9fbaf31df540f5d0c36f",
     )
     assert tracking.session_secret.get_secret_value() == ""
+    notifications = Settings(**common, service_role="notifications")
+    assert notifications.session_secret.get_secret_value() == ""
+    assert notifications.carrier_alpha_webhook_secret.get_secret_value() == ""
+    assert notifications.carrier_beta_webhook_secret.get_secret_value() == ""
     with pytest.raises(ValidationError, match="Tracking requires both"):
         Settings(**common, service_role="tracking")
     with pytest.raises(ValidationError, match="non-test secrets"):
@@ -58,7 +62,14 @@ def test_service_secrets_are_scoped_to_the_verifying_process(
         )
 
 
-@pytest.mark.parametrize("field", ["service_http_timeout_seconds", "forwarding_timeout_seconds"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "service_http_timeout_seconds",
+        "forwarding_timeout_seconds",
+        "notifications_http_timeout_seconds",
+    ],
+)
 @pytest.mark.parametrize("value", [0, float("inf"), float("nan")])
 def test_service_timeouts_are_positive_and_finite(
     settings: Settings, field: str, value: float
