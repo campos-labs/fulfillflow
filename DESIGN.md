@@ -2,10 +2,10 @@
 
 ## 1. Estado, autoridade e referência
 
-Alvo: extrair Notifications como serviço assíncrono, com persistência própria e
-entrega simulada, preservando Tracking assíncrono. Contratos/persistência e fluxo
-integrado correspondem aos incrementos I/II; recuperação e operação do III estão implementadas;
-o incremento IV está autorizado para UI/DEMO e aceite funcional.
+Notifications opera como serviço assíncrono, com persistência própria e entrega
+simulada, preservando Tracking assíncrono. Contratos/persistência e fluxo integrado
+correspondem aos incrementos I/II; recuperação/operação do III e UI/DEMO do IV estão
+implementados. O RELEASE_PLAN registra a verificação do aceite funcional.
 O desenho foi aprovado, com implementação autorizada do incremento IV após I–III,
 com parada no aceite funcional, antes de comparação extensa ou publicação. Commits por assunto e push somente na
 branch v1.3 estão autorizados, com conferência da CI do SHA final.

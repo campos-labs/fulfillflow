@@ -1,245 +1,127 @@
-# Demonstração funcional do FulfillFlow v1.2 — aceite I–IV
+# FulfillFlow v1.3 — Demonstração funcional
 
-Este roteiro apresenta a jornada principal do FulfillFlow em um ambiente local e
-controlado: criação de um `Order`, criação de uma `Shipment`, recebimento de
-eventos de uma transportadora simulada e consulta dos efeitos pela interface.
+Tracking e Notifications assíncronos, dados sintéticos, PostgreSQL/RabbitMQ reais e
+entrega somente simulada. O simulador espera Tracking; Notifications é observado
+separadamente. Matriz/proveniência no [RELEASE_PLAN](../RELEASE_PLAN.md), recuperação
+no [README](../README.md). O [roteiro v1.2 congelado](https://github.com/campos-labs/fulfillflow/blob/9b445f9b5466cd302c89f1deed7a9c051cb397ae/docs/DEMO.md)
+e suas capturas abaixo permanecem preservados.
 
-A interface é um painel operacional interno. A aplicação não possui cadastro ou
-login de usuários e não deve ser exposta diretamente à internet.
+## 1. Recursos novos
 
-## O que será demonstrado
-
-- criação e confirmação de um `Order`;
-- criação de uma `Shipment` vinculada ao Carrier Alpha;
-- envio externo de webhooks autenticados com HMAC-SHA256;
-- evolução da `Shipment` até `DELIVERED`;
-- timeline de `TrackingEvent`, inbox auditável e `Notification` simulada;
-- conclusão automática do `Order` quando todas as suas Shipments não canceladas
-  estiverem entregues;
-- idempotência com a repetição do mesmo evento.
-
-Todos os dados e secrets abaixo são exclusivamente sintéticos. Nenhuma
-transportadora ou conta de e-mail real é utilizada.
-
-## Pré-requisitos
-
-- checkout validado da branch `feature/v1.2-tracking-async`;
-- Docker Engine com Docker Compose;
-- Python 3.13 e `uv` para executar o simulador externo;
-- PowerShell;
-- porta `127.0.0.1:18560` disponível.
-
-Execute todos os comandos a partir da raiz do repositório.
-
-## 1. Configurar o ambiente local
-
-Na sessão do PowerShell usada para iniciar o Compose e o simulador, defina:
+PowerShell, Docker Compose, Python 3.13 e `uv sync --frozen`. Execute na raiz deste
+worktree, em terminal dedicado, usando defaults sintéticos do Compose; não carregue
+`.env` nem URLs de outro ambiente. O projeto cria volumes próprios. O override usa
+nomes novos de imagens locais; não sobrescreva uma imagem já usada como evidência.
 
 ```powershell
-$env:APP_ENV = "local"
-$env:APP_PORT = "18560"
-$env:POSTGRES_PASSWORD = "fulfillflow-demo-admin-password-2026"
-$env:CORE_DB_PASSWORD = "fulfillflow-demo-core-password-2026"
-$env:TRACKING_DB_PASSWORD = "fulfillflow-demo-tracking-password-2026"
-$env:CORE_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:fulfillflow-demo-core-password-2026@db:5432/fulfillflow_core"
-$env:TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:fulfillflow-demo-tracking-password-2026@db:5432/fulfillflow_tracking"
-$env:INTERNAL_API_SECRET = "fulfillflow-demo-internal-2026-local-only-72be"
-$env:SESSION_SECRET = "fulfillflow-demo-session-2026-local-only-7f91"
-$env:CARRIER_ALPHA_WEBHOOK_SECRET = "fulfillflow-demo-alpha-2026-local-only-a84e"
-$env:CARRIER_BETA_WEBHOOK_SECRET = "fulfillflow-demo-beta-2026-local-only-b73c"
-```
-
-Cada senha de role deve coincidir com seu DSN. Use volumes novos e exclusivos da demonstração; não
-reutilize o banco da v1.0. Os secrets Alpha e Beta precisam ser distintos e ficam
-no Tracking. Core recebe somente o secret de sessão e o token interno comum.
-As telas e os webhooks continuam acessíveis pela porta pública do Core.
-
-## 2. Iniciar a aplicação
-
-Prepare o ambiente Python do simulador e inicie o stack:
-
-```powershell
-uv sync --frozen
-$demoProject = "fulfillflow-v12-demo"
-if (docker ps -a --filter "label=com.docker.compose.project=$demoProject" --format '{{.ID}}') {
-    throw "Projeto já existente: escolha outro nome; não remova dados anteriores."
+$env:APP_PORT = '18660'
+New-Item -ItemType Directory -Force build | Out-Null
+$imageSuffix = 'v13-demo-' + [guid]::NewGuid().ToString('N').Substring(0,8)
+$services = @{}
+foreach ($owner in @('core', 'tracking', 'notifications')) {
+    foreach ($name in @($owner, "$owner-worker", "migrate-$owner")) {
+        $services[$name] = @{ image = "fulfillflow-${owner}:${imageSuffix}" }
+    }
 }
-if (docker volume ls --filter "label=com.docker.compose.project=$demoProject" --format '{{.Name}}') {
-    throw "Volumes já existentes: escolha outro nome de projeto."
-}
-$demoSha = git rev-parse HEAD
-$demoImage = "fulfillflow:demo-$demoSha"
-$demoOverride = Join-Path $env:TEMP "$demoProject.override.yaml"
-$demoServices = 'core','tracking','core-worker','tracking-worker','migrate-core','migrate-tracking'
-$demoLines = @('services:')
-foreach ($service in $demoServices) {
-    $demoLines += "  ${service}:"
-    $demoLines += "    image: $demoImage"
-}
-$demoLines | Set-Content -LiteralPath $demoOverride -Encoding utf8
-$env:RABBITMQ_HOSTNAME = 'demo-broker'
-docker build --target runtime -t $demoImage .
-docker compose -p $demoProject -f compose.yaml -f $demoOverride up -d --no-build --wait --wait-timeout 180
+@{ services = $services } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 build/compose-iv.yaml
+$composeArgs = @('-p', 'fulfillflow-v13-iv-demo', '-f', 'compose.yaml', '-f', 'build/compose-iv.yaml')
+docker compose @composeArgs up --build --detach --wait --wait-timeout 120
+if ($LASTEXITCODE -ne 0) { throw 'Runtime não ficou saudável' }
+$base = 'http://127.0.0.1:18660'
+$demo = uv run python scripts/prepare_demo_v13.py --base-url $base | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Preparação falhou' }
 ```
 
-Confirme que a aplicação está pronta:
+O preparador é repetível e não apaga dados. Para repetir a jornada completa, use
+outro projeto vazio ou remova somente os recursos descartáveis deste roteiro ao final.
+Não reinicialize por SQL um Order já concluído.
+
+## 2. Concluir Tracking/Order com worker Notifications parado
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:18560/health/live
-Invoke-WebRequest http://127.0.0.1:18560/health/ready
+docker compose @composeArgs stop notifications-worker
+$env:CARRIER_ALPHA_WEBHOOK_SECRET = 'f4f67f688c3f40a59079fd6bcc19a7f214c21df9b8a94039a4c0e7cd6cc84385'
+$env:CARRIER_BETA_WEBHOOK_SECRET = '3df2b1b16bd84e22987409e9acfc09f6428a8c3573154a478b2084852bc64af2'
+uv run python scripts/simulate_carrier_events.py --base-url $base --carrier carrier-alpha --tracking-code V13ALPHA0001 --scenario valid --prefix v13-iv-alpha --start-at 2026-09-17T10:00:00Z
+if ($LASTEXITCODE -ne 0) { throw 'Cenário Alpha falhou' }
+uv run python scripts/simulate_carrier_events.py --base-url $base --carrier carrier-beta --tracking-code V13BETA0001 --scenario valid --prefix v13-iv-beta --start-at 2026-09-17T10:00:00Z
+if ($LASTEXITCODE -ne 0) { throw 'Cenário Beta falhou' }
 ```
 
-As duas respostas devem retornar HTTP 200 e `{"status":"ok"}`.
+Abra o dashboard: um Order FULFILLED, duas Shipments DELIVERED, oito eventos
+PROCESSED e nenhuma simulação ainda. Zero aqui é consulta válida da API ativa,
+não ausência de pendência. No Inbox, abra `v13-iv-beta-valid-04` e **Check notification
+progress**: Tracking terminou; publicação SENT e processamento NOT_RECEIVED não
+significam entrega. A página consulta a cada segundo por até 30 s. Espere o prazo:
+a última observação permanece, sem rejeição inventada. **Check again** renova somente
+GET. Terminais, BLOCKED e navegação encerram polling; não há reenvio ou rearme.
 
-| Tela | URL |
-|---|---|
-| Dashboard | `http://127.0.0.1:18560/` |
-| Orders | `http://127.0.0.1:18560/orders` |
-| Shipments | `http://127.0.0.1:18560/shipments` |
-| Carrier event inbox | `http://127.0.0.1:18560/carrier-events` |
-| Notifications | `http://127.0.0.1:18560/notifications` |
-| Instruções do simulador | `http://127.0.0.1:18560/simulator` |
+## 3. Falha de consulta preserva a observação
 
-O painel `/simulator` apresenta os comandos disponíveis, mas não envia eventos.
-Os webhooks são enviados pelo processo externo
-`scripts/simulate_carrier_events.py`.
-
-## 3. Criar e confirmar um Order
-
-1. Abra **Orders** e selecione **Create Order**.
-2. Preencha o formulário com estes dados sintéticos:
-
-   - `External reference`: `DEMO-LIVE-0001`;
-   - `Recipient name`: `Cliente Demonstração 001`;
-   - `Synthetic email`: `cliente.demo.001@example.test`;
-   - `Postal code`: `09700-000`;
-   - `City`: `São Bernardo do Campo`;
-   - `State`: `SP`.
-
-3. Selecione **Create Order** e confirme o estado inicial `CREATED`.
-4. Selecione **Confirm** e confirme a mudança para `CONFIRMED`.
-
-Uma `Shipment` só pode ser criada para um `Order` confirmado.
-
-## 4. Criar a Shipment
-
-1. No detalhe do `Order`, selecione **Create Shipment**.
-2. Confirme que o `Order ID` está preenchido.
-3. Selecione `Carrier Alpha`.
-4. Informe `ALPHA-LIVE-0001` em `Tracking code`.
-5. Deixe `Estimated delivery date` vazio ou use uma data sintética.
-6. Selecione **Create Shipment**.
-7. Confirme no detalhe:
-
-   - Carrier `carrier-alpha`;
-   - tracking code `ALPHA-LIVE-0001`;
-   - estado inicial `PENDING`.
-
-Anote o UUID da `Shipment`, pois ele poderá ser usado para filtrar as
-Notifications. A timeline ainda deverá informar que não existem eventos.
-
-## 5. Enviar os eventos do Carrier Alpha
-
-Na mesma sessão do PowerShell que contém o secret Alpha, execute:
+Com a página de progresso aberta, renove a observação e pare somente a API:
 
 ```powershell
-uv run python scripts/simulate_carrier_events.py `
-  --base-url http://127.0.0.1:18560 `
-  --carrier carrier-alpha `
-  --tracking-code ALPHA-LIVE-0001 `
-  --scenario valid
+docker compose @composeArgs stop notifications
 ```
 
-O simulador envia quatro eventos:
-
-```text
-POSTED → IN_TRANSIT → OUT_FOR_DELIVERY → DELIVERED
-```
-
-Cada evento novo deve apresentar uma linha `phase=accepted`, HTTP 202 e
-`inbox_event_id`, seguida de consulta com `phase=completed`, `"result":"APPLIED"`
-e `"success":true`. A última deve apresentar
-`"current_status":"DELIVERED"`. Exit code zero indica que todas as respostas
-corresponderam ao contrato esperado.
-
-## 5.1 Observar pendência e prazo sem atrasar o runtime
-
-Esta é uma variante da seção 5: escolha-a antes de enviar os eventos, com a
-Shipment ainda em `PENDING`. Não execute primeiro o cenário completo e depois
-repita-o sobre a Shipment já entregue. Somente neste projeto isolado, pause os workers:
+O erro aparece sem apagar publication/processing e seus horários anteriores. Em
+outra aba, o dashboard mantém Core/Tracking e mostra contagens Notifications
+indisponíveis; `/notifications` responde com página HTTP 503, não lista vazia.
+Prazo esgotado não transforma o último estado em observação atual confirmada.
 
 ```powershell
-docker compose -p $demoProject -f compose.yaml -f $demoOverride stop core-worker tracking-worker
+docker start fulfillflow-v13-iv-demo-notifications-1
 ```
 
-Execute o comando da seção 5 em outro terminal com os mesmos secrets, acrescentando
-`--completion-timeout-seconds 90`. Abra `/carrier-events/{inbox_event_id}` usando o
-ID emitido. Confirme aceitação, `RECEIVED/QUEUED` e consultas HTMX a cada segundo.
-Após 30 segundos, a UI encerra sua observação e mostra prazo esgotado, sem rejeição.
-O cliente de linha de comando tem prazo independente. Se ele também expirar,
-`RESULT_NOT_OBSERVED`/exit 1 indica resultado não observado, não perda do evento.
-Para concluir os quatro passos na mesma execução, retome os workers enquanto o
-simulador ainda aguarda. Se ele já encerrou, o evento aceito continua consultável,
-mas os passos seguintes não foram enviados; uma nova demonstração completa deve
-usar outra Shipment `PENDING` e referências novas, sem apagar a anterior.
+Espere a API ficar saudável e use **Check again**: consulta retomada sem novo evento.
 
-Retome somente os workers desse projeto:
+## 4. Retomar e conferir terminais
 
 ```powershell
-docker compose -p $demoProject -f compose.yaml -f $demoOverride start core-worker tracking-worker
+docker start fulfillflow-v13-iv-demo-notifications-worker-1
 ```
 
-Use **Check again** para uma nova observação. Confirme conclusão e o link para a
-timeline. A consulta não reenvia o webhook. Falhas temporárias de consulta mostram
-aviso e são tentadas novamente dentro do prazo; `BLOCKED_LOCAL` exige a operação
-auditada descrita no README, sem prometer recuperação automática.
+Durante observação ativa, a página passa a SIMULATED/DONE e interrompe polling;
+se o prazo acabou, use **Check again**. Não envie outro webhook para recuperar.
+Abra Notifications: oito registros. Filtre SIMULATED e Shipment (quatro por
+transportadora), abra o detalhe e confira IDs/datas. Nenhum email foi enviado.
 
-## 6. Conferir os efeitos na interface
+FAILED é terminal de simulação, diferente de pendência, BLOCKED ou indisponibilidade.
+O renderer normal é determinístico e bem-sucedido: FAILED/BLOCKED têm testes com
+falha/estado injetado, identificados na matriz; não foram fabricados no runtime
+para capturas. LEGACY usa o ensaio offline do README, preserva conteúdo original e
+explicita que publication/processing não foram registrados.
 
-1. Atualize o detalhe da `Shipment` e confirme o estado `DELIVERED`, além de
-   `Shipped at`, `Delivered at` e `Status occurred at` preenchidos.
-2. Abra **Tracking timeline** e confirme os quatro estados canônicos. Todos
-   devem apresentar `Application result` igual a `APPLIED`.
-3. Abra **Inbox**, filtre por um `event_id` exibido pelo simulador e confirme o
-   estado `PROCESSED`. O detalhe apresenta a projeção sanitizada, sem assinatura,
-   secret ou `raw_body`.
-4. Abra **Notifications**, filtre pelo UUID da `Shipment` e confirme quatro
-   registros `SIMULATED`. Nenhum e-mail é enviado.
-5. Volte ao `Order`. Como ele possui somente essa Shipment não cancelada, seu
-   estado deverá ser `FULFILLED`.
-6. Volte ao Dashboard e confira as contagens e os eventos recentes.
+## 5. Duplicata sem efeito adicional
 
-## 7. Demonstrar idempotência
-
-Crie outro `Order` confirmado e outra Shipment Alpha em `PENDING`, usando o
-tracking code `ALPHA-DUP-0001`. Em seguida, execute:
+Recrie os bytes determinísticos do último evento, com timestamp atual na assinatura
+para respeitar a janela HMAC. Este comando usa o consumidor externo existente,
+sem importar regras da aplicação ou imprimir segredo/assinatura:
 
 ```powershell
-uv run python scripts/simulate_carrier_events.py `
-  --base-url http://127.0.0.1:18560 `
-  --carrier carrier-alpha `
-  --tracking-code ALPHA-DUP-0001 `
-  --scenario duplicate
+uv run python -c "import os,json; from datetime import datetime; from urllib.request import urlopen; from scripts.simulate_carrier_events import SimulatorConfig,build_scenario,send_request; base='http://127.0.0.1:18660'; before=json.load(urlopen(base+'/api/v1/notifications',timeout=10)); config=SimulatorConfig(base,'carrier-beta','V13BETA0001','valid',None,'v13-iv-beta',datetime.fromisoformat('2026-09-17T10:00:00+00:00'),10,os.environ['CARRIER_BETA_WEBHOOK_SECRET']); result=send_request(build_scenario(config).steps[-1].artifact,timeout=10); assert result.status==200 and result.payload['result']=='DUPLICATE'; after=json.load(urlopen(base+'/api/v1/notifications',timeout=10)); assert before==after and after['total']==8; print('DUPLICATE: oito terminais preservados integralmente')"
+if ($LASTEXITCODE -ne 0) { throw 'Duplicata divergiu do contrato' }
 ```
 
-A primeira tentativa deve ser aceita com 202 e posteriormente concluir `APPLIED`;
-a repetição do mesmo evento deve
-retornar `DUPLICATE` com `original_result` igual a `APPLIED`. A repetição não
-cria outro inbox, `TrackingEvent` ou `Notification`.
+## Capturas reais v1.3
 
-O simulador também oferece `out-of-order`, `unknown-status` e
-`invalid-signature`. No último caso, HTTP 401 com
-`INVALID_WEBHOOK_SIGNATURE` é o resultado esperado e nenhum inbox é criado.
+Navegador real em 2026-09-17, projeto `fulfillflow-v13-iv-demo`; controle somente de
+containers próprios. Sem edição visual, atrasos de runtime ou estados SQL fabricados.
+Identidades/proveniência no RELEASE_PLAN.
 
-## Como o fluxo funciona
+![Order/Tracking concluídos enquanto Notifications aguarda](assets/demo/v1.3/order-complete-notifications-pending.png)
+![Tracking concluído com observação independente](assets/demo/v1.3/tracking-completed.png)
+![Publicação SENT e processamento NOT_RECEIVED](assets/demo/v1.3/notification-pending.png)
+![Consulta indisponível preserva a última observação](assets/demo/v1.3/query-unavailable-preserved.png)
+![Prazo não representa rejeição](assets/demo/v1.3/observation-deadline.png)
+![Dashboard parcial durante indisponibilidade](assets/demo/v1.3/dashboard-unavailable.png)
+![Listagem indisponível responde 503](assets/demo/v1.3/notifications-unavailable.png)
+![Retomada sem outro webhook](assets/demo/v1.3/notification-simulated.png)
+![Detalhe da simulação](assets/demo/v1.3/notification-detail.png)
+![Filtros por status e Shipment](assets/demo/v1.3/notifications-filtered.png)
 
-O simulador serializa o payload uma vez, assina os mesmos bytes enviados e chama
-`POST /api/v1/carriers/{carrier_code}/events`. Tracking autentica e confirma inbox/comando/outbox em uma transação antes do 202.
-Workers transportam comando e resultado via RabbitMQ. Core confirma recibo, efeitos
-e outbox de resultado atomicamente; Tracking finaliza em outra transação local.
-ACK técnico não é conclusão de negócio.
-Detalhes de transações, locks e idempotência permanecem documentados em
-`DESIGN.md`.
+A [evidência de duplicata](assets/demo/v1.3/duplicate-result.json) registra igualdade
+integral dos oito terminais antes/depois, contagem e hash da observação.
 
 ## Capturas da demonstração
 
@@ -290,22 +172,18 @@ Linha do tempo dos eventos da Shipment e seus resultados de aplicação.
 
 Instruções para executar o simulador externo; o painel não envia eventos.
 
-## Encerrar o ambiente
+## Encerrar somente este ambiente
 
 ```powershell
-docker compose -p $demoProject -f compose.yaml -f $demoOverride stop
+docker compose @composeArgs down --volumes
 ```
 
-O encerramento preserva volumes, imagens e evidência sintética para inspeção.
-Não remova recursos de outros projetos nem substitua imagens históricas.
+Remove somente volumes descartáveis deste projeto; imagens e capturas permanecem.
+Não execute contra projetos/evidências históricos.
 
-## Limitações
+## Limites
 
-- não há autenticação de usuários, Carrier real ou envio real de e-mail;
-- o bind padrão é local, em `127.0.0.1`;
-- `/simulator` é somente instrucional;
-- aceitação e conclusão são distintas; falhas de consulta não desfazem admissão;
-- logs/diagnóstico locais não representam observabilidade ampla nem estabilidade prolongada;
-- o roteiro não substitui as suítes automatizadas;
-- o roteiro não executa Locust nem produz baseline ou resultado oficial de
-   benchmark.
+Aceite funcional sem campanha de carga ou estabilidade prolongada demonstrada.
+Persistência idempotente não prova exactly-once externo. Falhas comuns de processo,
+PostgreSQL, broker e recursos continuam possíveis. Corte offline; provedores reais,
+cloud, comparação extensa e publicação estão fora deste aceite.
