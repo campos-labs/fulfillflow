@@ -109,16 +109,16 @@ Navegador real em 2026-09-17, projeto `fulfillflow-v13-iv-demo`; controle soment
 containers próprios. Sem edição visual, atrasos de runtime ou estados SQL fabricados.
 Identidades/proveniência no RELEASE_PLAN.
 
-![Order/Tracking concluídos enquanto Notifications aguarda](assets/demo/v1.3/order-complete-notifications-pending.png)
-![Tracking concluído com observação independente](assets/demo/v1.3/tracking-completed.png)
-![Publicação SENT e processamento NOT_RECEIVED](assets/demo/v1.3/notification-pending.png)
-![Consulta indisponível preserva a última observação](assets/demo/v1.3/query-unavailable-preserved.png)
-![Prazo não representa rejeição](assets/demo/v1.3/observation-deadline.png)
-![Dashboard parcial durante indisponibilidade](assets/demo/v1.3/dashboard-unavailable.png)
-![Listagem indisponível responde 503](assets/demo/v1.3/notifications-unavailable.png)
-![Retomada sem outro webhook](assets/demo/v1.3/notification-simulated.png)
-![Detalhe da simulação](assets/demo/v1.3/notification-detail.png)
-![Filtros por status e Shipment](assets/demo/v1.3/notifications-filtered.png)
+![Order/Tracking concluídos enquanto Notifications aguarda](assets/demo/v1.3/order-complete-notifications-pending.jpg)
+![Tracking concluído com observação independente](assets/demo/v1.3/tracking-completed.jpg)
+![Publicação SENT e processamento NOT_RECEIVED](assets/demo/v1.3/notification-pending.jpg)
+![Consulta indisponível preserva a última observação](assets/demo/v1.3/query-unavailable-preserved.jpg)
+![Prazo não representa rejeição](assets/demo/v1.3/observation-deadline.jpg)
+![Dashboard parcial durante indisponibilidade](assets/demo/v1.3/dashboard-unavailable.jpg)
+![Listagem indisponível responde 503](assets/demo/v1.3/notifications-unavailable.jpg)
+![Retomada sem outro webhook](assets/demo/v1.3/notification-simulated.jpg)
+![Detalhe da simulação](assets/demo/v1.3/notification-detail.jpg)
+![Filtros por status e Shipment](assets/demo/v1.3/notifications-filtered.jpg)
 
 A [evidência de duplicata](assets/demo/v1.3/duplicate-result.json) registra igualdade
 integral dos oito terminais antes/depois, contagem e hash da observação.
