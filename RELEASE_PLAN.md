@@ -18,7 +18,7 @@ permanecem congeladas. Nenhum merge para main é necessário para iniciar esta l
 | III — Recuperação e operação | Concluído: rearme/diagnóstico, políticas, lifecycle/saúde e recuperação verificados |
 | IV — UI, verificação integrada e congelamento funcional | Concluído funcionalmente; aceite vinculado à CI do SHA final da entrega |
 | Comparação extensa | Adiada, sem execução autorizada |
-| Tag/pré-release/release v1.2 | Não criada; depende de decisão após aceite funcional |
+| Tag/pré-release/release v1.2 | `v1.2.0-rc.1`: pré-release de aceite funcional; sem release estável |
 
 O checkout ativa o fluxo assíncrono da v1.2; a referência síncrona v1.1 permanece
 congelada. A comparação anterior continua suspensa/incompleta. Resultados e
@@ -272,6 +272,40 @@ A identidade de imagem construída e o SHA/CI exatos constam na entrega. O próx
 passo recomendado é revisar e arquivar essa referência funcional; publicação ou
 comparação requer decisão própria, sem início automático.
 
+### Proveniência do fechamento v1.2.0-rc.1
+
+- Base funcional: `eb9b51727023cf83cf8574f5ff0b502af2c620a0`,
+  [CI aprovada](https://github.com/campos-labs/fulfillflow/actions/runs/35162502409):
+  1.057 testes funcionais e cinco estruturais, cobertura 89,36%; cenários críticos
+  sem skips. As 35 exclusões de plataforma da CI Linux não substituem Windows.
+- O commit de fechamento acrescenta somente documentação e as duas capturas reais
+  da v1.2 em `docs/assets/demo/v1.2/`. A tag anotada identifica esse commit exato;
+  sua CI e SHA ficam vinculados nas notas da pré-release. Código, contratos de
+  transporte, migrations, dependências e inputs do Dockerfile não mudam em relação
+  à base funcional. Não há nova demonstração completa nem campanha de desempenho.
+- Imagem **local** verificada: `fulfillflow:iv-eb9b51727023`, construída da base
+  funcional acima, com revisão registrada no label OCI. ID local (`docker image
+  inspect .Id`):
+  `sha256:e1b52f4bad4cc958e652bb2e63e5ce85425cb647dd3780d761b05231fb37b16a`.
+  Ela não foi reconstruída ou reetiquetada como imagem do commit documental.
+  O campo local `RepoDigests` não comprova publicação: **não há imagem publicada
+  nem digest de registry verificado para esta pré-release**.
+- `uv.lock` SHA-256:
+  `7a9f7944f751600a17aeacc0a54ea4ddf7d79c2a09b46fe17917919e0e6f9949`.
+  Heads verificados: `1202_core`/`1203_tracking`, sem drift. PostgreSQL 18 e
+  RabbitMQ 4.2.4 mantêm as referências upstream fixadas no Compose, distintas da
+  imagem local da aplicação.
+- Capturas novas mostram aceitação/pendência e resultado terminal do mesmo inbox,
+  sem substituir imagens históricas. Instruções da variante de pendência do DEMO
+  esclarecem que ela começa antes do envio e que prazo esgotado não envia os
+  passos restantes do cenário.
+
+O ciclo funcional encerra nesta pré-release; comparação extensa permanece
+suspensa. Capacidade, estabilidade prolongada e observabilidade ampla não estão
+concluídas. Nenhuma conclusão sobre a causa do 503 histórico foi obtida.
+A referência está apta a servir de base funcional a uma evolução posterior,
+sem autorizar sua implementação ou criar uma branch nessa direção.
+
 ## 7. Validações e versionamento
 
 Executar testes focais primeiro. Ao concluir alterações transversais e no aceite
@@ -313,6 +347,11 @@ referência funcional da v1.2. Isso exige contrato, propriedade dos dados, publi
 idempotência, consultas/UI e recuperação próprios; não basta criar outro consumidor.
 A branch futura parte da referência escolhida da v1.2, sem exigir publicação final
 ou matriz extensa concluída, desde que o aceite funcional necessário esteja aprovado.
+
+Restrição concreta da implementação atual: Notifications está no Core, participa
+da transação local de aplicação e tem unicidade por `tracking_event_id`. As
+consultas existentes continuam lendo os registros desse serviço. Esses vínculos
+são parte da referência preservada, não um contrato antecipado de extração.
 
 Esta intenção não autoriza componentes genéricos, eventos sem consumidor atual,
 infraestrutura cloud ou extração antecipada. A decisão e o plano dessa evolução

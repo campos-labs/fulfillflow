@@ -164,7 +164,9 @@ corresponderam ao contrato esperado.
 
 ## 5.1 Observar pendência e prazo sem atrasar o runtime
 
-Somente neste projeto isolado, antes do envio, pause os workers:
+Esta é uma variante da seção 5: escolha-a antes de enviar os eventos, com a
+Shipment ainda em `PENDING`. Não execute primeiro o cenário completo e depois
+repita-o sobre a Shipment já entregue. Somente neste projeto isolado, pause os workers:
 
 ```powershell
 docker compose -p $demoProject -f compose.yaml -f $demoOverride stop core-worker tracking-worker
@@ -176,6 +178,10 @@ ID emitido. Confirme aceitação, `RECEIVED/QUEUED` e consultas HTMX a cada segu
 Após 30 segundos, a UI encerra sua observação e mostra prazo esgotado, sem rejeição.
 O cliente de linha de comando tem prazo independente. Se ele também expirar,
 `RESULT_NOT_OBSERVED`/exit 1 indica resultado não observado, não perda do evento.
+Para concluir os quatro passos na mesma execução, retome os workers enquanto o
+simulador ainda aguarda. Se ele já encerrou, o evento aceito continua consultável,
+mas os passos seguintes não foram enviados; uma nova demonstração completa deve
+usar outra Shipment `PENDING` e referências novas, sem apagar a anterior.
 
 Retome somente os workers desse projeto:
 
@@ -236,6 +242,29 @@ Detalhes de transações, locks e idempotência permanecem documentados em
 `DESIGN.md`.
 
 ## Capturas da demonstração
+
+### Estados assíncronos da v1.2
+
+Capturas reais de 2026-09-16, com dados sintéticos novos no projeto isolado
+`fulfillflow-f05e-iv-demo`. Runtime do SHA
+`eb9b51727023cf83cf8574f5ff0b502af2c620a0`, imagem local
+`fulfillflow:iv-eb9b51727023`; proveniência completa no RELEASE_PLAN.
+Somente os dois estados abaixo foram recapturados no fechamento. Formulários,
+polling/falhas/prazo, timeline, Notifications, Order e duplicata reutilizam a
+conferência visual do incremento IV registrada na matriz de aceite.
+
+![v1.2: evento aceito com HTTP 202 e pendente em RECEIVED/QUEUED](assets/demo/v1.2/accepted-pending.jpg)
+
+Workers pausados apenas no ambiente próprio: aceitação durável não representa
+conclusão. A tela oferece observação limitada e nova consulta explícita.
+
+![v1.2: mesmo evento PROCESSED com resultado persistido APPLIED](assets/demo/v1.2/completed-result.jpg)
+
+Após retomar os workers, o mesmo inbox mostra `COMPLETED`, timestamps e resultado
+`APPLIED`, com link para a timeline. É a conclusão do primeiro evento (`POSTED`),
+não uma afirmação de que toda a Shipment já foi entregue.
+
+### Capturas históricas da v1.0.0
 
 As imagens abaixo são capturas históricas da aplicação real v1.0.0, preservadas
 como ilustrações da interface. Não são capturas da v1.1 ou v1.2. Todos os dados são sintéticos.
