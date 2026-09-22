@@ -192,8 +192,10 @@ ficam em `benchmarks/datasets`. O documento contém metadata, coortes e todas as
 linhas usadas pelo seed; a campanha autentica o arquivo e o sidecar antes de
 expor qualquer slot ao loadgen. A documentação do contrato, das duas fases
 Locust, dos coletores externos e dos artefatos está em `benchmarks/README.md`.
-O único manifest de campanha versionado é uma fixture sintética não oficial;
-não existe manifest `v1-baseline` nem resultado oficial.
+Um passo a passo em português para configurar o ambiente, simular as requisições e interpretar os
+CSVs está em `benchmarks/TUTORIAL_LOCUST.md`. A fixture sintética não é uma campanha oficial; os
+manifests e a publicação da baseline v1.0 aceita ficam em `benchmarks/campaigns` e
+`benchmarks/baselines/v1.0`, respectivamente.
 
 ```powershell
 uv sync --frozen --all-groups

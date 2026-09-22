@@ -1,5 +1,8 @@
 # FulfillFlow benchmark harness
 
+For a practical, Portuguese walkthrough covering setup, local simulation, execution, artifacts and
+cleanup, see [Tutorial: simulando requisições com Locust](TUTORIAL_LOCUST.md).
+
 This directory defines reproducible data and workload artifacts. The accepted v1.0 baseline has
 30 valid official repetitions: mixed/timeline/ingestion, 4/12 users, five repetitions per point.
 See [the portable baseline publication](baselines/v1.0/README.md) for reports, immutable manifests,
