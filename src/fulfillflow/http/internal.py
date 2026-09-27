@@ -8,14 +8,12 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, Request
-from opentelemetry.trace import StatusCode, Tracer
 from pydantic import BaseModel, SecretStr, ValidationError
 from starlette.responses import Response
 
 from fulfillflow.config import Settings
 from fulfillflow.contracts.problems import RemoteServiceUnavailableError, ServiceProblemError
 from fulfillflow.http.problems import ProblemDetail, _problem
-from fulfillflow.http.telemetry import PROPAGATOR, operation
 
 INTERNAL_TOKEN_HEADER = "X-FulfillFlow-Internal-Token"
 
@@ -55,9 +53,7 @@ class ServiceClient:
         *,
         secret: SecretStr | None = None,
         timeout_seconds: float | None = None,
-        tracer: Tracer | None = None,
     ) -> None:
-        self._tracer = tracer
         self._client = client
         self._settings = settings
         self._request_id = request_id
@@ -108,49 +104,18 @@ class ServiceClient:
         payload: BaseModel | None = None,
         params: dict[str, str | int] | None = None,
     ) -> T:
-        with operation(self._tracer, method, path) as span:
-            # A new client context replaces the incoming parent only for this opt-in GET.
-            carrier: dict[str, str] | None = None
-            if span is not None:
-                carrier = {}
-                PROPAGATOR.inject(carrier)
-                carrier = {"traceparent": carrier["traceparent"]}
-            try:
-                response = await self.request(
-                    method,
-                    path,
-                    content=payload.model_dump_json().encode() if payload is not None else None,
-                    headers=[("Content-Type", "application/json")] if payload is not None else (),
-                    params=params,
-                    trace_context=carrier,
-                )
-            except RemoteServiceUnavailableError:
-                if span is not None:
-                    span.set_attribute("error.type", "transport")
-                    span.set_status(StatusCode.ERROR)
-                raise
-            if span is not None:
-                span.set_attribute("http.response.status_code", response.status_code)
-                span.add_event("response_received")
-            try:
-                raise_for_service_problem(response)
-                result = schema.model_validate_json(response.content)
-            except (ValidationError, RemoteServiceUnavailableError, ServiceProblemError) as exc:
-                if span is not None:
-                    category = (
-                        "remote_problem"
-                        if isinstance(exc, ServiceProblemError)
-                        and not isinstance(exc, RemoteServiceUnavailableError)
-                        else "invalid_response"
-                    )
-                    span.set_attribute("error.type", category)
-                    span.set_status(StatusCode.ERROR)
-                if isinstance(exc, ValidationError):
-                    raise RemoteServiceUnavailableError from exc
-                raise
-            if span is not None:
-                span.add_event("response_validated")
-            return result
+        response = await self.request(
+            method,
+            path,
+            content=payload.model_dump_json().encode() if payload is not None else None,
+            headers=[("Content-Type", "application/json")] if payload is not None else (),
+            params=params,
+        )
+        raise_for_service_problem(response)
+        try:
+            return schema.model_validate_json(response.content)
+        except ValidationError as exc:
+            raise RemoteServiceUnavailableError from exc
 
 
 def raise_for_service_problem(response: httpx.Response) -> None:

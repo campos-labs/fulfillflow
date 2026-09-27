@@ -49,4 +49,4 @@ async def test_real_query_preserves_result_and_owner_lifecycles(
     assert tracking.parent.span_id == hop.context.span_id
     assert hop.parent.span_id == core.context.span_id
     assert all(s.context.trace_id == core.context.trace_id for s in spans)
-    assert [e.name for e in hop.events] == ["response_received", "response_validated"]
+    assert [e.name for e in hop.events] == ["response_received", "content_type_validated"]

@@ -445,7 +445,7 @@ cloud, Kubernetes, GitOps e autoscaling permanecem fora desta implementação.
 
 Branch isolada `codex/v1.3-http-observability`, base funcional
 `9e3a135a00db218643633c7165d3106f0c8285e1`. Implementa spans explícitos no GET
-público/Core/Tracking, com validação semântica incluída no span cliente, atributos
+público/Core/Tracking, com conferência de Content-Type incluída no span cliente, atributos
 permitidos e flag desligada por padrão. Sem alterações de persistência ou negócio.
 A infraestrutura do diagnóstico permanece no repositório fulfillflow-infra.
 
@@ -457,3 +457,11 @@ cobrem parentela, propagação restrita e categorias de falha sem conteúdo sens
 A execução integrada PostgreSQL/RabbitMQ e o smoke da imagem são verificações
 separadas; resultados serão registrados após execução. Não há nova campanha,
 resultado de diagnóstico no Kind, publicação de imagem ou release nesta preparação.
+
+Correção identificada pelo teste integrado: a rota pública usa `forward_tracking`,
+não `ServiceClient.read`. A primeira captura produzia dois spans e omitia o hop
+cliente real. A instrumentação foi deslocada para o forwarding, preservando status,
+bytes e sua validação existente de Content-Type. O teste de regressão também
+preserva o comportamento de JSON incompatível com schema, sem introduzir nova
+validação funcional. Eventos: `response_received` e `content_type_validated`.
+A falha anterior permanece na CI; não foi execução diagnóstica no Kind.

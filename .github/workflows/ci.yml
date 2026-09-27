@@ -74,6 +74,9 @@ jobs:
       - name: Structural DatabaseProbe Docker integration
         run: uv run pytest tests/integration/test_benchmark_schema_contract.py -q
 
+      - name: Targeted HTTP tracing lifecycle
+        run: uv run pytest tests/api/test_http_trace_lifecycle.py -q
+
       - name: Full functional suite and coverage
         run: >-
           uv run pytest --cov=fulfillflow --cov-report=term-missing
@@ -106,6 +109,7 @@ jobs:
               ("test_worker_lifecycle", 8),
               ("test_worker_recovery", 2),
               ("test_http_recovery", 2),
+              ("test_http_trace_lifecycle", 1),
               ("test_commit_boundaries", 11),
           ):
               selected = [case for case in cases if module in case.get("classname", "")]
