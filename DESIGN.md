@@ -327,6 +327,31 @@ geração, motivo, última atividade e rearme; separar outbox Core, inbox Notifi
 simulações terminais e filas ready/unacked. Não somar etapas como eventos únicos.
 Prometheus/OTel mais amplos continuam pendentes; logs não comprovam tracing.
 
+### 8.1. Exploração HTTP isolada após a referência funcional
+
+A branch `codex/v1.3-http-observability` parte de `9e3a135a00db218643633c7165d3106f0c8285e1`.
+A referência funcional e suas evidências permanecem congeladas. Nesta extensão,
+`OTEL_ENABLED=false` continua o padrão. Quando habilitada em Core/Tracking,
+a instrumentação explícita cobre somente GET `/api/v1/carrier-events` e
+`/internal/v1/tracking/carrier-events`: servidor Core, operação cliente interna
+(incluindo validação da resposta) e servidor Tracking. Um observador identificado
+pode fornecer o span pai por W3C traceparent; identidade do trace não substitui
+request ID nem identidade de negócio. Não propagar baggage/tracestate nesta fatia.
+
+Usar provider por aplicação e exportação OTLP HTTP em lote limitado para destino
+explicitamente configurado. Apenas método, rota canônica, status HTTP e categorias
+fechadas de erro podem ser atributos; não exportar query, URL completa, headers,
+corpos, SQL, detalhes de problemas ou exceções. Distinguir transporte, problema
+remoto e resposta incompatível com o contrato. Uma resposta HTTP 200 seguida de
+falha de validação não significa sucesso da operação cliente. Falha de exportação
+não altera o resultado de negócio; ausência de span não comprova falta de execução.
+
+Não instrumentar workers, banco, mensagens ou webhooks; não alterar persistência,
+retries, autenticação, timeouts ou respostas. O primeiro diagnóstico usa consulta
+saudável e confronto independente do resultado, sem campanha de desempenho.
+Tempos abrangem fronteiras observadas e não identificam commit de transação.
+Runtime/imagem próprios e cobertura da coleta devem acompanhar qualquer execução.
+
 ## 9. Migrações, legado e dados de demonstração
 
 Usar projeto/volumes v1.3 novos e identidade estável do nó RabbitMQ ao recriar seu

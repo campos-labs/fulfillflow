@@ -543,3 +543,13 @@ seção de testes. Use projeto e volumes novos; não reutilize recursos históri
 A imagem de teste é RabbitMQ 4.2.4 Alpine, fixada por digest no Compose; o cliente
 é `aio-pika==9.5.8`. Os testes verificam confirmação, retorno, commit/ACK incerto,
 duplicação, lease, esgotamento e recuperação local com a fila vazia.
+
+### Diagnóstico HTTP opt-in (branch isolada)
+
+Nesta referência derivada da v1.3.0-rc.1, `OTEL_ENABLED=true` em Core e Tracking
+instrumenta apenas GET de listagem de carrier-events e sua consulta interna.
+Configure `OTEL_SERVICE_NAME` distinto por serviço e `OTEL_EXPORTER_OTLP_ENDPOINT`
+como URL base do receptor OTLP HTTP (sem `/v1/traces`). O sampler suportado é
+`parentbased_traceidratio`; `OTEL_TRACES_SAMPLER_ARG=1` captura o diagnóstico integral.
+Desabilitado por padrão. Não há spans SQL, AMQP, workers ou Notifications.
+Não alterar referências históricas para habilitá-lo. Veja [o contrato](DESIGN.md#81-exploração-http-isolada-após-a-referência-funcional).

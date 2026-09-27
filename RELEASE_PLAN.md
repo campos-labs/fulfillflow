@@ -440,3 +440,20 @@ com eventos oferecidos/aceitos, Tracking concluído, Notifications simuladas,
 backlog/drain, latências, falhas e diferenças de observabilidade. Não alterar imagens
 congeladas para paridade nem reutilizar 202 como trabalho concluído. Provedores reais,
 cloud, Kubernetes, GitOps e autoscaling permanecem fora desta implementação.
+
+## 9. Extensão autorizada — diagnóstico HTTP delimitado
+
+Branch isolada `codex/v1.3-http-observability`, base funcional
+`9e3a135a00db218643633c7165d3106f0c8285e1`. Implementa spans explícitos no GET
+público/Core/Tracking, com validação semântica incluída no span cliente, atributos
+permitidos e flag desligada por padrão. Sem alterações de persistência ou negócio.
+A infraestrutura do diagnóstico permanece no repositório fulfillflow-infra.
+
+Verificação local inicial: 923 testes unitários passaram; dez testes PowerShell
+legados exigiam `CONTROL_TEST_PWSH`; a suíte focada com esse executável passou
+(68 casos, incluindo a instrumentação). Mypy passou
+nos 160 arquivos configurados; 12 contratos de importação preservados. Testes novos
+cobrem parentela, propagação restrita e categorias de falha sem conteúdo sensível.
+A execução integrada PostgreSQL/RabbitMQ e o smoke da imagem são verificações
+separadas; resultados serão registrados após execução. Não há nova campanha,
+resultado de diagnóstico no Kind, publicação de imagem ou release nesta preparação.

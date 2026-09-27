@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from fulfillflow.db.migrations import SchemaNotCurrentError, schema_is_current
 from fulfillflow.health import router as health_router
 from fulfillflow.http.internal import install_internal_auth
 from fulfillflow.http.problems import _problem, install_problem_handling
+from fulfillflow.http.telemetry import DiagnosticMiddleware, create_provider, tracer_for
 from fulfillflow.shared import Clock, SystemClock
 from fulfillflow.tracking.public import CarrierEventNotFoundError
 from fulfillflow.tracking.router import router as internal_router
@@ -46,7 +48,10 @@ def create_app(
         application.state.database = resolved_database
         application.state.schema_ready = False
 
+        provider = None
         try:
+            provider = create_provider(resolved_settings)
+            application.state.http_tracer = tracer_for(provider)
             if not await schema_is_current(resolved_database.engine, alembic_config_path):
                 raise SchemaNotCurrentError(
                     "database schema does not match the current Alembic head"
@@ -65,7 +70,12 @@ def create_app(
         finally:
             application.state.schema_ready = False
             application.state.database = None
-            await resolved_database.dispose()
+            try:
+                await resolved_database.dispose()
+            finally:
+                application.state.http_tracer = None
+                if provider is not None:
+                    await asyncio.to_thread(provider.shutdown)
 
     application = FastAPI(
         title=settings.app_name if settings is not None else "FulfillFlow",
@@ -74,6 +84,8 @@ def create_app(
     )
     application.state.database = None
     application.state.schema_ready = False
+    application.state.http_tracer = None
+    application.add_middleware(DiagnosticMiddleware)
     application.state.clock = clock or SystemClock()
     application.state.service_transport = service_transport
     install_internal_auth(application)

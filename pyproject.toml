@@ -18,6 +18,8 @@ dependencies = [
     "tzdata>=2025.2; sys_platform == 'win32'",
     "uvicorn>=0.52.4,<1",
     "aio-pika==9.5.8",
+    "opentelemetry-sdk>=1.45.0,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0,<2",
 ]
 
 [dependency-groups]

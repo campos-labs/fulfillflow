@@ -59,6 +59,7 @@ def get_tracking(request: Request) -> TrackingClient:
         cast(Settings, request.app.state.settings),
         cast(UUID, request.state.request_id),
         trace_headers(request),
+        tracer=getattr(request.app.state, "http_tracer", None),
     )
 
 
