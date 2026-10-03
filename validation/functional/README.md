@@ -2,8 +2,17 @@
 
 ## 1. Estado, objetivo e escopo
 
-Revisão documental 3, de 2026-09-23. **Incrementos I e II concluídos;
-conjunto avaliado B encerrado com 12 casos PASS. C permanece pendente.** Esta revisão define o complemento focal da v1.2
+**Estado de fechamento, 03/10/2026:** B encerrado; C concluído com 54 casos,
+45 PASS e nove INCONCLUSIVE em C4. Resultado, interpretação e limites em
+[EVALUATION.md](EVALUATION.md); pacote acessível pelo [índice de evidências](evidence/c/README.md).
+Os comandos e estados de preparação abaixo são históricos; não executar novamente
+os launchers encerrados. O protocolo efetivamente congelado está em `preparation.zip`.
+O commit de fechamento não altera os instrumentos arquivados nem as aplicações.
+
+## Protocolo e histórico preservados
+
+Revisão documental 5, de 2026-10-02. **B encerrado com 12 casos PASS;
+incremento III iniciado pela preparação de C, sem execução avaliada liberada.** Esta revisão define o complemento focal da v1.2
 (escopo B) e os limites da expansão v1.0–v1.2 (escopo C). A expansão exige fechar
 os procedimentos específicos antes das execuções que integrarão seus resultados.
 
@@ -249,6 +258,268 @@ fixado. Preservar referências e registros originais; novas execuções comuns t
 identidade própria. Decidir continuidade por viabilidade, escopo e tempo disponível,
 nunca pela conveniência dos resultados. Resultados adversos não podem ser omitidos.
 
+### 6.1 Preparação C — contratos e recorte inicial
+
+A autorização de C permite preparar adaptadores e verificações focais. A execução
+avaliada depende de qualificar as fronteiras reais, conferir os runtimes próprios
+e selar o pacote; o inventário offline não libera execução. Não há carga nesta etapa.
+B permanece encerrado no commit `6fbca26`; seus scripts e evidências não serão
+alterados para servir de runner multiversão.
+
+Mapeamento conferido nos blobs das três referências da seção 2:
+
+| Referência | Admissão e efeito | Recuperação de trabalho persistido |
+| --- | --- | --- |
+| v1.0 | `tracking/service.py`: `_receive_authenticated` confirma A; `_process_inbox` confirma B com timeline/Notification/Shipment/Order | Uma reentrega idêntica retoma o inbox; não existe worker de recuperação |
+| v1.1 | `tracking/service.py`: admissão, comando persistido, HTTP Core e `_finalize` em transações locais | Reentrega conserva a identidade do comando; recibo Core evita repetir efeitos |
+| v1.2 | `tracking/service.py`: admissão/comando/outbox atômicos; handlers Core/Tracking processam inboxes técnicas | Workers retomam trabalho durável; reinício pelo coordenador não é supervisão automática |
+
+Os caminhos da tabela são relativos a `src/fulfillflow/`. O DESIGN v1.2 explicita
+que a admissão ainda consulta Carrier no Core. Portanto, RabbitMQ não implica
+aceitação de novos webhooks durante indisponibilidade completa do Core.
+
+Recorte para implementar e qualificar antes do selamento:
+
+- C1: duplicata **terminal**, após comprovar conclusão do primeiro evento. Igualdade
+  de bytes e identidade; preservar IDs, hashes, datas duráveis e efeitos. Duplicata
+  durante pendência não integra este recorte comum.
+- C2: depois de concluir o original, enviar o mesmo ID com descrição diferente e
+  assinatura válida para os novos bytes. Esperar 409 `EVENT_ID_PAYLOAD_CONFLICT`,
+  preservando o original. Não usar assinatura inválida como substituto.
+- C3: par controle/interrupção após SQL de efeitos e antes do commit local. v1.0:
+  transação B no processo HTTP; v1.1: transação de aplicação no processo HTTP Core;
+  v1.2: handler no worker Core. A posição exata dos adaptadores síncronos ainda
+  precisa ser qualificada; não substituir hard-kill por exceção simulada.
+- C4: PostgreSQL indisponível **antes da oferta** do evento, em instância exclusiva
+  do cenário. Verificar recusa operacional e ausência de admissão/efeitos após
+  restauração; então uma única nova entrega idêntica deve concluir. Esse caso
+  caracteriza dependência de armazenamento, não disponibilidade do broker nem
+  recuperação de trabalho aceito. O observador distingue erro HTTP de transporte.
+  Confirmar mapeamento de erro por versão antes de fixar o código esperado.
+- C5: jornada saudável com um evento Alpha DELIVERED, um Shipment e um Order;
+  confirmar inbox PROCESSED, timeline e Notification únicas, Shipment DELIVERED e
+  Order FULFILLED. Recibos/inboxes técnicas/outboxes são verificações adicionais
+  onde existem, sem atribuir falha à ausência desses mecanismos na v1.0.
+
+C1/C2 preparam e concluem seu próprio evento; não reutilizam o banco de C5. C3
+preserva um snapshot após o kill e antes de qualquer recuperação. Depois de
+reiniciar o processo, observar 60 s sem reentrega nas três versões. Na v1.0/v1.1,
+registrar a pendência contratual e fazer uma reentrega idêntica predefinida, com
+janela adicional de 60 s. Na v1.2, ausência de conclusão na primeira janela é FAIL;
+não introduzir reentrega para salvar o resultado. Registrar separadamente ações,
+respostas e conclusão; não usar o tempo adicional como ranking de desempenho.
+
+Proposta de sequência fixa: três rodadas; dentro de cada rodada C5, C1, C2, C3
+controle, C3 interrupção e C4; para cada caso v1.0, v1.1, v1.2. São 54 execuções
+independentes previstas. Não há randomização, inferência estatística ou promoção
+retrospectiva de resultados B. Limites iniciais: preparação 120 s, barreira 30 s,
+kill 15 s, rollback 30 s, observação 60 s por janela, encerramento/exportação 30 s,
+limite global 420 s por cenário; polling 100 ms. A qualificação poderá demonstrar
+necessidade de revisão **antes** do pacote avaliado, com motivo preservado.
+
+### 6.2 Entrega desta preparação e próxima qualificação
+
+`c_sources.py` confere tags/SHA e inventaria SHA-256 dos blobs de código, migrations,
+contrato e lock de cada referência, sem checkout, importação ou instalação. Rejeita
+referência divergente, arquivo obrigatório ausente e sobrescrita de saída. Os hashes
+Git não substituem os bytes do checkout nem a comprovação da origem dos imports.
+O checkout atual pode estar em outra branch: o inventário lê sempre o SHA fixado.
+
+Próxima etapa do III: preparar fontes e runtimes separados dentro desta pasta,
+com locks próprios; implementar adaptadores de HTTP/TCP, snapshot e barreira;
+qualificar os pontos síncronos e C4 em recursos novos. Antes de executar, conferir
+propriedade, prontidão, ambiente e identidades com rigor equivalente a B. Não
+importar módulos das três versões no mesmo interpretador. Não alterar o validador
+de B para aceitar outra aplicação nem transportar silenciosamente seu ambiente.
+
+A comparação usará invariantes comuns e ações de recuperação explícitas. Tracing
+HTTP da derivação v1.3 não será incorporado. Falha de consulta não decide estado de
+negócio; SQL independente e resultado HTTP serão registros separados. C não cobre
+indisponibilidade de todas as dependências, toda posição de crash ou confiabilidade
+geral. A indisponibilidade inicial de PostgreSQL em C4 também não preenche, sozinha,
+uma afirmação de recuperação após perda de conexão durante processamento.
+
+### 6.3 Runtimes e primeira qualificação SQL
+
+Fontes exportadas por `git archive` em `.artifacts/c-runtimes-01`, sem modificar
+checkouts históricos. Cada versão tem venv própria, criada com Python 3.13.1 e
+`uv sync --frozen --no-install-project`; o cache desta preparação fica na mesma
+pasta isolada. Não houve atualização dos ambientes anteriores. `c_runtime.py`
+recusa sobrescrita e verifica todos os bytes exportados, inclusive arquivos novos.
+
+`c_runtime_probe.py` conferiu versões instaladas contra o lock de cada referência,
+a cadeia de dependências de produção e a origem efetiva do import. Os três runtimes
+passaram; trocar deliberadamente a fonte de importação foi rejeitado nas três
+versões. As fontes preservaram 196, 302 e 343 arquivos, respectivamente. O inventário
+anterior de 378 blobs era um subconjunto de código/migrations/contratos, não a soma
+de todos os arquivos dos checkouts. Essa diferença de contagem não é alteração.
+
+`c_sync_barrier.py` instala hooks apenas no processo de teste, sem escrever nas
+fontes: após `TrackingRepository.save_inbox` para o evento PROCESSED na v1.0 e após
+`ShipmentReceipts.finalize` para o comando-alvo na v1.1. O identificador de seleção
+é o external_event_id nas duas versões; não confundir com UUID interno. A operação
+real executa antes do hook; falha original não produz barreira falsa. O hook faz
+flush sem commit e só sinaliza dentro de transação ativa. Restaura o método ao sair
+normalmente. O uso fica restrito ao filho instrumentado do cenário.
+
+Qualificação de desenvolvimento em `.artifacts/c-sql-qualification-01`:
+**um caso por versão síncrona, ambos aprovados**. Usaram PostgreSQL 18 real, banco
+novo por proprietário e fixtures da respectiva fonte congelada, com ASGI. Na
+barreira, Notification=1, Shipment=DELIVERED e Order=FULFILLED eram visíveis apenas
+na sessão local. Outra sessão via Notification=0, Shipment=PENDING e Order=CONFIRMED.
+Após liberação, os efeitos estavam confirmados. Os snapshots foram exportados antes
+da limpeza dos dados pelas fixtures. O container próprio encerrou; o volume foi
+preservado. Nenhum container histórico foi iniciado.
+
+Esses casos **não são C3 avaliado**: não houve kill, reinício, TCP ou conjunto comum.
+A v1.2 recebeu qualificação de runtime, não uma nova execução B ou C. Faltam a
+supervisão dos filhos, IPC, snapshots pós-kill, recuperação por versão e adaptadores
+dos demais cenários. Não inferir que os hooks estão integralmente qualificados
+somente por estes testes de visibilidade SQL.
+
+Validações desta etapa: 16 testes offline da ferramenta, dois testes SQL reais,
+três identidades de runtime e três rejeições de importação cruzada. Ruff/formatação,
+Mypy dos quatro módulos novos e diff check aprovados. O comando Mypy usa
+`--explicit-package-bases` e MYPYPATH para `src`; erros iniciais de resolução foram
+corrigidos no comando, sem suprimir regras. Aplicações, locks e arquivos B intactos;
+sem build, campanha ou CI nova. O próximo passo é qualificar o encerramento abrupto
+e a retomada, ainda como desenvolvimento, antes do pacote avaliado.
+
+### 6.4 Qualificação C3 com HTTP/TCP e interrupção real
+
+Conjunto de desenvolvimento `.artifacts/c-tcp-dev-02`: seis casos, todos PASS,
+com um controle e uma interrupção por referência. Não integra o conjunto avaliado.
+
+| Referência | Controle | Interrupção antes do commit | Recuperação observada |
+| --- | --- | --- | --- |
+| v1.0.0 | PASS, HTTP 200 | PASS | Reinício explícito e uma reentrega idêntica |
+| v1.1.0-rc.1 | PASS, HTTP 200 | PASS | Reinício explícito e uma reentrega idêntica |
+| v1.2.0-rc.1 | PASS, HTTP 202 | PASS | Reinício explícito do worker, sem reentrega |
+
+O PID informado pela barreira corresponde ao processo encerrado: API Core nas
+versões síncronas e worker Core na v1.2. Os efeitos locais existiam na transação
+aberta, mas não na sessão independente. Depois da saída do processo e antes do
+reinício, o snapshot permaneceu igual ao estado externo anterior à interrupção.
+Os controles liberaram a barreira e concluíram. A limpeza dos filhos tem registros
+separados da intervenção. PostgreSQL e RabbitMQ reais usaram recursos novos;
+ambos os containers próprios encerraram com saída zero e sem OOM, preservando volumes.
+
+Nas versões síncronas, a observação de 60 segundos após reinício permaneceu pendente;
+a ferramenta então enviou uma única reentrega identificada com os mesmos bytes.
+Na v1.2, houve apenas a admissão inicial HTTP 202, e o trabalho concluiu após reinício.
+`window_seconds=60` é o limite da observação, não a duração efetiva: o observador
+assíncrono terminou ao encontrar conclusão. Não estimar tempo de recuperação com
+esse campo. Clientes HTTP desativam retries e redirects; polling de prontidão não
+é reentrega de evento.
+
+A revisão offline confirmou uma timeline APPLIED, uma Notification SIMULATED,
+Shipment DELIVERED e Order FULFILLED, com identidades do inbox preservadas.
+Nas versões extraídas, o recibo corresponde à timeline. Na v1.2, as duas inboxes
+técnicas terminaram DONE e as duas outboxes SENT, cada uma com um registro.
+Não se infere fila vazia nem confirmação do ACK somente desses snapshots.
+
+Registros: [revisão](.artifacts/c-tcp-review-01/report.json),
+[checksums](.artifacts/c-tcp-review-01/checksums.sha256) e
+[execução original](.artifacts/c-tcp-dev-02/summary.json). O diretório original
+conserva os snapshots e a cópia exata dos módulos executados em `tool-package`.
+A tentativa anterior `c-tcp-dev-01` falhou na preparação do RabbitMQ, sem executar
+casos de aplicação; permanece preservada com sua análise e limitações de proveniência.
+
+Após a execução, a ferramenta passou a exigir explicitamente o tipo de marcador,
+registros técnicos não vazios e o status HTTP do controle; passou também a registrar
+a duração efetiva da observação. Os registros existentes satisfazem as novas
+asserções na revisão offline. Isso não constitui uma nova execução real com os
+módulos alterados. Foram aprovados 24 testes focais, Ruff, formatação e Mypy dos
+sete módulos C. Os três exports congelados e o ZIP de encerramento B foram
+reconferidos. Sem alteração de aplicação, dependências ou infraestrutura de produto,
+não se repetiram builds, migrations de produto, suíte integral ou CI.
+
+**Próximo limite de implementação:** completar e qualificar C1/C2/C4/C5 e a
+supervisão do conjunto antes de congelar/liberar o pacote avaliado. Inclui verificar
+propagação de saída não zero do coordenador e diagnósticos de preparação; o
+coordenador de desenvolvimento ainda não deve ser usado como launcher avaliado.
+O escopo previsto de 54 execuções permanece inalterado. Estes seis casos não
+estimam confiabilidade, não resolvem o 503 histórico e não exigiram correção da
+aplicação. DESIGN, RELEASE_PLAN, evidências B e referências históricas intactos.
+
+### 6.5 Qualificação de C1/C2/C5 e pendência concreta de C4
+
+`.artifacts/c-common-dev-01` contém nove casos de desenvolvimento aprovados:
+C5, C1 e C2 em cada uma das três referências. Cada caso preparou dados próprios.
+C5 concluiu a jornada; C1 retornou 200/DUPLICATE sem alterar o snapshot terminal;
+C2 retornou 409/EVENT_ID_PAYLOAD_CONFLICT para bytes diferentes autenticados com
+o mesmo identificador, preservando o original. A admissão inicial da v1.2 foi 202;
+a duplicata terminal retornou 200. Nenhum desses casos usa barreira SQL.
+
+C4 permanece **não qualificado**, com duas tentativas preservadas:
+
+- `c-outage-dev-01`: INVALID antes da oferta e da parada, porque a verificação
+  comparou a porta efetiva com HostPort vazio da configuração dinâmica Docker.
+  O ajuste passou a conferir configuração e vínculo efetivo enquanto ativo,
+  preservando a exigência de ID, label de propriedade e loopback.
+- `c-outage-dev-02`: uma oferta na v1.0 recebeu ReadTimeout do cliente. O container
+  foi restaurado, mas o snapshot SQL independente falhou com OperationalError.
+  Resultado INCONCLUSIVE; nenhuma versão seguinte iniciou. Não há estado final
+  de negócio confirmado nem causa específica estabelecida para a reconexão.
+
+Antes de repetir C4, fixar explicitamente a porta escolhida para o container novo,
+conferir o vínculo efetivo após reinício e observar o término da requisição no
+servidor antes de restaurar a dependência. Timeout do cliente não comprova ausência
+de efeitos nem fim do processamento. Isso é uma pendência do observador/procedimento;
+não sustenta defeito funcional das aplicações ou alteração de seus timeouts.
+Não promover as tentativas atuais a aprovação nem reduzir o escopo de C.
+
+O coordenador agora propaga saída não zero quando um filho falha; a parada na
+primeira tentativa C4 foi observada nos dois destinos. Ainda faltam qualificação
+completa de falhas do coordenador, critérios finais e selamento do conjunto avaliado.
+Os seis containers destes três pacotes encerraram com saída zero e sem OOM;
+volumes foram preservados. Os três exports e o ZIP de B foram reconferidos.
+
+[Revisão e limites](.artifacts/c-common-review-01/report.json) e
+[checksums](.artifacts/c-common-review-01/checksums.sha256). Validações finais:
+32 testes, zero skips; Ruff, formatação e Mypy dos oito módulos passaram. Sem CI,
+commit, push, carga ou alterações no produto. Os 54 casos avaliados continuam
+previstos e não liberados; os registros acima são exclusivamente de desenvolvimento.
+
+### 6.6 C4: término pendente observado e decisão antes da avaliação
+
+A qualificação `c-outage-dev-03` usa portas explicitamente alocadas, nova conferência
+de identidade/porta após transição e prontidão SQL autenticada com o endereço e
+credenciais de cada serviço. Um wrapper ASGI exclusivo da ferramenta observa
+entrada/saída dos handlers, incluindo cada API distribuída, sem modificar as fontes
+congeladas. O endpoint de observação exige token, não acessa SQL nem entra na contagem.
+A instrumentação não infere término a partir de resposta iniciada ou desconexão.
+
+**Resultado: INCONCLUSIVE na v1.0.** A única oferta recebeu ReadTimeout no cliente
+(limite de 20 s). Após mais uma janela limitada de 60 s, o observador Core ainda
+registrava `active=1`, `started=5`, `finished=4`. O `last_status=201` pertencia à
+requisição anterior concluída, não ao webhook pendente. Não houve restauração,
+segunda entrega ou execução das versões seguintes. A limpeza encerrou os processos
+e os dois containers próprios; containers com saída zero e sem OOM, volumes mantidos.
+
+Isso demonstra que o término não ocorreu na janela observada; não identifica
+por que o handler permaneceu ativo, nem demonstra deadlock, perda ou efeitos de
+negócio. O caminho novo de restauração/autenticação não foi alcançado nesta tentativa
+e ainda não recebeu qualificação real. Não ampliar prazos nem alterar timeouts da
+aplicação para converter este caso em aprovação.
+
+**Decisão necessária antes de nova execução C4:** o procedimento vigente exige
+recusa concluída antes da restauração. A observação encontrada não satisfaz essa
+premissa. Uma revisão possível, ainda não aprovada, é registrar a requisição ativa,
+restaurar em etapa delimitada sem segunda entrega, observar término/estado durável
+e somente então decidir a reentrega prevista. Isso altera a sequência/critério de
+C4 e deve ser fixado antes da avaliação, preservando todas as tentativas anteriores.
+Os 54 casos continuam previstos; nenhuma redução de escopo ou liberação foi feita.
+
+[Revisão](.artifacts/c-outage-review-03/report.json),
+[checksums](.artifacts/c-outage-review-03/checksums.sha256) e
+[observação original](.artifacts/c-outage-dev-03/v1.0.0-unavailable/request-completion.json).
+41 testes focais passaram sem skips; Ruff, formatação e Mypy passaram. A supervisão
+foi testada com falha de filho e timeout simulados, sem próximo caso e com resumo
+preservado. Falhas de encerramento também impedem aprovação; o erro primário não
+é substituído. Não houve nova CI, commit ou push. B, exports e documentos raiz
+permanecem intactos. Nenhuma interpretação nova do 503 histórico.
+
 ## 7. Registros, classificação e falhas da ferramenta
 
 Cada execução futura terá destino novo e inventário de arquivos. Registrar protocolo,
@@ -266,6 +537,8 @@ Separar validade da execução e resultado funcional:
 - `FAIL`: intervenção/precondições comprovadas, mas invariante violado ou conclusão
   não observada no limite previsto; não extrapolar para impossibilidade permanente.
 - `INCONCLUSIVE`: não é possível atribuir o desfecho à aplicação ou à ferramenta.
+  Exceção explícita C4 (§6.9): pendência identificada ao limite é inconclusiva quanto
+  ao resultado terminal, mesmo com procedimento observacional verificado.
 - `INVALID`: fonte incorreta, fronteira não atingida, dependência de preparação
   ausente ou falha de instrumentação que impede executar o caso.
 - `NOT_RUN` / `NOT_APPLICABLE`: sem execução / sem correspondência prevista,
@@ -515,4 +788,181 @@ conferência dos hashes após a cópia.
 O validador exige a aplicação no SHA congelado da seção 2. Após este commit,
 o checkout da ferramenta deixa de ser esse checkout de aplicação; a recusa do
 launcher neste diretório é esperada. Uma futura execução exigirá fonte congelada
-separada e pacote novo, sem relaxar essa validação. C permanece não liberado.
+separada e pacote novo, sem relaxar essa validação. C está em preparação; execução avaliada permanece não liberada.
+
+
+### 6.7 Revisão prévia autorizada de C4 — indisponibilidade temporária
+
+Antes de nova qualificação, fica substituída a exigência de recusa concluída antes
+da restauração. A indisponibilidade começa antes da oferta; o comando de restauração
+inicia em oferta +30 s nas três versões, independentemente da resposta do cliente
+(timeout HTTP preservado em 20 s). Registrar o atraso real de agendamento; início
+com desvio superior a 2 s invalida a qualificação. Prontidão/SQL precedem a observação
+pós-restauração limitada a 60 s. Não alterar timeouts das aplicações.
+
+Atribuir a requisição original por X-Request-ID UUID próprio e seus registros ASGI
+por processo, preservando correlação nas chamadas internas existentes. Contadores
+agregados complementam a observação; último status isolado não decide resultado.
+Workers v1.2 estarão prontos antes da interrupção, sem reinício corretivo do worker.
+
+Desfechos predefinidos: término identificado e negócio concluído dispensam reentrega;
+término identificado sem admissão/efeitos autoriza uma única reentrega idêntica com
+janela adicional de 60 s; requisição/trabalho pendente ao limite fica INCONCLUSIVE,
+sem reenvio; estado não verificável também fica INCONCLUSIVE. Os limites não estimam
+capacidade nem confiabilidade. A observação inclui prontidão SQL autenticada pelo
+mesmo endereço/role de cada aplicação e verificação da porta após restauração.
+Manter 54 execuções previstas, tentativas anteriores e nenhuma aprovação retroativa.
+
+
+### 6.8 Resultado da revisão C4 — retorno do banco confirmado
+
+`c-outage-dev-04` encerrou INCONCLUSIVE na primeira versão, sem iniciar v1.1/v1.2.
+A restauração começou em 30,0128835 s desde a oferta; a porta foi reconferida e
+SELECT autenticado com database/role Core passou. A consulta independente funcionou.
+Após a janela pós-prontidão de 60 s, o UUID da requisição original constava ativo
+no processo API, `finished=false`, sem status de resposta. Não havia inbox,
+timeline ou Notification no snapshot; Shipment PENDING e Order CONFIRMED.
+Houve apenas uma oferta, ReadTimeout no cliente e nenhuma reentrega.
+
+Esse achado substitui a incerteza sobre conectividade da tentativa 02 por uma
+observação mais precisa nesta tentativa: banco acessível e handler ainda pendente.
+Não estabelece causa interna, deadlock ou comportamento eventual, nem relação com
+503 histórico. Os processos foram encerrados na limpeza; não houve reinício para
+forçar recuperação. Dois containers encerrados com saída zero, sem OOM.
+
+[Revisão](.artifacts/c-outage-review-04/report.json) e
+[checksums](.artifacts/c-outage-review-04/checksums.sha256). 43 testes focais,
+Ruff/formatação/Mypy aprovados. Fontes congeladas e ZIP B reconferidos.
+C1/C2/C3/C5 qualificados em desenvolvimento; C4 impede liberar o conjunto avaliado.
+Nenhuma redução das 54 execuções, mudança de aplicação, commit ou push.
+Não repetir o mesmo procedimento para buscar aprovação. Prosseguir a qualificações
+independentes de C4 nas outras versões após este desfecho exige explicitar essa
+regra antes da execução; a sequência atual manteve parada no primeiro não zero.
+
+
+### 6.9 Qualificações independentes C4 restantes — regra prévia
+
+Autorizadas uma qualificação v1.1 e uma v1.2 em destinos e recursos novos, sem
+repetir v1.0. A exceção à parada restringe-se à revisão entre essas qualificações:
+resultado `pending_at_limit_no_redelivery` com intervenção/SQL/observador comprovados
+pode ser seguido pela outra versão após encerramento verificado. Erro da ferramenta,
+identidade, observação ou limpeza impede avanço. O coordenador continua não zero
+para caso inconclusivo; não haverá repetição automática ou promoção a PASS.
+
+C4 é exceção explícita à regra geral de conclusão no prazo: pendência identificada
+no limite predefinido é INCONCLUSIVE quanto ao resultado terminal, mesmo quando o
+procedimento observacional foi executado corretamente. Violação demonstrada de
+invariante é FAIL; ausência de evidência/precondição impede aprovação. Qualificação
+do procedimento não exige desfecho favorável da aplicação. Classificações históricas
+permanecem intactas. O conjunto avaliado de 54 casos continua não liberado e sua
+regra geral de parada não é alterada por esta exceção de desenvolvimento.
+
+30 s identifica início programado do comando de restauração. Prontidão Docker,
+SELECT autenticado e observação posterior são etapas distintas; não atribuir a esse
+instante disponibilidade efetiva. Não inferir ausência de pressão no host a partir
+da ausência de OOM em containers; não atribuir pendência a aplicações concorrentes
+sem evidência. Nenhuma configuração de energia ou recursos será alterada.
+
+
+### 6.10 Matriz C4 após qualificações independentes
+
+| Referência | Cliente | Requisição correlacionada pendente | SQL após retorno | Classificação |
+| --- | --- | --- | --- | --- |
+| v1.0.0 | ReadTimeout | Webhook público | Autenticado, aprovado | INCONCLUSIVE |
+| v1.1.0-rc.1 | HTTP 503 | Chamada interna Core; público encerrado | Autenticado, aprovado | INCONCLUSIVE |
+| v1.2.0-rc.1 | HTTP 503 | Chamada interna Core; público encerrado | Autenticado, aprovado | INCONCLUSIVE |
+
+Um caso por versão com o procedimento revisado; v1.0 não foi repetida. Em todas,
+restauração iniciada entre oferta +30 e +32 s; SELECT autenticado comprovado depois.
+No limite pós-prontidão, os snapshots continham Shipment PENDING, Order CONFIRMED,
+sem inbox de negócio, timeline ou Notification; versões extraídas sem recibos e
+v1.2 sem mensagens técnicas. Nenhuma reentrega. Não confundir snapshot observado
+com garantia sobre o futuro nem HTTP 503 público com término de todo processamento.
+
+A observação de pendência foi qualificada nas três versões; não há aprovação da
+recuperação da aplicação em C4. Os caminhos de conclusão espontânea e reentrega
+condicional não foram exercitados por estas indisponibilidades reais. O cenário
+precede a admissão durável; não contradiz a recuperação pós-ACK de B/C3 e não testa
+essa garantia. A causa da pendência permanece desconhecida, inclusive eventual
+participação de driver/transporte/ambiente. Não relacionar ao 503 histórico.
+
+A exceção de continuidade da qualificação foi usada somente após revisar o
+resultado v1.1 e confirmar encerramento/isolamento antes da v1.2. Não houve falha
+de limpeza: quatro containers novos parados, saída zero e sem OOM. Antes de ambas,
+nenhum container concorrente ativo. Isso não mede pressão global do notebook.
+
+[Relatório consolidado](.artifacts/c-outage-matrix-review-01/report.json) e
+[checksums](.artifacts/c-outage-matrix-review-01/checksums.sha256). 44 testes focais,
+Ruff/formatação/Mypy aprovados; fontes e ZIP B íntegros. Sem commit/push/CI nova.
+Próximo trabalho: testes offline dos desfechos condicionais e empacotamento do
+coordenador avaliado. A regra prospectiva para C4 inconclusivo precisa estar fixada
+antes da liberação; não promover a PASS nem alterar classificações históricas.
+Manter 54 execuções previstas, ainda não liberadas, sem repetir C4 inalterado.
+
+
+### 6.11 Coordenador avaliado — preparação, sem liberação
+
+`c_evaluated.py` fixa 54 destinos: três rodadas, C5/C1/C2/C3 controle/C3 kill/C4,
+v1.0/v1.1/v1.2 nessa ordem. Cada caso usa novos recursos e encerra antes do próximo.
+O pacote contém hashes da ferramenta, referências e inventários das fontes. Recusa
+sobrescrita e divergências; exige arquivo de liberação separado vinculado ao hash
+do manifesto. Esta preparação não cria esse arquivo nem autoriza execução.
+
+A continuidade aprovada para avaliação preserva INCONCLUSIVE apenas em C4
+`pending_at_limit_no_redelivery`, no recorte já observado: uma oferta, identidade
+correlacionada, requisição pendente, nenhuma admissão/efeito/mensagem durável,
+restauração no prazo, SQL autenticado e encerramento comprovados. Outros desfechos
+inconclusivos, efeitos pendentes não qualificados, FAIL, INVALID e erros bloqueiam.
+Não exigir 54 aprovações: uma matriz completa pode conter inconclusivos identificados.
+Essa regra prospectiva não altera classificações ou launchers históricos.
+
+`c_policy.py` exige result.json e evidências específicas; código de saída sozinho
+não autoriza continuidade. Divergência de versão, falta de snapshot, correlação,
+prontidão, limpeza ou oferta adicional bloqueia. PASS requer saída zero; o C4
+previsto conserva saída 2 e classificação INCONCLUSIVE no registro individual.
+
+`c_process.py` usa Job Object Windows, com início do módulo retido até associar o
+filho ao grupo. Descendentes herdam o grupo. Timeout externo de 480 s encerra o grupo;
+a confirmação de zero processos ativos é limitada a 10 s. Limpeza forçada, timeout
+ou falha de confirmação bloqueia próximo caso. A contabilidade recebe até 1 s para
+refletir saída normal. Fechamento do handle termina integrantes remanescentes.
+O teste nativo criou um descendente real e verificou encerramento por timeout;
+outro preservou saída 2 normal. Não é teste de recuperação da aplicação.
+
+Validação: 62 testes focais, sem skips, Ruff/formatação e Mypy de 12 módulos.
+Os testes offline usam cópias temporárias de registros existentes para rejeitar
+evidências divergentes; não são novas execuções funcionais. Ordenação, continuidade
+com nove inconclusivos simulados, recusa sem liberação, divergência de ferramenta
+e parada na primeira falha foram verificadas. B e aplicações permanecem intactos.
+Não houve nova CI, commit, push, carga ou repetição C4. O pacote preparado ainda
+exige revisão final de prontidão/proveniência e liberação rastreável antes de uso.
+
+
+### 6.12 Revisão final do pacote sucessor
+
+O supervisor resolve o interpretador nativo dos três venvs congelados antes de
+iniciar o caso. A consulta de identidade não executa aplicação. O processo nativo
+recebe o ambiente virtual via `__PYVENV_LAUNCHER__`, aguarda GO e somente executa o
+módulo após associação ao Job Object. PID e prefixo observados devem corresponder
+aos esperados. Isso elimina a janela do redirecionador neste caminho qualificado;
+não representa descoberta da causa de qualquer falha histórica.
+
+Seis testes nativos, pelos três venvs reais, verificaram timeout com descendente e
+saída não zero. Três consultas de proveniência pelo mesmo supervisor confirmaram
+origem dos módulos e dependências congeladas. O launcher PowerShell real recusou
+pacote sem liberação a partir de outro diretório e com caminho contendo espaços.
+A rodada afetada teve 24 testes aprovados; após o reforço final da política,
+20 testes de política/coordenador passaram. Contagens sobrepostas, não somáveis.
+Ruff, formatação e Mypy pertinentes aprovados. C4 não foi repetido.
+
+PASS exige snapshot terminal e identidades coerentes, além da saída zero e limpeza.
+A exceção C4 exige os registros específicos de intervenção, observação e ausência
+de efeitos descritos acima. Não se aceita erro de transporte genérico como prova
+de recusa ou término. Os demais resultados interrompem sem substituição.
+
+O pacote sucessor copia este protocolo integral e vincula seu SHA-256 ao manifesto,
+junto dos scripts Python/PowerShell e inventários das fontes. Alterar protocolo,
+ferramenta ou fonte invalida a identidade preparada. O pacote anterior permanece
+preservado, sem liberação. O sucessor é uma proposta de liberação manual; a execução
+exige registro separado associado ao hash exato do manifesto. Não iniciar as 54
+avaliações antes dessa liberação. Não houve commit, push ou avaliação nesta revisão.

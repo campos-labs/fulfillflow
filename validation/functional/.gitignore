@@ -6,3 +6,5 @@ __pycache__/
 .test-tmp*/
 .tmp/
 .artifacts/
+
+.pytest-c/

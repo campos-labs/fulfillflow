@@ -1,0 +1,16 @@
+{
+  "scope": "Offline distribution closure; no application scenario rerun",
+  "tests": 3,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "ruff": "PASS; validation/functional",
+  "format": "PASS; 44 Python files",
+  "mypy": "PASS; two new distribution helpers",
+  "zip_rebuild": "Both ZIPs and packages.json byte-identical",
+  "original_files_rechecked": 1549,
+  "executed_tool_hashes_unchanged": true,
+  "root_documents_unchanged": true,
+  "ci_scope": "Existing application workflow; it does not collect validation/functional/tests",
+  "native_supervision": "Prior Windows records included in preparation.zip; not repeated at closure"
+}
