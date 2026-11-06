@@ -143,6 +143,12 @@ class Settings(DatabaseSettings):
 
         if not self.internal_api_secret.get_secret_value():
             raise ValueError("INTERNAL_API_SECRET must not be empty")
+        if (
+            self.service_role == "core"
+            and self.internal_api_secret.get_secret_value()
+            == self.notifications_api_secret.get_secret_value()
+        ):
+            raise ValueError("Core internal and Notifications API secrets must be distinct")
         if self.service_role == "core" and not self.notifications_api_secret.get_secret_value():
             raise ValueError("NOTIFICATIONS_API_SECRET must not be empty for Core")
 

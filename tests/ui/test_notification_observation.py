@@ -105,3 +105,20 @@ async def test_notification_observation_failure_is_503_fragment_not_empty_succes
             assert "FULFILLED" in dashboard.text
         finally:
             ui_application.state.notifications_client = original
+
+
+async def test_legacy_without_receipt_remains_readable_without_progress_link(
+    ui_client,
+    postgres_notifications_database,
+):
+    from tests.integration.test_notifications_owned import import_records, legacy_record
+
+    record = legacy_record()
+    await import_records(postgres_notifications_database, record)
+    page = await ui_client.get(f"/notifications/{record.id}")
+    assert page.status_code == 200
+    assert record.message in page.text
+    assert "no historical receipt exists" in page.text
+    assert "View origin and notification progress" not in page.text
+    progress = await ui_client.get(f"/api/v1/notification-status/{record.tracking_event_id}")
+    assert progress.status_code == 404

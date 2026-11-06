@@ -47,7 +47,7 @@ from fulfillflow.web.forms import (
     validate_shipment_form,
     validation_messages,
 )
-from fulfillflow.web.queries import get_dashboard, get_order_detail
+from fulfillflow.web.queries import get_dashboard, get_order_detail, has_notification_receipt
 from fulfillflow.web.responses import (
     redirect_with_flash,
     render_page,
@@ -554,6 +554,7 @@ async def list_notifications(
 async def notification_detail(
     request: Request,
     notification_id: UUID,
+    session: SessionDependency,
 ) -> Response:
     notification = await get_notifications(request).get(notification_id)
     return render_page(
@@ -561,7 +562,10 @@ async def notification_detail(
         "content/notification_detail.html",
         title="Notification simulation",
         section="notifications",
-        context={"notification": notification},
+        context={
+            "notification": notification,
+            "has_progress": await has_notification_receipt(session, notification.tracking_event_id),
+        },
     )
 
 

@@ -16,6 +16,7 @@ from fulfillflow.orders.public import OrderService, OrdersPublic, OrderStatus
 from fulfillflow.orders.schemas import OrderFilters, OrderRead
 from fulfillflow.shared import Clock
 from fulfillflow.shipments.public import (
+    ShipmentReceipts,
     ShipmentService,
     ShipmentsPublic,
     ShipmentStatus,
@@ -132,3 +133,9 @@ async def get_dashboard(
         notification_counts=notification_counts,
         recent_events=recent.items,
     )
+
+
+async def has_notification_receipt(session: AsyncSession, event_id: UUID) -> bool:
+    """Only offer Core progress navigation when its required receipt exists."""
+    async with session.begin():
+        return await ShipmentReceipts(session).get(event_id) is not None

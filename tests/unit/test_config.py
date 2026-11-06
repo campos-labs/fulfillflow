@@ -191,3 +191,12 @@ def test_database_factory_uses_psycopg_async_engine(settings: Settings) -> None:
 
     assert database.engine.url.drivername == "postgresql+psycopg"
     assert database.engine.url.database == "fulfillflow_test"
+
+
+@pytest.mark.parametrize("environment", ["test", "local"])
+def test_core_rejects_shared_internal_credentials(settings: Settings, environment: str) -> None:
+    values = settings.model_dump() | {"app_env": environment}
+    values["session_secret"] = "b36a7f80c2144d4e937d80a3146e2f92"
+    values["notifications_api_secret"] = values["internal_api_secret"]
+    with pytest.raises(ValidationError, match="must be distinct"):
+        Settings.model_validate(values)
