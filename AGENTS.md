@@ -2,10 +2,10 @@
 
 ## Authority and scope
 
-- Work only on the user-authorized v1.3 scope or increment. DESIGN defines asynchronous Notifications while preserving asynchronous Tracking; RELEASE_PLAN records implementation status. Planning does not authorize implementation. Preserve v1.0.0, v1.1.0-rc.1, v1.2.0-rc.1 and all frozen evidence.
+- Work only on the authorized v2.0 issue. DESIGN defines the approved target, not implementation status. Issues and the v2.0 milestone track delivery; RELEASE_PLAN is historical v1.3 material. Preserve all 1.x tags, commits and evidence.
 - Read the relevant sections of `DESIGN.md` before changing architecture, domain behavior, persistence, HTTP contracts, security, observability, seeds, or benchmarks.
 - For a targeted task, locate the applicable headings and avoid loading unrelated DESIGN sections into context.
-- Read inherited contracts from the frozen commit linked in DESIGN, using `git show <commit>:DESIGN.md` when needed. Do not load or copy the entire historical document for each task.
+- Read inherited 1.x contracts from `045e1ca8629409b6abdf2829ef5c93d14cfb60d9:DESIGN.md` using `git show` when needed. Explicit v2.0 changes in DESIGN take precedence. Do not load or copy the entire historical document for each task.
 - `DESIGN.md` is authoritative for product and architecture. This file defines how to work in the repository.
 - Do not infer requirements from hypothetical later architectures. Build the simplest implementation that fully satisfies the current contract.
 - If a request conflicts with `DESIGN.md`, surface the conflict before implementing it. Do not silently diverge.
@@ -19,11 +19,13 @@
 5. Run focused checks first, then the broadest relevant validation available.
 6. Review the final diff for scope, secrets, accidental generated files, and DESIGN drift.
 
-For v1.3 implementation requests, follow the executable increments in `RELEASE_PLAN.md`, with tests from the first increment. The plan does not replace DESIGN or authorize execution beyond the user's current request. Resolve routine implementation choices autonomously; ask only for concrete contract or scope decisions.
+For v2.0 requests, follow the assigned issue and its dependencies, with tests from the first behavior change. Do not implement the entire target in the bootstrap task. Resolve routine choices autonomously; ask only for concrete contract or scope decisions.
 
 Do not attempt the entire release in one undifferentiated change. Do not create empty placeholder files merely to reproduce the planned tree.
 
 ## Approved stack
+
+- OIDC with Keycloak as local reference; sessions and permissions in Core PostgreSQL, as defined in DESIGN. Browser automation for real OIDC tests is permitted when required by the assigned issue.
 
 - Python 3.13, FastAPI, Uvicorn, Pydantic v2 and pydantic-settings.
 - SQLAlchemy 2.x async with psycopg 3, PostgreSQL 18 and Alembic.
@@ -42,7 +44,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 ## Architecture boundaries
 
 - Core, Tracking and Notifications have separate databases and roles in one PostgreSQL instance. Each API and worker accesses only its owning service's database. Retained Core Notification metadata is an offline archive, never a runtime writer, reader or fallback.
-- Business modules are `orders`, `shipments`, `carriers`, `tracking` and `notifications`.
+- Business modules include `orders`, `shipments`, `carriers`, `tracking`, `notifications` and the v2.0 `occurrences` module in Core. Access/session logic is separate from occurrence business rules.
 - `shared` contains only stable technical primitives such as clock, IDs and pagination. It contains no business rules and depends on no business module or infrastructure framework.
 - Modules within a service communicate through Python public interfaces. Cross-service commands/results/events use the AMQP contracts in DESIGN; forwarding and queries use the documented authenticated HTTP contracts. Do not import another service's business implementation or persistence.
 - A module may access only its own ORM models and repositories.
@@ -93,13 +95,13 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 
 ## API, UI and security
 
-- Keep the public API under `/api/v1`. Preserve v1.2 durable webhook acceptance with 202 and result polling. The v1.3 Notifications queries/progress and eventual simulation follow DESIGN and must ship with clients/tests; preserve other frozen routes and semantics.
+- Keep `/api/v1` and inherited business semantics. The v2.0 session requirement and occurrence routes follow DESIGN and must ship with adapted clients and tests.
 - Use dedicated Pydantic schemas for create, read and list operations.
 - Return documented `application/problem+json` errors through global handlers, including framework validation, 404 and 405 responses.
 - Echo a valid `X-Request-ID` or generate a UUID; preserve the original correlation in durable messages and controlled logs. Do not claim tracing is implemented when it remains pending.
 - Render HTML server-side. HTMX handlers call the same application services as the API; forwarding and pending/result views follow DESIGN, without business rules in templates or routers.
 - Keep Bootstrap and HTMX assets local and compatible with the Content Security Policy.
-- Mutating HTML forms require CSRF protection. JSON APIs and carrier webhooks remain stateless and cookie-free.
+- Operational pages and JSON APIs use the user session; every cookie-authenticated mutation requires CSRF. Carrier webhooks remain HMAC-authenticated and cookie-free. Implement this target together with clients and tests; never bypass authentication for demonstration tools.
 - Keep CORS disabled by default. Do not add application rate limiting to the controlled comparison environment.
 - Never expose secrets, full signatures, raw exception traces or unsanitized external content.
 
@@ -133,7 +135,7 @@ Rules:
 - Concurrency tests must use independent sessions/connections and verify database outcomes, not only mocked calls.
 - Cover state transitions, both carrier adapters, raw-byte HMAC, idempotency, retry, lock ordering and Order completion as specified in DESIGN.
 - Maintain at least 80% global coverage and complete coverage of transition rules, adapters, HMAC and idempotency.
-- Do not call real carrier, email, cloud or other external services from tests.
+- Do not call real carrier, email or cloud services from tests. OIDC integration tests use a real isolated local provider with synthetic accounts.
 
 ## Commands
 
@@ -175,7 +177,7 @@ For a completed cross-cutting change, run Ruff, formatting, Mypy, Import Linter,
 
 Do not add any of the following:
 
-- user authentication, SSO, OAuth, RBAC or multitenancy;
+- multitenancy or authentication/authorization mechanisms beyond the OIDC, local sessions and roles authorized in DESIGN;
 - catalog, inventory, warehouse, payment, checkout, billing or ERP integration;
 - real carrier, email, SMS, WhatsApp or push integrations;
 - Kafka, Redis, Celery, Taskiq, additional brokers or workers outside the service-owned flows authorized in DESIGN;

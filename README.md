@@ -1,13 +1,19 @@
 # FulfillFlow
 
-**v1.3 — Notifications assíncrono (incrementos I–IV)**,
-na branch `feature/v1.3-notifications-async`, baseada em `v1.2.0-rc.1`
-(`9b445f9b5466cd302c89f1deed7a9c051cb397ae`). O [DESIGN](DESIGN.md) define o
-alvo e o [RELEASE_PLAN](RELEASE_PLAN.md) registra o plano e seu estado.
-O código e os comandos abaixo executam `v1.3.0.dev0`, com Tracking e Notifications
-assíncronos, recuperação operacional e UI com observação limitada. O desenvolvimento
-para no aceite funcional do IV, antes de comparação extensa ou publicação. As referências v1.0/v1.1/v1.2
-e suas evidências permanecem congeladas; campanhas de carga estão suspensas.
+FulfillFlow acompanha pedidos, remessas e eventos de transportadoras, com processamento
+assíncrono e notificações simuladas. A arquitetura-alvo da **v2.0** acrescenta uma
+central autenticada de ocorrências e está definida no [DESIGN](DESIGN.md).
+
+O código executável desta preparação corresponde à `v1.3.0-rc.1` (`9e3a135`)
+com a extensão HTTP de observabilidade (`045e1ca`). Login OIDC, permissões e
+ocorrências ainda serão implementados pelas issues do [milestone v2.0](https://github.com/campos-labs/fulfillflow/milestones).
+O planejamento vigente fica nas issues; o [RELEASE_PLAN](RELEASE_PLAN.md) preserva
+somente o registro histórico da v1.3. A infraestrutura possui [repositório próprio](https://github.com/campos-labs/fulfillflow-infra)
+e planejamento independente.
+
+Para executar esta base sem reutilizar volumes históricos, use um projeto exclusivo:
+`docker compose -p fulfillflow-v2-dev up --build --detach --wait`.
+Os comandos e a demonstração abaixo descrevem a base executável 1.3.
 
 Core mantém Orders, Shipments e Carriers. Tracking mantém HMAC,
 adapters Alpha/Beta, inbox e timeline. Notifications possui os registros e a
@@ -35,10 +41,11 @@ no banco não demonstra exactly-once em um provedor externo.
 O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
 
 ```powershell
-docker compose up --build --detach --wait
+docker compose -p fulfillflow-v2-dev up --build --detach --wait
 ```
 
-O projeto padrão `fulfillflow-v13` cria volumes PostgreSQL e RabbitMQ novos.
+O Compose conserva o nome padrão histórico `fulfillflow-v13`. Nesta linha, utilize
+`-p fulfillflow-v2-dev` em todos os comandos para separar os volumes de desenvolvimento.
 PostgreSQL inicializa `fulfillflow_core`, `fulfillflow_tracking` e
 `fulfillflow_notifications`, com roles sem CONNECT ao banco alheio. Os jobs
 `migrate-core`, `migrate-tracking` e `migrate-notifications` aplicam
@@ -517,8 +524,8 @@ uv run pytest tests/e2e/test_notification_cutover_cli.py -q
 ## Documentação
 
 - [Demonstração funcional v1.3](docs/DEMO.md): reprodução, interrupções reais, retomada e capturas; referências históricas preservadas.
-- [DESIGN](DESIGN.md): contratos v1.3 e referências preservadas.
-- [RELEASE_PLAN](RELEASE_PLAN.md): incrementos, validação e limites da implementação v1.3.
+- [DESIGN](DESIGN.md): arquitetura-alvo aprovada da v2.0.
+- [RELEASE_PLAN](RELEASE_PLAN.md): registro histórico congelado da v1.3; não orienta incrementos da v2.0.
 - [Ferramenta de benchmark](benchmarks/README.md): datasets, validação e artefatos.
 - [Revisão da v1.1](benchmarks/V11_REVIEW.md): síntese e índice das evidências.
 - [Baseline v1.0 publicada](benchmarks/baselines/v1.0/README.md): referência histórica.
@@ -552,4 +559,4 @@ Configure `OTEL_SERVICE_NAME` distinto por serviço e `OTEL_EXPORTER_OTLP_ENDPOI
 como URL base do receptor OTLP HTTP (sem `/v1/traces`). O sampler suportado é
 `parentbased_traceidratio`; `OTEL_TRACES_SAMPLER_ARG=1` captura o diagnóstico integral.
 Desabilitado por padrão. Não há spans SQL, AMQP, workers ou Notifications.
-Não alterar referências históricas para habilitá-lo. Veja [o contrato](DESIGN.md#81-exploração-http-isolada-após-a-referência-funcional).
+Não alterar referências históricas para habilitá-lo. Veja [o contrato](https://github.com/campos-labs/fulfillflow/blob/045e1ca8629409b6abdf2829ef5c93d14cfb60d9/DESIGN.md#81-exploração-http-isolada-após-a-referência-funcional).
