@@ -453,6 +453,7 @@ Locust ou campanha. Após os gates, remova somente a infraestrutura dedicada:
 `docker compose -p fulfillflow-v2-tests -f compose.test.yaml down --volumes`.
 
 ```powershell
+uv sync --frozen --all-groups
 uv run pytest tests/unit tests/api -q
 uv run pytest tests/unit/test_carrier_simulator.py -q
 uv run pytest tests/ui -q

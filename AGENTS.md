@@ -142,7 +142,7 @@ Rules:
 Use repository commands directly; the normal workflow must remain usable from PowerShell without Make, Bash or WSL.
 
 ```text
-uv sync --frozen
+uv sync --frozen --all-groups
 uv run pytest tests/unit -q
 uv run pytest
 uv run pytest --cov=fulfillflow --cov-report=term-missing
