@@ -58,7 +58,7 @@ criado sem hostname fixo, siga o README congelado. Para inspecionar a identidade
 de um broker do projeto atual, registre o valor em `.env`:
 
 ```powershell
-$env:RABBITMQ_HOSTNAME = docker inspect (docker compose ps -a -q broker) --format '{{.Config.Hostname}}'
+$env:RABBITMQ_HOSTNAME = docker inspect (docker compose -p fulfillflow-v2-dev ps -a -q broker) --format '{{.Config.Hostname}}'
 ```
 
 Use o mesmo projeto (`-p`, quando aplicável) nessa inspeção e na subida. Não troque
@@ -92,19 +92,19 @@ Invoke-WebRequest http://127.0.0.1:8000/
 
 ## Operação local do transporte
 
-Execute no projeto v1.3 descartável (acrescente `-p` se usar outro nome).
+Execute no projeto de desenvolvimento descartável `fulfillflow-v2-dev`.
 Cada CLI acessa somente o banco do próprio serviço e exige schema atual.
 Não há endpoint administrativo público.
 
 ```powershell
-docker compose exec -T core-worker python -m fulfillflow.core.operations healthcheck
-docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations healthcheck
-docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose
-docker compose exec -T tracking-worker python -m fulfillflow.tracking.operations diagnose
-docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations healthcheck
-docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose
-docker compose exec -T core-worker python -m fulfillflow.core.operations diagnose --flow shipment.status_changed.v1
-docker compose exec -T broker rabbitmqctl list_queues -p fulfillflow-v13 name messages_ready messages_unacknowledged
+docker compose -p fulfillflow-v2-dev exec -T core-worker python -m fulfillflow.core.operations healthcheck
+docker compose -p fulfillflow-v2-dev exec -T tracking-worker python -m fulfillflow.tracking.operations healthcheck
+docker compose -p fulfillflow-v2-dev exec -T core-worker python -m fulfillflow.core.operations diagnose
+docker compose -p fulfillflow-v2-dev exec -T tracking-worker python -m fulfillflow.tracking.operations diagnose
+docker compose -p fulfillflow-v2-dev exec -T notifications-worker python -m fulfillflow.notifications.operations healthcheck
+docker compose -p fulfillflow-v2-dev exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose
+docker compose -p fulfillflow-v2-dev exec -T core-worker python -m fulfillflow.core.operations diagnose --flow shipment.status_changed.v1
+docker compose -p fulfillflow-v2-dev exec -T broker rabbitmqctl list_queues -p fulfillflow-v13 name messages_ready messages_unacknowledged
 ```
 
 Use `diagnose --id <UUID>` nos três serviços para correlacionar mensagem,
@@ -126,7 +126,7 @@ Corrija a causa e informe o hash técnico, banco e motivo do rearme:
 ```powershell
 $messageId = '<UUID-da-mensagem>'
 $expectedHash = '<body_sha256-do-diagnostico>'
-docker compose exec -T core-worker python -m fulfillflow.core.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_core --reason 'Causa corrigida e verificada'
+docker compose -p fulfillflow-v2-dev exec -T core-worker python -m fulfillflow.core.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_core --reason 'Causa corrigida e verificada'
 ```
 
 Para Tracking use `tracking-worker`, `fulfillflow.tracking.operations` e
@@ -139,8 +139,8 @@ banco proprietário; comandos não os exibem. Não inclua segredos no motivo.
 Notifications aceita somente `--stage inbox`; use seu proprietário e banco:
 
 ```powershell
-docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose --id $messageId
-docker compose exec -T notifications-worker python -m fulfillflow.notifications.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_notifications --reason 'Causa corrigida e verificada'
+docker compose -p fulfillflow-v2-dev exec -T notifications-worker python -m fulfillflow.notifications.operations diagnose --id $messageId
+docker compose -p fulfillflow-v2-dev exec -T notifications-worker python -m fulfillflow.notifications.operations rearm --stage inbox --id $messageId --expected-hash $expectedHash --expected-database fulfillflow_notifications --reason 'Causa corrigida e verificada'
 ```
 
 O resultado identifica proprietário, banco, ID, hash, motivo e nova geração.
@@ -350,7 +350,7 @@ espera; sem prefixo explícito e sem seed, IDs únicos são gerados para o uso m
 Para encerrar e remover o volume local deste projeto:
 
 ```powershell
-docker compose down --volumes
+docker compose -p fulfillflow-v2-dev down --volumes
 ```
 
 ## Preparação funcional e execução por processos
@@ -431,26 +431,26 @@ uv run python -m fulfillflow.notifications.worker
 
 Os testes unitários do simulador, arquiteturais, de health e de problem details
 não dependem de banco. Testes de repository/service, APIs persistentes, UI e E2E
-usam PostgreSQL 18 real. Configure os três bancos proprietários e o legado isolados abaixo; fixtures
+usam PostgreSQL 18 real. Use o projeto exclusivo `fulfillflow-v2-tests` e confirme que as portas 18541/18542 estão livres, sem remover recursos históricos. Configure os três bancos proprietários e o legado isolados abaixo; fixtures
 ausentes são explicitamente ignoradas e não constituem validação completa.
 O E2E sobe as três APIs em portas TCP distintas e chama o webhook público
 por processo externo. Os testes limpam apenas os bancos dedicados informados.
 
 ```powershell
-docker compose -p fulfillflow-v13-tests -f compose.test.yaml up -d --wait
-docker exec --user rabbitmq fulfillflow-v13-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
+docker compose -p fulfillflow-v2-tests -f compose.test.yaml up -d --wait
+docker exec --user rabbitmq fulfillflow-v2-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
 $env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core"
 $env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
 $env:TEST_NOTIFICATIONS_DATABASE_URL = "postgresql+psycopg://fulfillflow_notifications:v13-isolated-notifications-test@127.0.0.1:18541/fulfillflow_notifications"
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
-$env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v13-tests-db-1'
-$env:TEST_V12_RABBITMQ_CONTAINER = 'fulfillflow-v13-tests-broker-1'
+$env:TEST_V11_POSTGRES_CONTAINER = 'fulfillflow-v2-tests-db-1'
+$env:TEST_V12_RABBITMQ_CONTAINER = 'fulfillflow-v2-tests-broker-1'
 $env:TEST_LEGACY_DATABASE_URL = "postgresql+psycopg://fulfillflow_legacy:v11-isolated-legacy-test@127.0.0.1:18541/fulfillflow_legacy"
 ```
 
 O teste estrutural histórico cria e remove seu próprio container Docker, sem
 Locust ou campanha. Após os gates, remova somente a infraestrutura dedicada:
-`docker compose -p fulfillflow-v13-tests -f compose.test.yaml down --volumes`.
+`docker compose -p fulfillflow-v2-tests -f compose.test.yaml down --volumes`.
 
 ```powershell
 uv run pytest tests/unit tests/api -q
@@ -463,7 +463,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run lint-imports
-docker compose config --quiet
+docker compose -p fulfillflow-v2-dev config --quiet
 ```
 
 A v1.3 usa `1301_core`, `1203_tracking` e `1301_notifications`, com metadados e
@@ -540,7 +540,7 @@ o rearme por proprietário e o filtro do novo fluxo Core estão descritos na ope
 Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
 
 ```powershell
-docker compose -p fulfillflow-v13-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v2-tests -f compose.test.yaml up -d --wait
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
 uv run pytest tests/integration/test_message_transport.py tests/integration/test_notification_transport.py tests/integration/test_notifications_worker.py -q
 ```

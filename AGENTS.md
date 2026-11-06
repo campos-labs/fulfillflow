@@ -83,7 +83,7 @@ If the repository has not been bootstrapped and `uv.lock` does not exist, creati
 - Same event ID and same payload hash may resume or return the original result. Same event ID with a different hash is a conflict and never overwrites the original.
 - Commit admission, normalized command and command outbox together before returning 202. Persist permanent admission rejection without creating application work.
 - Commit the Core receipt/effects and result outbox together. Finalize Tracking with the received result in a separate local transaction, preserving identities, timestamps and outcomes.
-- At v1.3 activation, replace local Notification creation with the independent event outbox in that same Core transaction, only for APPLIED transitions. Never dual-write or couple Notifications to Tracking results; isolate the two Core publishers.
+- Preserve the independent Notification event outbox in that same Core transaction, only for APPLIED transitions; do not restore local Notification creation. Never dual-write or couple Notifications to Tracking results; isolate the two Core publishers.
 - Notifications commits its simulation record and technical-inbox completion together, with one record per tracking_event_id. Infrastructure failures remain retryable or BLOCKED, not FAILED simulations. Core queries Notifications through authenticated HTTP, never its database or a local fallback.
 - AMQP ACK follows durable technical-inbox persistence, not business completion. Durable local processing, bounded retries and explicit blocked states then own recovery. Never claim global atomicity or exactly-once transport.
 - Repositories inside a coordinated local transaction must not commit independently.
@@ -155,8 +155,8 @@ uv run alembic current --check-heads
 uv run alembic check
 uv run python scripts/seed_demo.py
 uv run fastapi dev src/fulfillflow/main.py
-docker compose config
-docker compose up --build
+docker compose -p fulfillflow-v2-dev config
+docker compose -p fulfillflow-v2-dev up --build
 ```
 
 Run only commands that exist at the current implementation stage. When a check cannot run, report the exact missing prerequisite; do not claim success or substitute a weaker backend.
