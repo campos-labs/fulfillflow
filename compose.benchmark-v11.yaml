@@ -1,0 +1,149 @@
+name: fulfillflow-benchmark-v11
+
+x-environment: &environment
+  APP_ENV: benchmark
+  APP_HOST: 0.0.0.0
+  APP_PORT: "8000"
+  DB_POOL_SIZE: "5"
+  DB_MAX_OVERFLOW: "0"
+  DB_POOL_TIMEOUT_SECONDS: "5"
+  DB_STATEMENT_TIMEOUT_MS: "5000"
+  LOG_LEVEL: WARNING
+  LOG_FORMAT: json
+  METRICS_ENABLED: "false"
+  OTEL_ENABLED: "false"
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "0.0"
+  CORE_BASE_URL: http://core:8000
+  TRACKING_BASE_URL: http://tracking:8000
+  SERVICE_HTTP_TIMEOUT_SECONDS: "6"
+  FORWARDING_TIMEOUT_SECONDS: "8"
+  INTERNAL_API_SECRET: "${INTERNAL_API_SECRET:?Set an isolated internal secret}"
+
+x-core-env: &core-env
+  <<: *environment
+  SERVICE_ROLE: core
+  OTEL_SERVICE_NAME: fulfillflow-core
+  DATABASE_URL: "${CORE_DATABASE_URL:?Set Core URL inside the isolated Compose network}"
+  SESSION_SECRET: "${SESSION_SECRET:?Set an isolated session secret}"
+
+x-tracking-env: &tracking-env
+  <<: *environment
+  SERVICE_ROLE: tracking
+  OTEL_SERVICE_NAME: fulfillflow-tracking
+  DATABASE_URL: "${TRACKING_DATABASE_URL:?Set Tracking URL inside the isolated Compose network}"
+  CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:?Set Alpha secret}"
+  CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:?Set Beta secret}"
+
+services:
+  db:
+    image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set isolated admin password}"
+      CORE_DB_PASSWORD: "${CORE_DB_PASSWORD:?Set isolated Core password}"
+      TRACKING_DB_PASSWORD: "${TRACKING_DB_PASSWORD:?Set isolated Tracking password}"
+    volumes:
+      - benchmark_v11_data:/var/lib/postgresql
+      - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
+    cpus: 2.0
+    mem_limit: 2560m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --host=127.0.0.1 --username=postgres --dbname=postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+  migrate-core:
+    image: "${BENCH_CORE_IMAGE:?Set candidate Core image}"
+    command: ["alembic", "-c", "alembic_core.ini", "upgrade", "head"]
+    environment: *core-env
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck: {disable: true}
+    restart: "no"
+
+  migrate-tracking:
+    image: "${BENCH_TRACKING_IMAGE:?Set candidate Tracking image}"
+    command: ["alembic", "-c", "alembic_tracking.ini", "upgrade", "head"]
+    environment: *tracking-env
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck: {disable: true}
+    restart: "no"
+
+  core:
+    image: "${BENCH_CORE_IMAGE:?Set candidate Core image}"
+    command: ["python", "-m", "uvicorn", "fulfillflow.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment: *core-env
+    init: true
+    cpus: 1.0
+    mem_limit: 768m
+    depends_on:
+      migrate-core: {condition: service_completed_successfully}
+      migrate-tracking: {condition: service_completed_successfully}
+    ports:
+      - "127.0.0.1:${BENCH_APP_PORT:-18017}:8000"
+
+  tracking:
+    image: "${BENCH_TRACKING_IMAGE:?Set candidate Tracking image}"
+    command: ["python", "-m", "uvicorn", "fulfillflow.tracking.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment: *tracking-env
+    init: true
+    cpus: 1.0
+    mem_limit: 768m
+    depends_on:
+      migrate-core: {condition: service_completed_successfully}
+      migrate-tracking: {condition: service_completed_successfully}
+
+  prepare:
+    image: "${BENCH_CORE_IMAGE:?Set candidate Core image}"
+    profiles: ["preparation"]
+    entrypoint: ["python", "-B", "-m", "benchmarks.seed_v11"]
+    command: ["--confirm-core-database", "fulfillflow_core", "--confirm-tracking-database", "fulfillflow_tracking"]
+    environment:
+      APP_ENV: benchmark
+      CORE_DATABASE_URL: "${CORE_DATABASE_URL:?Set Core URL}"
+      TRACKING_DATABASE_URL: "${TRACKING_DATABASE_URL:?Set Tracking URL}"
+    volumes: [".:/workspace:ro"]
+    working_dir: /workspace
+    healthcheck: {disable: true}
+    restart: "no"
+
+  loadgen-init:
+    image: "${BENCH_LOADGEN_IMAGE:?Set approved candidate loadgen image}"
+    profiles: ["campaign"]
+    entrypoint: ["python"]
+    command: ["-c", "import locust"]
+    healthcheck: {disable: true}
+    restart: "no"
+    cpus: 2.0
+    mem_limit: 1536m
+
+  loadgen:
+    image: "${BENCH_LOADGEN_IMAGE:?Set approved candidate loadgen image}"
+    profiles: ["campaign"]
+    entrypoint: ["python"]
+    command: ["-c", "import time; time.sleep(2147483647)"]
+    environment:
+      CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:?Set Alpha secret}"
+      CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:?Set Beta secret}"
+    init: true
+    cpus: 2.0
+    mem_limit: 1536m
+    depends_on:
+      core: {condition: service_healthy}
+      tracking: {condition: service_healthy}
+      loadgen-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  benchmark_v11_data:

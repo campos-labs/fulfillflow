@@ -10,8 +10,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
-from fulfillflow.carriers.public import normalize_carrier_event
 from fulfillflow.shipments.public import Shipment, ShipmentApplicationResult, ShipmentStatus
+from fulfillflow.tracking.public import normalize_carrier_event
 
 if TYPE_CHECKING:
     from benchmarks.dataset import InboxRow, LogicalDataset, ShipmentRow, TrackingEventRow

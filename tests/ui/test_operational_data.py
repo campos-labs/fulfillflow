@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from typing import Any
 
+import pytest
 from httpx import AsyncClient
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.notifications.public import (
+from fulfillflow.notifications import message_handler
+from fulfillflow.notifications.domain import (
     ExpectedNotificationFailure,
-    NotificationsPublic,
+    Notification,
+    build_notification,
 )
+from tests.async_flow import drain
 from tests.support import FixedClock
 from tests.ui.support import (
     confirm_order,
@@ -26,7 +30,9 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     ui_client: AsyncClient,
     postgres_settings: Settings,
     postgres_database: Database,
+    postgres_tracking_database: Database,
     fixed_clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     malicious = '<img src=x onerror="alert(1)">'
     raw_only = '<script id="raw-only">secret raw extension</script>'
@@ -64,26 +70,39 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
             description=description,
             extra={"unboundedExternalField": raw_only},
         )
-        assert response.status_code == 200, response.text
-        assert response.json()["result"] == expected
-        outcomes.append(response.json())
+        assert response.status_code == 202, response.text
+        pending = await ui_client.get(f"/carrier-events/{response.json()['inbox_event_id']}")
+        assert 'hx-trigger="observe"' in pending.text
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
+        detail = (await ui_client.get(response.headers["location"])).json()
+        assert detail["result"]["result"] == expected
+        outcomes.append(dict(detail, inbox_event_id=detail["id"]))
 
     def fail_renderer(resulting_status: str) -> None:
         del resulting_status
         raise ExpectedNotificationFailure
 
-    async with postgres_database.session() as session:
-        async with session.begin():
-            failed = await NotificationsPublic(
-                session,
-                fixed_clock,
-                renderer=fail_renderer,
-            ).record_applied_transition(
-                shipment_id=UUID(shipment["id"]),
-                tracking_event_id=UUID(str(outcomes[1]["tracking_event_id"])),
-                recipient="ui-recipient@example.test",
-                resulting_status="POSTED",
-            )
+    def failed_simulation(**kwargs: Any) -> Notification:
+        return build_notification(**kwargs, renderer=fail_renderer)
+
+    failed_order = await create_order(ui_client, reference="UI-FAILED-SIMULATION")
+    await confirm_order(ui_client, failed_order["id"])
+    failed_shipment = await create_shipment(
+        ui_client, failed_order["id"], tracking_code="UIFAILED0001"
+    )
+    with monkeypatch.context() as injected:
+        injected.setattr(message_handler, "build_notification", failed_simulation)
+        failed_admission = await send_alpha_event(
+            ui_client,
+            postgres_settings,
+            event_id="ui-simulation-failed",
+            tracking_code=failed_shipment["tracking_code"],
+            external_status="CREATED",
+            occurred_at=base,
+        )
+        assert failed_admission.status_code == 202
+        await drain(postgres_database, postgres_tracking_database, fixed_clock)
+    failed = (await ui_client.get("/api/v1/notifications?status=FAILED")).json()["items"][0]
 
     order_page = await ui_client.get(f"/orders/{order['id']}")
     shipment_page = await ui_client.get(f"/shipments/{shipment['id']}")
@@ -94,7 +113,7 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     simulated_api = await ui_client.get("/api/v1/notifications?status=SIMULATED")
     simulated_id = simulated_api.json()["items"][0]["id"]
     simulated_detail = await ui_client.get(f"/notifications/{simulated_id}")
-    failed_detail = await ui_client.get(f"/notifications/{failed.id}")
+    failed_detail = await ui_client.get(f"/notifications/{failed['id']}")
 
     assert "FULFILLED" in order_page.text
     assert "DELIVERED" in shipment_page.text
@@ -111,6 +130,9 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     assert "&lt;script&gt;alert" in order_page.text
 
     assert "ui-result-applied" in inbox.text
+    assert "Completed. The persisted result" in inbox_detail.text
+    assert "View updated timeline" in inbox_detail.text
+    assert 'hx-trigger="observe"' not in inbox_detail.text
     assert "UIESCAPE0001" in inbox_detail.text
     assert raw_only not in inbox_detail.text
     assert "secret raw extension" not in inbox_detail.text
@@ -132,6 +154,10 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     assert "Simulation failed. No email was sent." in failed_detail.text
     assert "Notification rendering or simulation failed." in failed_detail.text
     assert "Resend" not in failed_detail.text
+    progress = await ui_client.get(f"/notification-status/{failed['tracking_event_id']}")
+    assert "Simulation failed" in progress.text
+    assert 'data-observation-poll="false"' in progress.text
+    assert 'hx-trigger="observe"' not in progress.text
 
 
 async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(
@@ -155,6 +181,38 @@ async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(
         occurred_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert "set-cookie" not in response.headers
     assert "fulfillflow_session" not in ui_client.cookies
+
+
+async def test_inbox_blocked_and_rejected_do_not_poll(
+    ui_client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
+):
+    from sqlalchemy import update
+
+    from fulfillflow.tracking.message_tables import tables
+
+    response = await send_alpha_event(
+        ui_client,
+        postgres_settings,
+        event_id="iv-missing-shipment",
+        tracking_code="IV-MISSING",
+        external_status="CREATED",
+        occurred_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
+    )
+    assert response.status_code == 202
+    path = f"/carrier-events/{response.json()['inbox_event_id']}"
+    async with postgres_tracking_database.session() as session, session.begin():
+        await session.execute(update(tables.outbox).values(state="BLOCKED", reason="TEST_BLOCK"))
+    blocked = await ui_client.get(path, headers={"HX-Request": "true"})
+    assert "requires audited rearm" in blocked.text
+    assert 'hx-trigger="observe"' not in blocked.text
+    assert "Observing for up to" not in blocked.text
+    async with postgres_tracking_database.session() as session, session.begin():
+        await session.execute(update(tables.outbox).values(state="PENDING", reason=None))
+    await drain(postgres_database, postgres_tracking_database, fixed_clock)
+    rejected = await ui_client.get(path, headers={"HX-Request": "true"})
+    assert "Rejected. The persisted reason" in rejected.text
+    assert "SHIPMENT_NOT_FOUND" in rejected.text
+    assert 'hx-trigger="observe"' not in rejected.text

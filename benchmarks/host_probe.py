@@ -147,9 +147,17 @@ class HostProbe:
                 match = re.search(rf"^{key}:\s+(\d+)\s+kB$", memory, re.MULTILINE)
                 values[target] = int(match[1]) * 1024 if match else None
             # Only a count leaves the probe; no foreign container name or identifier.
-            output = self._text(["docker", "ps", "--no-trunc", "--format", "{{.ID}}"])
-            identifiers = output.splitlines()
-            if identifiers and all(re.fullmatch(r"[0-9a-f]{64}", item) for item in identifiers):
+            try:
+                result = self.runner(
+                    ["docker", "ps", "--no-trunc", "--format", "{{.ID}}"], self.timeout_seconds
+                )
+                identifiers = result.stdout.strip().splitlines() if result.returncode == 0 else None
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+                identifiers = None
+            # A successful empty listing proves zero containers; failed observation proves nothing.
+            if identifiers is not None and all(
+                re.fullmatch(r"[0-9a-f]{64}", item) for item in identifiers
+            ):
                 active = set(identifiers)
                 if set(container_ids.values()) <= active:
                     values["concurrent_containers"] = len(active - set(container_ids.values()))

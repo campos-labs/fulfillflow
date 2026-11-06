@@ -1,3 +1,6 @@
 # Preserve the frozen manifests and checksummed publication byte-for-byte on checkout.
 benchmarks/campaigns/v1-baseline-*.json -text
 benchmarks/baselines/v1.0/* -text
+# Runtime assets have published byte-level SRI checksums.
+src/fulfillflow/web/static/vendor/* -text
+infrastructure/*.sh text eol=lf

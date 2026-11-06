@@ -7,12 +7,16 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fulfillflow.notifications.public import NotificationService, NotificationStatus
-from fulfillflow.notifications.schemas import NotificationFilters
+from fulfillflow.contracts.problems import ServiceProblemError
+from fulfillflow.contracts.tracking import CarrierEventFilters, CarrierEventSummaryRead
+from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.notifications_client import NotificationsClient
+from fulfillflow.core.tracking_client import TrackingClient
 from fulfillflow.orders.public import OrderService, OrdersPublic, OrderStatus
 from fulfillflow.orders.schemas import OrderFilters, OrderRead
 from fulfillflow.shared import Clock
 from fulfillflow.shipments.public import (
+    ShipmentReceipts,
     ShipmentService,
     ShipmentsPublic,
     ShipmentStatus,
@@ -21,8 +25,6 @@ from fulfillflow.shipments.schemas import (
     ShipmentListFilters,
     ShipmentSummaryRead,
 )
-from fulfillflow.tracking.public import InboxStatus, TrackingService
-from fulfillflow.tracking.schemas import CarrierEventFilters, CarrierEventSummaryRead
 
 _COUNT_PAGE_SIZE = 1
 _RECENT_EVENT_COUNT = 10
@@ -58,7 +60,7 @@ class DashboardView:
     order_counts: dict[str, int]
     shipment_counts: dict[str, int]
     inbox_counts: dict[str, int]
-    notification_counts: dict[str, int]
+    notification_counts: dict[str, int] | None
     recent_events: list[CarrierEventSummaryRead]
 
 
@@ -76,12 +78,12 @@ async def get_order_detail(session: AsyncSession, order_id: UUID) -> OrderDetail
 async def get_dashboard(
     session: AsyncSession,
     clock: Clock,
+    tracking: TrackingClient,
+    notifications: NotificationsClient,
 ) -> DashboardView:
     """Build the approved dashboard without direct model or repository access."""
     orders = OrderService(session, clock)
     shipments = ShipmentService(session, clock)
-    tracking = TrackingService(session, clock)
-    notifications = NotificationService(session)
 
     order_counts: dict[str, int] = {}
     for order_status in OrderStatus:
@@ -110,14 +112,14 @@ async def get_dashboard(
         )
         inbox_counts[inbox_status.value] = inbox_page.total
 
-    notification_counts: dict[str, int] = {}
-    for notification_status in NotificationStatus:
-        notification_page = await notifications.list(
-            NotificationFilters(status=notification_status),
-            page=1,
-            page_size=_COUNT_PAGE_SIZE,
-        )
-        notification_counts[notification_status.value] = notification_page.total
+    notification_counts: dict[str, int] | None = None
+    try:
+        counts = await notifications.counts()
+    except ServiceProblemError:
+        # A failed remote observation does not turn the owner's count into zero.
+        pass
+    else:
+        notification_counts = {"SIMULATED": counts.simulated, "FAILED": counts.failed}
 
     recent = await tracking.list_inbox(
         CarrierEventFilters(),
@@ -129,5 +131,11 @@ async def get_dashboard(
         shipment_counts=shipment_counts,
         inbox_counts=inbox_counts,
         notification_counts=notification_counts,
-        recent_events=[CarrierEventSummaryRead.from_view(item) for item in recent.items],
+        recent_events=recent.items,
     )
+
+
+async def has_notification_receipt(session: AsyncSession, event_id: UUID) -> bool:
+    """Only offer Core progress navigation when its required receipt exists."""
+    async with session.begin():
+        return await ShipmentReceipts(session).get(event_id) is not None

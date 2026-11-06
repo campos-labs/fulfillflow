@@ -18,13 +18,13 @@ from benchmarks.artifact import (
     canonical_json_bytes,
     load_authenticated_document,
 )
-from fulfillflow.carriers.public import normalize_carrier_event
 from fulfillflow.notifications.public import build_notification
 from fulfillflow.shipments.public import (
     Shipment,
     ShipmentApplicationResult,
     ShipmentStatus,
 )
+from fulfillflow.tracking.public import normalize_carrier_event
 
 DATASET_SEED = 20260828
 BASE_INSTANT = datetime(2026, 8, 28, tzinfo=UTC)

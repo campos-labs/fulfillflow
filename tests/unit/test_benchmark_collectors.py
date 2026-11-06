@@ -390,6 +390,9 @@ def test_stdin_event_query_rejects_invalid_identity_output(output: str) -> None:
 
 
 class _FakeDatabase:
+    def connection_counts(self) -> dict[str, int]:
+        return {"postgres": self.active_connections()}
+
     def active_connections(self) -> int:
         return 7
 

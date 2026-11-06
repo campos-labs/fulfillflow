@@ -22,13 +22,22 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
 
+from benchmarks.active_screen_energy import EnergyConditionError, require_energy
+from benchmarks.active_screen_protocol import (
+    PROTOCOL as ACTIVE_SCREEN_PROTOCOL,
+)
+from benchmarks.active_screen_protocol import (
+    ActiveScreenManifest,
+    load_active_screen_campaign,
+)
 from benchmarks.artifact import BENCHMARK_HASH_NAME, BENCHMARK_MANIFEST_NAME
 from benchmarks.campaign import (
     CampaignBundle,
     CohortSlot,
     LoadLevel,
+    SplitDatabases,
     balanced_active_slots,
     canonical_payload_bytes,
     carrier_payload,
@@ -36,6 +45,7 @@ from benchmarks.campaign import (
     deterministic_event_id,
     load_campaign,
 )
+from benchmarks.collection_diagnostics import write_failure
 from benchmarks.collectors import (
     DatabaseProbe,
     DatabaseSnapshot,
@@ -49,21 +59,42 @@ from benchmarks.collectors import (
     validate_resource_samples,
     write_database_counts,
 )
+from benchmarks.collectors_v11 import SplitDatabaseProbe, aggregate_resources
+from benchmarks.comparison_protocol import (
+    PROTOCOL as COMPARISON_PROTOCOL,
+)
+from benchmarks.comparison_protocol import (
+    ComparisonManifest,
+    load_comparison_campaign,
+    verify_warmup_progress,
+)
 from benchmarks.database_contract import (
     DatabaseDigests,
     DatabaseIdentityError,
     StructuralSchemaIdentity,
 )
 from benchmarks.host_probe import HostProbe
+from benchmarks.operational_errors import DiagnosticExportError, error_report, sanitize
+from benchmarks.phase_diagnostics import phase_failure, warmup_quota_evidence
 from benchmarks.semantic import normalize_frozen_payload, validate_semantic_document
+from benchmarks.warmup_sensitivity import PROTOCOL, SensitivityManifest, load_sensitivity_campaign
 
 ProcessPhase = Literal["warmup", "measurement"]
 _SENSITIVE_ARGUMENT = re.compile(r"(?i)(://|password|secret|signature|raw[_-]?body|dsn)")
 _GIT_TIMEOUT_SECONDS = 10.0
+ACTIVE_SCREEN_RUNNER_MODE = "active-screen-warmup-and-measurement-not-matrix-eligible"
 
 
 class CampaignExecutionError(RuntimeError):
     """Sanitized campaign failure that leaves an explicitly incomplete directory."""
+
+
+class ProcessTimeoutError(CampaignExecutionError):
+    """The original process deadline elapsed."""
+
+
+class CollectionSupervisionError(ExternalCommandError):
+    """Mandatory sampler failure notified the existing process supervisor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +118,7 @@ class LogicalDatabaseIdentity:
     dataset: DatabaseDigests
     carriers: DatabaseDigests
     structural_schema: StructuralSchemaVerification | None = None
+    owner_schemas: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,14 +155,48 @@ def main() -> int:
     parser.add_argument("--confirm-campaign")
     parser.add_argument("--base-url")
     parser.add_argument("--results-directory", type=Path)
+    parser.add_argument("--application-source", type=Path)
+    parser.add_argument("--diagnostic-warmup-only", action="store_true")
+    parser.add_argument("--warmup-sensitivity", action="store_true")
+    parser.add_argument("--comparison-120", action="store_true")
+    parser.add_argument("--active-host-policy", action="store_true")
+    parser.add_argument("--active-screen-diagnostic", action="store_true")
+    parser.add_argument("--comparison-continuation", action="store_true")
     parser.add_argument(
         "--prepare-command-json",
         help="JSON argv array run before each repetition; secrets must be supplied via environment",
     )
     args = parser.parse_args()
+    if args.active_host_policy:
+        if not args.comparison_120:
+            parser.error("active host policy requires the symmetric comparison contract")
+        os.environ["FULFILLFLOW_COMPARISON_ACTIVE"] = "1"
     if args.validate_only and args.execute:
         parser.error("choose either --validate-only or --execute")
-    bundle = load_campaign(args.manifest.resolve())
+    if (
+        sum(
+            (
+                args.warmup_sensitivity,
+                args.diagnostic_warmup_only,
+                args.comparison_120,
+                args.active_screen_diagnostic,
+            )
+        )
+        > 1
+    ):
+        parser.error("choose one explicit protocol")
+    if args.comparison_continuation and not args.comparison_120:
+        parser.error("continuation requires the explicit comparison protocol")
+    loader = (
+        load_active_screen_campaign
+        if args.active_screen_diagnostic
+        else load_comparison_campaign
+        if args.comparison_120
+        else load_sensitivity_campaign
+        if args.warmup_sensitivity
+        else load_campaign
+    )
+    bundle = loader(args.manifest.resolve())
     if not args.execute:
         _print_validation(bundle)
         return 0
@@ -148,10 +214,18 @@ def main() -> int:
             args.base_url,
             args.results_directory,
             prepare_command,
+            application_source=args.application_source,
+            diagnostic_warmup_only=args.diagnostic_warmup_only,
+            comparison_continuation=args.comparison_continuation,
         )
     except KeyboardInterrupt:
         return 130
-    except (CampaignExecutionError, EnvironmentMismatchError, ExternalCommandError) as exc:
+    except (
+        CampaignExecutionError,
+        EnvironmentMismatchError,
+        ExternalCommandError,
+        DiagnosticExportError,
+    ) as exc:
         print(f"campaign refused: {exc}", file=sys.stderr)
         return 2
 
@@ -162,8 +236,32 @@ def _execute(
     base_url: str,
     results_directory: Path,
     prepare_command: list[str],
+    *,
+    application_source: Path | None = None,
+    diagnostic_warmup_only: bool = False,
+    comparison_continuation: bool = False,
 ) -> int:
-    repository_root = Path(__file__).resolve().parents[1]
+    sensitivity = isinstance(bundle.manifest, SensitivityManifest)
+    mode = (
+        ACTIVE_SCREEN_PROTOCOL
+        if isinstance(bundle.manifest, ActiveScreenManifest)
+        else PROTOCOL
+        if sensitivity
+        else "diagnostic_warmup_only"
+        if diagnostic_warmup_only
+        else "campaign"
+    )
+    if diagnostic_warmup_only:
+        _validate_warmup_diagnostic(bundle)
+    runner_root = Path(__file__).resolve().parents[1]
+    repository_root = application_source.resolve() if application_source else runner_root
+    if application_source is not None:
+        top = run_capture(
+            ["git", "-C", str(repository_root), "rev-parse", "--show-toplevel"],
+            _GIT_TIMEOUT_SECONDS,
+        ).stdout.strip()
+        if Path(top).resolve() != repository_root:
+            raise CampaignExecutionError("application source must be an exact checkout root")
     validate_semantic_document(bundle.dataset_document)
     provenance = _git_provenance(repository_root)
     release = _project_release(repository_root)
@@ -173,19 +271,54 @@ def _execute(
         raise CampaignExecutionError(
             "official campaign refuses a dirty tracked worktree or staging"
         )
+    host_runner = None
+    if application_source is not None:
+        if not (provenance.worktree_clean and provenance.staged_clean):
+            raise CampaignExecutionError("separate application source must be clean")
+        if requires_active_host(bundle.manifest):
+            host_runner = runner_provenance(
+                runner_root, require_clean=True, diagnostic_mode=ACTIVE_SCREEN_RUNNER_MODE
+            )
+        else:
+            host_runner = runner_provenance(runner_root, require_clean=True)
     _validate_prepare_command(prepare_command)
+    prefix: list[Path] = []
+    if comparison_continuation:
+        if not isinstance(bundle.manifest, ComparisonManifest) or application_source is None:
+            raise CampaignExecutionError("continuation requires comparison and frozen application")
+        from benchmarks.comparison_continuation import runner_segment
+
+        prefix = runner_segment(manifest_path, results_directory)
     results_directory.mkdir(parents=True, exist_ok=False)
     campaign_marker = results_directory / ".incomplete.json"
     _write_json(
         campaign_marker,
-        {"campaign": bundle.manifest.name, "complete": False, "started_at": _utc_now()},
+        {
+            "campaign": bundle.manifest.name,
+            "complete": False,
+            "started_at": _utc_now(),
+            "mode": mode,
+        },
     )
-    completed_directories: list[Path] = []
+    completed_directories: list[Path] = list(prefix)
+    if comparison_continuation:
+        _write_json(
+            results_directory / "continuation.json",
+            {
+                "schema_version": 1,
+                "preserved": [
+                    {"path": str(path), "checksums_sha256": _file_sha256(path / "checksums.sha256")}
+                    for path in prefix
+                ],
+                "first_repetition": len(prefix) + 1,
+                "host_runner": host_runner,
+            },
+        )
     try:
         docker = DockerProbe(bundle, repository_root)
         host = HostProbe(
             bundle.manifest.host,
-            official=bundle.manifest.official,
+            official=bundle.manifest.official or isinstance(bundle.manifest, ActiveScreenManifest),
             timeout_seconds=bundle.manifest.timeouts.command_seconds,
         )
         try:
@@ -195,9 +328,16 @@ def _execute(
                 results_directory / "metadata.json", {"valid": False, "host_identity": exc.report}
             )
             raise
-        _write_json(results_directory / "metadata.json", {"host_identity": host_identity})
+        _write_json(
+            results_directory / "metadata.json",
+            {
+                "host_identity": host_identity,
+                "host_runner": host_runner,
+                "application_git": asdict(provenance),
+            },
+        )
         for load in bundle.manifest.loads:
-            for repetition in range(1, bundle.manifest.repetitions + 1):
+            for repetition in range(len(prefix) + 1, bundle.manifest.repetitions + 1):
                 final_directory = results_directory / f"{load.name}-r{repetition:02d}"
                 partial_directory = results_directory / f"{load.name}-r{repetition:02d}.partial"
                 partial_directory.mkdir(exist_ok=False)
@@ -205,7 +345,13 @@ def _execute(
                     partial_directory / ".incomplete.json",
                     {"complete": False, "load": load.name, "repetition": repetition},
                 )
-                _run_preparation(prepare_command, bundle.manifest.timeouts.preparation_seconds)
+                if requires_active_host(bundle.manifest):
+                    require_energy()
+                _run_preparation(
+                    prepare_command,
+                    bundle.manifest.timeouts.preparation_seconds,
+                    partial_directory / "preparation-error.json",
+                )
                 try:
                     observed = docker.observe()
                 except EnvironmentMismatchError as exc:
@@ -217,6 +363,11 @@ def _execute(
                     observed.postgres_database,
                     timeout_seconds=bundle.manifest.timeouts.command_seconds,
                 )
+                if bundle.manifest.release == "v1.1.0":
+                    database = SplitDatabaseProbe(
+                        observed.container_ids["postgres"],
+                        timeout_seconds=bundle.manifest.timeouts.command_seconds,
+                    )
                 initial, initial_identity = _verify_initial_state(bundle, database)
                 runtime_manifest = _install_runtime_manifest(
                     bundle,
@@ -224,11 +375,19 @@ def _execute(
                     observed.container_ids["loadgen"],
                     partial_directory,
                 )
-                stabilization = _stabilize(bundle.manifest.stabilization_seconds)
+                if requires_active_host(bundle.manifest):
+                    stabilization = _stabilize(
+                        bundle.manifest.stabilization_seconds, health_check=require_energy
+                    )
+                else:
+                    stabilization = _stabilize(bundle.manifest.stabilization_seconds)
                 preflight_metadata: dict[str, object] = {
                     "valid": False,
+                    "mode": mode,
+                    "official": bundle.manifest.official,
                     "host_identity": host_identity,
                     "stabilization": stabilization,
+                    "host_runner": host_runner,
                 }
                 try:
                     host_state = host.dynamic(observed.container_ids)
@@ -238,6 +397,23 @@ def _execute(
                     raise
                 preflight_metadata["host_state"] = host_state
                 _write_json(partial_directory / "metadata.json", preflight_metadata)
+                if sensitivity:
+                    from benchmarks.sensitivity_result import execute_warmup_observation
+
+                    result = execute_warmup_observation(
+                        bundle,
+                        load,
+                        base_url,
+                        observed,
+                        database,
+                        runtime_manifest,
+                        partial_directory,
+                        initial,
+                        preflight_metadata,
+                    )
+                    _write_checksums(partial_directory)
+                    _write_checksums(results_directory)
+                    return result
                 warmup = _run_phase(
                     bundle,
                     load,
@@ -249,9 +425,39 @@ def _execute(
                     partial_directory,
                 )
                 after_warmup = database.snapshot("pre_measurement")
+                if isinstance(bundle.manifest, (ComparisonManifest, ActiveScreenManifest)):
+                    verify_warmup_progress(partial_directory / "warmup", load.users)
                 pre_measurement_identity = _verify_warmup(
                     bundle, load, database, initial, after_warmup
                 )
+                if diagnostic_warmup_only:
+                    _finish_warmup_diagnostic(
+                        partial_directory,
+                        bundle,
+                        {
+                            **preflight_metadata,
+                            "campaign": bundle.manifest.name,
+                            "git": asdict(provenance),
+                            "manifest_sha256": _file_sha256(manifest_path),
+                            "dataset_sha256": bundle.dataset_sha256,
+                            "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
+                            "environment_checks": observed.checks,
+                            "container_ids": observed.container_ids,
+                            "protocol_expected": bundle.manifest.model_dump(mode="json"),
+                            "logical_database_identity": {
+                                "initial": asdict(initial_identity),
+                                "post_warmup_seeded_rows": asdict(pre_measurement_identity),
+                            },
+                            "warmup": _phase_metadata(warmup),
+                        },
+                        database,
+                        initial,
+                        after_warmup,
+                    )
+                    partial_directory.rename(results_directory / "warmup-diagnostic")
+                    campaign_marker.unlink()
+                    _write_checksums(results_directory)
+                    return 0
                 measurement = _run_phase(
                     bundle,
                     load,
@@ -263,6 +469,8 @@ def _execute(
                     partial_directory,
                 )
                 final = database.snapshot("post_measurement")
+                if isinstance(database, SplitDatabaseProbe):
+                    _write_json(partial_directory / "reconciliation.json", database.reconcile())
                 _verify_measurement(partial_directory, after_warmup, final)
                 write_database_counts(
                     partial_directory / "database_counts.csv", [initial, after_warmup, final]
@@ -288,13 +496,27 @@ def _execute(
                         stabilization,
                         host_identity,
                         host_state,
+                        host_runner=host_runner,
                     ),
                 )
+                if requires_active_host(bundle.manifest):
+                    require_energy()
                 _require_repetition_artifacts(partial_directory)
+                if isinstance(database, SplitDatabaseProbe):
+                    for artifact in (
+                        "reconciliation.json",
+                        "resources.application.csv",
+                        "warmup/resources.application.csv",
+                    ):
+                        if not (partial_directory / artifact).is_file():
+                            raise CampaignExecutionError("v1.1 owner evidence is incomplete")
                 (partial_directory / ".incomplete.json").unlink()
                 _write_checksums(partial_directory)
                 partial_directory.rename(final_directory)
                 completed_directories.append(final_directory)
+        if comparison_continuation:
+            if runner_segment(manifest_path, results_directory) != prefix:
+                raise CampaignExecutionError("continuation reference changed during execution")
         if bundle.manifest.official:
             _write_summary(results_directory, bundle, completed_directories)
         campaign_marker.unlink()
@@ -305,16 +527,138 @@ def _execute(
             {"campaign": bundle.manifest.name, "complete": False, "interrupted": True},
         )
         raise
+    except BaseException:
+        for partial in results_directory.glob("*.partial"):
+            _write_checksums(partial)
+        _write_checksums(results_directory)
+        raise
 
 
-def _run_preparation(command: list[str], timeout_seconds: float) -> None:
-    process = ManagedProcess(command)
-    try:
-        returncode = process.wait(timeout_seconds)
-    finally:
-        process.ensure_stopped()
-    if returncode != 0:
-        raise CampaignExecutionError("database preparation command failed")
+def _run_preparation(
+    command: list[str], timeout_seconds: float, diagnostic_path: Path | None = None
+) -> None:
+    # A file avoids pipe backpressure; raw child output is never exported.
+    with tempfile.TemporaryFile(mode="w+b") as stderr:
+        process: ManagedProcess | None = None
+        primary: BaseException | None = None
+        shutdown: BaseException | None = None
+        returncode: int | None = None
+        started = time.monotonic()
+        try:
+            process = (
+                ManagedProcess(command)
+                if diagnostic_path is None
+                else ManagedProcess(command, stderr=stderr)
+            )
+            returncode = process.wait(timeout_seconds)
+            if returncode != 0:
+                raise CampaignExecutionError(f"preparation subprocess exited {returncode}")
+        except BaseException as exc:
+            primary = exc
+        finally:
+            if process is not None:
+                try:
+                    process.ensure_stopped()
+                except BaseException as exc:
+                    shutdown = exc
+        if primary is None and shutdown is None:
+            return
+        if diagnostic_path is not None:
+            stderr.seek(0, os.SEEK_END)
+            stderr.seek(max(0, stderr.tell() - 12000))
+            child = sanitize(stderr.read().decode("utf-8", errors="replace"))
+            report: dict[str, object] = {
+                "stage": "preparation",
+                "phase": None,
+                "recorded_at": _utc_now(),
+                "process_returncode": returncode,
+                "duration_seconds": time.monotonic() - started,
+                "primary": error_report(primary) if primary else None,
+                "shutdown": error_report(shutdown) if shutdown else None,
+                "child_stderr": child,
+                "cause_source": "recorded subprocess stderr" if child else "unavailable",
+            }
+            try:
+                _write_json(diagnostic_path, report)
+            except Exception as export:
+                report["export"] = error_report(export)
+                failure = DiagnosticExportError(report)
+                # The coordinator captures stderr independently of this failed file export.
+                print(json.dumps(error_report(failure)), file=sys.stderr, flush=True)
+                raise failure from (primary or shutdown or export)
+        if primary is not None:
+            raise primary
+        assert shutdown is not None
+        raise shutdown
+
+
+def _validate_warmup_diagnostic(bundle: CampaignBundle) -> None:
+    manifest = bundle.manifest
+    if (
+        manifest.official
+        or manifest.release != "v1.1.0"
+        or manifest.repetitions != 1
+        or manifest.profile != "mixed"
+        or len(manifest.loads) != 1
+        or manifest.loads[0].users != 12
+        or manifest.warmup_quota_per_shipment != 430
+        or manifest.stabilization_seconds != 300
+        or manifest.warmup_seconds != 60
+        or manifest.measurement_seconds != 300
+    ):
+        raise CampaignExecutionError(
+            "warm-up diagnostic requires the frozen nonofficial v1.1/12 contract"
+        )
+
+
+def _finish_warmup_diagnostic(
+    directory: Path,
+    bundle: CampaignBundle,
+    metadata: dict[str, object],
+    database: DatabaseProbe,
+    initial: DatabaseSnapshot,
+    after_warmup: DatabaseSnapshot,
+) -> None:
+    if not isinstance(database, SplitDatabaseProbe):
+        raise CampaignExecutionError("warm-up diagnostic requires both database owners")
+    _write_json(directory / "reconciliation.json", database.reconcile())
+    write_database_counts(directory / "database_counts.csv", [initial, after_warmup])
+    for name in (
+        "locust_stats.csv",
+        "locust_stats_history.csv",
+        "locust_failures.csv",
+        "locust_exceptions.csv",
+        "response_codes.csv",
+        "operational_results.http.csv",
+        "resources.csv",
+        "resources.application.csv",
+    ):
+        if not (directory / "warmup" / name).is_file():
+            raise CampaignExecutionError("warm-up diagnostic artifacts are incomplete")
+    quota = warmup_quota_evidence(
+        directory / "warmup",
+        12 * bundle.manifest.warmup_quota_per_shipment,
+        final_statistics="locust_stats.csv",
+    )
+    if (
+        quota.get("available") is not True
+        or quota.get("applied") != 5160
+        or quota.get("final_http_failures") != 0
+    ):
+        raise CampaignExecutionError("warm-up final HTTP evidence does not confirm the fixed quota")
+    metadata.update(
+        mode="diagnostic_warmup_only",
+        official=False,
+        valid=False,
+        diagnostic_complete=True,
+        warmup_valid=True,
+        matrix_eligible=False,
+        measurement_executed=False,
+        quota_evidence=quota,
+    )
+    _write_json(directory / "metadata.json", metadata)
+    (directory / ".incomplete.json").unlink()
+    _write_checksums(directory)
 
 
 def _stabilize(
@@ -323,12 +667,17 @@ def _stabilize(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     utc_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    health_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     started_at = utc_now()
     started = monotonic()
     deadline = started + seconds
     while (remaining := deadline - monotonic()) > 0:
-        sleep(remaining)
+        if health_check is not None:
+            health_check()
+        sleep(min(0.25, remaining) if health_check else remaining)
+    if health_check is not None:
+        health_check()
     return {
         "expected_seconds": seconds,
         "started_at": started_at.isoformat(),
@@ -367,11 +716,28 @@ def _run_phase(
         response_file=f"{container_directory}/response_codes.csv",
         operational_file=f"{container_directory}/operational_results.http.csv",
     )
-    process = ManagedProcess(command)
+    if isinstance(bundle.manifest, SensitivityManifest):
+        if phase != "warmup":
+            raise CampaignExecutionError("sensitivity protocol forbids measurement")
+        command[2:2] = ["--env", f"BENCHMARK_WARMUP_SENSITIVITY={PROTOCOL}"]
+    elif isinstance(bundle.manifest, ActiveScreenManifest):
+        command[2:2] = ["--env", f"BENCHMARK_ACTIVE_SCREEN_PROTOCOL={ACTIVE_SCREEN_PROTOCOL}"]
+    elif isinstance(bundle.manifest, ComparisonManifest):
+        command[2:2] = ["--env", f"BENCHMARK_COMPARISON_PROTOCOL={COMPARISON_PROTOCOL}"]
+    process: ManagedProcess | None = None
     sampler: ResourceSampler | None = None
     destination = partial_directory / "warmup" if phase == "warmup" else partial_directory
     started_at: datetime | None = None
+    primary: BaseException | None = None
+    secondary: list[dict[str, object]] = []
+    supervision_started = time.monotonic()
+    returncode: int | None = None
+    stage = "process_start"
     try:
+        if requires_active_host(bundle.manifest):
+            require_energy()
+        process = ManagedProcess(command)
+        stage = "phase_start"
         _wait_for_container_file(
             container_id,
             marker,
@@ -379,12 +745,14 @@ def _run_phase(
             bundle.manifest.timeouts.command_seconds,
         )
         started_at = datetime.now(UTC)
+        stage = "collector"
         sampler = ResourceSampler(
             destination / "resources.csv",
             observed.container_ids,
             database,
             bundle.manifest.collection_interval_seconds,
             command_timeout_seconds=bundle.manifest.timeouts.command_seconds,
+            phase=phase,
         )
         sampler.start()
         timeout = (
@@ -392,32 +760,112 @@ def _run_phase(
             if phase == "warmup"
             else bundle.manifest.timeouts.measurement_process_seconds
         )
-        returncode = process.wait(timeout)
-    except BaseException:
-        _terminate_container_phase(container_id, pid_file, bundle.manifest.timeouts.command_seconds)
-        raise
+        stage = "process_wait"
+        if requires_active_host(bundle.manifest):
+            returncode = process.wait(timeout, sampler=sampler, health_check=require_energy)
+        else:
+            returncode = process.wait(timeout, sampler=sampler)
+        if returncode != 0:
+            stage = "process_exit"
+            raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
+    except BaseException as exc:
+        primary = exc
+        if isinstance(exc, EnergyConditionError):
+            stage = "environment"
+        elif isinstance(exc, CollectionSupervisionError):
+            stage = "collector"
+        elif isinstance(exc, ProcessTimeoutError):
+            stage = "process_timeout"
+        try:
+            _terminate_container_phase(
+                container_id, pid_file, bundle.manifest.timeouts.command_seconds
+            )
+        except BaseException as cleanup_error:
+            secondary.append(phase_failure(cleanup_error, "shutdown", supervision_started))
     finally:
-        process.ensure_stopped()
+        try:
+            if process is not None:
+                process.ensure_stopped()
+        except BaseException as cleanup_error:
+            if primary is None:
+                primary = cleanup_error
+                stage = "shutdown"
+            else:
+                secondary.append(phase_failure(cleanup_error, "shutdown", supervision_started))
         if sampler is not None:
-            sampler.stop()
+            try:
+                sampler.stop()
+            except BaseException as sampler_error:
+                if primary is None:
+                    primary = sampler_error
+                    stage = "collector"
+                else:
+                    secondary.append(phase_failure(sampler_error, "collector", supervision_started))
+    if primary is None:
+        try:
+            stage = "completion"
+            _wait_for_container_file(
+                container_id,
+                completed_marker,
+                bundle.manifest.timeouts.command_seconds,
+                bundle.manifest.timeouts.command_seconds,
+            )
+            stage = "export"
+            destination.mkdir(exist_ok=True)
+            run_capture(
+                ["docker", "cp", f"{container_id}:{container_directory}/.", str(destination)],
+                bundle.manifest.timeouts.command_seconds,
+            )
+            stage = "validation"
+            _remove_runtime_markers(destination)
+            _promote_final_statistics(destination)
+            validate_resource_samples(destination / "resources.csv", observed.container_ids)
+            if isinstance(database, SplitDatabaseProbe):
+                aggregate_resources(
+                    destination / "resources.csv",
+                    destination / "resources.application.csv",
+                    observed.container_ids,
+                )
+        except BaseException as exc:
+            primary = exc
+    if primary is not None:
+        report = phase_failure(primary, stage, supervision_started)
+        report.update(
+            phase=phase,
+            complete=False,
+            process_returncode=returncode,
+            secondary_errors=secondary,
+            cause_basis="recorded_process_exit"
+            if stage == "process_exit"
+            else "runner_observation",
+            locust_internal_reason=None,
+        )
+        if sampler is not None:
+            report["collector"] = sampler.failure
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+            diagnostic = destination / "failed-runtime"
+            diagnostic.mkdir(exist_ok=False)
+            run_capture(
+                ["docker", "cp", f"{container_id}:{container_directory}/.", str(diagnostic)],
+                bundle.manifest.timeouts.command_seconds,
+            )
+        except BaseException as export_error:
+            report["export_error"] = phase_failure(export_error, "export", supervision_started)
+        if phase == "warmup":
+            report["quota_evidence"] = warmup_quota_evidence(
+                destination / "failed-runtime",
+                load.users * bundle.manifest.warmup_quota_per_shipment,
+            )
+        try:
+            write_failure(destination / "phase-error.json", report)
+        except OSError:
+            primary.add_note("phase diagnostic could not be written; preserve owned containers")
+        raise primary
     if started_at is None:
         raise CampaignExecutionError(f"{phase} did not publish its real start marker")
     if returncode != 0:
         raise CampaignExecutionError(f"{phase} Locust process invalidated the repetition")
-    _wait_for_container_file(
-        container_id,
-        completed_marker,
-        bundle.manifest.timeouts.command_seconds,
-        bundle.manifest.timeouts.command_seconds,
-    )
-    destination.mkdir(exist_ok=True)
-    run_capture(
-        ["docker", "cp", f"{container_id}:{container_directory}/.", str(destination)],
-        bundle.manifest.timeouts.command_seconds,
-    )
-    _remove_runtime_markers(destination)
-    _promote_final_statistics(destination)
-    validate_resource_samples(destination / "resources.csv", observed.container_ids)
     return PhaseExecution(phase, started_at, datetime.now(UTC), returncode)
 
 
@@ -497,7 +945,7 @@ def _promote_final_statistics(directory: Path) -> None:
 class ManagedProcess:
     """Bounded cross-platform process group with conclusive teardown."""
 
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], *, stderr: IO[bytes] | None = None) -> None:
         if sys.platform == "win32":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP
             start_new_session = False
@@ -509,19 +957,40 @@ class ManagedProcess:
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr if stderr is not None else subprocess.DEVNULL,
                 creationflags=flags,
                 start_new_session=start_new_session,
             )
         except OSError as exc:
             raise CampaignExecutionError("external process could not start") from exc
 
-    def wait(self, timeout_seconds: float) -> int:
+    def wait(
+        self,
+        timeout_seconds: float,
+        *,
+        sampler: ResourceSampler | None = None,
+        health_check: Callable[[], None] | None = None,
+    ) -> int:
+        if sampler is not None or health_check is not None:
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                if health_check is not None:
+                    health_check()
+                if sampler is not None and sampler.failed.is_set():
+                    raise CollectionSupervisionError("mandatory resource sampling failed")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.terminate()
+                    raise ProcessTimeoutError("external process exceeded its frozen timeout")
+                try:
+                    return self.process.wait(timeout=min(0.25, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
         try:
             return self.process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
             self.terminate()
-            raise CampaignExecutionError("external process exceeded its frozen timeout") from exc
+            raise ProcessTimeoutError("external process exceeded its frozen timeout") from exc
 
     def terminate(self) -> None:
         if self.process.poll() is not None:
@@ -594,6 +1063,13 @@ def _verify_initial_state(
     database: DatabaseProbe,
 ) -> tuple[DatabaseSnapshot, LogicalDatabaseIdentity]:
     database_contract = bundle.manifest.database
+    owner_schemas = None
+    if isinstance(database_contract, SplitDatabases):
+        if not isinstance(database, SplitDatabaseProbe):
+            raise CampaignExecutionError("v1.1 requires both owner probes")
+        owner_schemas = database.verify_schemas(database_contract)
+        database.reconcile(initial=True)
+        database_contract = database_contract.core
     expected_heads = tuple(sorted(database_contract.alembic_heads))
     observed_heads = tuple(sorted(database.alembic_heads()))
     if observed_heads != expected_heads:
@@ -652,6 +1128,7 @@ def _verify_initial_state(
         dataset_identity,
         carrier_identity,
         structural_schema=structural_verification,
+        owner_schemas=owner_schemas,
     )
 
 
@@ -661,10 +1138,36 @@ def _verify_warmup(
     database: DatabaseProbe,
     initial: DatabaseSnapshot,
     after: DatabaseSnapshot,
+    *,
+    applied_by_user: tuple[int, ...] | None = None,
 ) -> LogicalDatabaseIdentity:
+    if applied_by_user is not None and (
+        not isinstance(bundle.manifest, SensitivityManifest)
+        or len(applied_by_user) != load.users
+        or any(type(count) is not int or not 0 <= count <= 430 for count in applied_by_user)
+    ):
+        raise CampaignExecutionError("partial quota requires the explicit sensitivity protocol")
+    quotas = applied_by_user or (bundle.manifest.warmup_quota_per_shipment,) * load.users
+    expected_delta = sum(quotas)
+    if isinstance(database, SplitDatabaseProbe):
+        database.reconcile()
+        if (
+            after.auxiliary_counts["core_receipts"] - initial.auxiliary_counts["core_receipts"]
+            != expected_delta
+        ):
+            raise CampaignExecutionError("warm-up receipt delta differs from fixed quota")
     active = balanced_active_slots(bundle.warmup, load.users)
     quota = bundle.manifest.warmup_quota_per_shipment
     expected_events = _expected_warmup_events(bundle, load, active)
+    if applied_by_user is not None:
+        admitted_ids = {
+            deterministic_event_id(bundle.manifest.profile, load.name, "warmup", slot.slot_id, seq)
+            for slot, count in zip(active, quotas, strict=True)
+            for seq in range(1, count + 1)
+        }
+        expected_events = {
+            key: value for key, value in expected_events.items() if key in admitted_ids
+        }
     observed_events = database.event_observations(sorted(expected_events))
     if set(observed_events) != set(expected_events):
         raise CampaignExecutionError("warm-up did not persist its exact deterministic event quota")
@@ -680,7 +1183,6 @@ def _verify_warmup(
         or len({item.notification_id for item in observed_events.values()}) != len(observed_events)
     ):
         raise CampaignExecutionError("warm-up event persistence identities are not one-to-one")
-    expected_delta = load.users * quota
     for table in ("carrier_event_inbox", "tracking_events", "notifications"):
         if after.counts[table] - initial.counts[table] != expected_delta:
             raise CampaignExecutionError(f"warm-up {table} delta does not match the fixed quota")
@@ -692,10 +1194,14 @@ def _verify_warmup(
     all_slots = (*bundle.warmup, *bundle.measurement)
     states = database.cohort_states([str(item.shipment_id) for item in all_slots])
     active_by_id = {str(item.shipment_id): item for item in active}
+    counts_by_id = {
+        str(slot.shipment_id): count for slot, count in zip(active, quotas, strict=True)
+    }
     for slot in bundle.warmup:
         state = states.get(str(slot.shipment_id))
         active_slot = active_by_id.get(str(slot.shipment_id))
-        if active_slot is None:
+        quota = counts_by_id.get(str(slot.shipment_id), 0)
+        if active_slot is None or quota == 0:
             expected_state = _initial_shipment_state(bundle, str(slot.shipment_id))
             if state != expected_state:
                 raise CampaignExecutionError("warm-up touched an inactive warm-up Shipment")
@@ -711,7 +1217,7 @@ def _verify_warmup(
             microseconds=quota * bundle.manifest.occurred_at_step_microseconds
         )
         expected_logical = (
-            active_slot.initial_status,
+            cycle_target_status(active_slot.initial_status, quota),
             last_occurred.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             last_event_id,
         )
@@ -730,7 +1236,7 @@ def _verify_warmup(
     seeded_counts = _seeded_event_counts(bundle)
     observed_counts = database.shipment_event_counts([str(item.shipment_id) for item in all_slots])
     expected_counts = {
-        shipment_id: count + (quota if shipment_id in active_by_id else 0)
+        shipment_id: count + counts_by_id.get(shipment_id, 0)
         for shipment_id, count in seeded_counts.items()
         if shipment_id in {str(item.shipment_id) for item in all_slots}
     }
@@ -746,6 +1252,7 @@ def _verify_warmup(
                     "status_event_received_at",
                     "status_external_event_id",
                     "updated_at",
+                    *({"status"} if applied_by_user is not None else set()),
                 }
             )
             for slot in active
@@ -781,6 +1288,12 @@ def _verify_measurement(
         raise CampaignExecutionError(
             "measurement HTTP/APPLIED and database persistence deltas are inconsistent"
         )
+    if (
+        after.auxiliary_counts
+        and after.auxiliary_counts["core_receipts"] - before.auxiliary_counts["core_receipts"]
+        != applied
+    ):
+        raise CampaignExecutionError("measurement receipts differ from HTTP effects")
     if any(key != "APPLIED" and value > 0 for key, value in http.items()):
         raise CampaignExecutionError("measurement contains a non-APPLIED webhook outcome")
 
@@ -834,16 +1347,24 @@ def _metadata(
     stabilization: dict[str, object],
     host_identity: dict[str, dict[str, object]],
     host_state: dict[str, dict[str, object]],
+    *,
+    host_runner: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "campaign": bundle.manifest.name,
         "official": bundle.manifest.official,
+        **(
+            {"mode": ACTIVE_SCREEN_PROTOCOL, "matrix_eligible": False}
+            if isinstance(bundle.manifest, ActiveScreenManifest)
+            else {}
+        ),
         "valid": True,
         "release": bundle.manifest.release,
         "profile": bundle.manifest.profile,
         "load": load.model_dump(mode="json"),
         "repetition": repetition,
         "git": asdict(provenance),
+        "host_runner": host_runner,
         "manifest_sha256": _file_sha256(manifest_path),
         "dataset_sha256": bundle.dataset_sha256,
         "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
@@ -1113,6 +1634,44 @@ def _read_result_counts(path: Path) -> dict[str, int]:
         raise CampaignExecutionError("operational result CSV is invalid") from exc
 
 
+def requires_active_host(manifest: object) -> bool:
+    return isinstance(manifest, ActiveScreenManifest) or (
+        os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+    )
+
+
+def runner_provenance(
+    repository_root: Path,
+    *,
+    require_clean: bool = True,
+    diagnostic_mode: str = "explicit-warmup-only-not-matrix-eligible",
+) -> dict[str, object]:
+    """Identify the host tool independently of the frozen measured application."""
+    provenance = _git_provenance(repository_root)
+    if require_clean and not (provenance.worktree_clean and provenance.staged_clean):
+        raise CampaignExecutionError("reviewed host runner must have a clean tracked source")
+    paths = [
+        *sorted((repository_root / "benchmarks").glob("*.py")),
+        *sorted((repository_root / "src").rglob("*.py")),
+        repository_root / "uv.lock",
+        repository_root / "pyproject.toml",
+    ]
+    return {
+        "schema_version": 1,
+        "git": asdict(provenance),
+        "uv_lock_sha256": _file_sha256(repository_root / "uv.lock"),
+        "components": {
+            path.relative_to(repository_root).as_posix(): _file_sha256(path) for path in paths
+        },
+        "supervision_interval_seconds": 0.25,
+        "collection_policy": "original-deltas-no-retry-failure-diagnostics-v1",
+        "phase_diagnostics": "separate-process-collector-shutdown-export-v2",
+        "diagnostic_mode": "symmetric-comparison-active-host"
+        if os.environ.get("FULFILLFLOW_COMPARISON_ACTIVE") == "1"
+        else diagnostic_mode,
+    }
+
+
 def _git_provenance(repository_root: Path) -> GitProvenance:
     def git(*args: str) -> str:
         environment = os.environ.copy()
@@ -1190,9 +1749,11 @@ def _print_validation(bundle: CampaignBundle) -> None:
                 "loads": [item.model_dump(mode="json") for item in manifest.loads],
                 "repetitions": manifest.repetitions,
                 "warmup_processes": 1,
-                "measurement_processes": 1,
+                "measurement_processes": 0 if isinstance(manifest, SensitivityManifest) else 1,
                 "warmup_seconds": manifest.warmup_seconds,
-                "measurement_seconds": manifest.measurement_seconds,
+                "measurement_seconds": 0
+                if isinstance(manifest, SensitivityManifest)
+                else manifest.measurement_seconds,
                 "warmup_quota_per_shipment": manifest.warmup_quota_per_shipment,
                 "warmup_cohort": len(bundle.warmup),
                 "measurement_cohort": len(bundle.measurement),

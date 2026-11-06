@@ -1,0 +1,10 @@
+"""Tracking's independent SQLAlchemy metadata registry."""
+
+from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase
+
+from fulfillflow.db.base import NAMING_CONVENTION
+
+
+class TrackingBase(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)

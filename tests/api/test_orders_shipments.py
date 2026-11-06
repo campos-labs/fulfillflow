@@ -6,11 +6,11 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
+from tests.service_pair import create_app
 from tests.support import FixedClock
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.main import create_app
 from fulfillflow.shipments.public import ShipmentService, ShipmentStatus
 
 pytestmark = pytest.mark.integration

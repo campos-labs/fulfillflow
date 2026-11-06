@@ -1,0 +1,95 @@
+{
+  "users": [
+    {
+      "name": "core",
+      "password_hash": "DBQaARkq1A27twNmIGwbtGYDwhN+k0Yda+Cz0ka7KFL1AZXF",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": []
+    },
+    {
+      "name": "tracking",
+      "password_hash": "DBQaAgYOCcjt2SgM/rge3SmARQNEgeTlvLdhAhzNuybItE+S",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": []
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "fulfillflow-v12"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "core",
+      "vhost": "fulfillflow-v12",
+      "configure": "^(tracking\\.apply\\.v1|tracking\\.apply\\.v1\\.queue|tracking\\.result\\.v1)$",
+      "write": "^(tracking\\.result\\.v1|tracking\\.apply\\.v1\\.queue)$",
+      "read": "^(tracking\\.apply\\.v1|tracking\\.apply\\.v1\\.queue)$"
+    },
+    {
+      "user": "tracking",
+      "vhost": "fulfillflow-v12",
+      "configure": "^(tracking\\.result\\.v1|tracking\\.result\\.v1\\.queue|tracking\\.apply\\.v1)$",
+      "write": "^(tracking\\.apply\\.v1|tracking\\.result\\.v1\\.queue)$",
+      "read": "^(tracking\\.result\\.v1|tracking\\.result\\.v1\\.queue)$"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "tracking.apply.v1",
+      "vhost": "fulfillflow-v12",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "tracking.result.v1",
+      "vhost": "fulfillflow-v12",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "tracking.apply.v1.queue",
+      "vhost": "fulfillflow-v12",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "tracking.result.v1.queue",
+      "vhost": "fulfillflow-v12",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "tracking.apply.v1",
+      "vhost": "fulfillflow-v12",
+      "destination": "tracking.apply.v1.queue",
+      "destination_type": "queue",
+      "routing_key": "tracking.apply.v1",
+      "arguments": {}
+    },
+    {
+      "source": "tracking.result.v1",
+      "vhost": "fulfillflow-v12",
+      "destination": "tracking.result.v1.queue",
+      "destination_type": "queue",
+      "routing_key": "tracking.result.v1",
+      "arguments": {}
+    }
+  ]
+}

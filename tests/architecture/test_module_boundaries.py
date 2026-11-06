@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from fulfillflow.notifications.schemas import NotificationFilters
 from fulfillflow.orders.schemas import OrderFilters
 from fulfillflow.shipments.schemas import ShipmentListFilters
 
@@ -28,11 +27,6 @@ PUBLIC_PARTICIPANTS = (
         PACKAGE_ROOT / "carriers" / "public.py",
         "CarriersPublic",
         PACKAGE_ROOT / "carriers" / "public.py",
-    ),
-    (
-        PACKAGE_ROOT / "notifications" / "public.py",
-        "NotificationsPublic",
-        PACKAGE_ROOT / "notifications" / "service.py",
     ),
 )
 
@@ -206,7 +200,14 @@ def test_business_internals_are_imported_only_by_their_owner() -> None:
             for module in BUSINESS_MODULES:
                 private_prefixes = tuple(
                     f"fulfillflow.{module}.{name}"
-                    for name in ("domain", "models", "repository", "service")
+                    for name in (
+                        "domain",
+                        "models",
+                        "repository",
+                        "service",
+                        "receipt_models",
+                        "receipt_repository",
+                    )
                 )
                 if imported.startswith(private_prefixes) and owner != module:
                     violations.append(f"{relative}: {imported}")
@@ -215,7 +216,6 @@ def test_business_internals_are_imported_only_by_their_owner() -> None:
 
 def test_public_filter_dtos_are_owned_by_public_schema_modules() -> None:
     expected_modules = {
-        NotificationFilters: "fulfillflow.notifications.schemas",
         OrderFilters: "fulfillflow.orders.schemas",
         ShipmentListFilters: "fulfillflow.shipments.schemas",
     }
@@ -270,7 +270,11 @@ def test_orders_carriers_and_notifications_do_not_depend_on_business_siblings() 
 
 def test_repositories_and_public_participants_never_commit_or_rollback() -> None:
     for module in BUSINESS_MODULES:
-        path = PACKAGE_ROOT / module / "repository.py"
+        path = (
+            PACKAGE_ROOT
+            / module
+            / ("owned_repository.py" if module == "notifications" else "repository.py")
+        )
         violations = _transaction_boundary_violations(
             path.read_text(encoding="utf-8"),
             scan_entire_module=True,

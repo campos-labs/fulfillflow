@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
-from fulfillflow.main import create_app
+from tests.service_pair import create_app
 from tests.support import FixedClock
 
 

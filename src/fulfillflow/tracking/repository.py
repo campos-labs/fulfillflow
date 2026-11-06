@@ -64,7 +64,7 @@ class TrackingRepository:
             CarrierEventInboxModel.id == inbox_event_id
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         model = await self._session.scalar(statement)
         return _inbox_to_entity(model) if model is not None else None
 
@@ -74,10 +74,13 @@ class TrackingRepository:
         if model is None:
             raise LookupError(f"Carrier inbox {inbox.id} disappeared during its transaction")
         model.parsed_payload = inbox.parsed_payload
+        model.command = inbox.command
         model.status = inbox.status.value
         model.error_code = inbox.error_code
         model.error_detail = inbox.error_detail
         model.processed_at = inbox.processed_at
+        model.completed_at = inbox.completed_at
+        model.result = inbox.result
         await self._session.flush()
 
     async def add_tracking_event(self, event: TrackingEvent) -> None:
@@ -184,6 +187,9 @@ def _inbox_to_model(inbox: CarrierEventInbox) -> CarrierEventInboxModel:
         error_detail=inbox.error_detail,
         processed_at=inbox.processed_at,
         request_id=inbox.request_id,
+        command=inbox.command,
+        completed_at=inbox.completed_at,
+        result=inbox.result,
     )
 
 
@@ -201,6 +207,9 @@ def _inbox_to_entity(model: CarrierEventInboxModel) -> CarrierEventInbox:
         error_detail=model.error_detail,
         processed_at=model.processed_at,
         request_id=model.request_id,
+        command=model.command,
+        completed_at=model.completed_at,
+        result=model.result,
     )
 
 

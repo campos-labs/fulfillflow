@@ -1,10 +1,33 @@
-# FulfillFlow benchmark harness
+# FulfillFlow — benchmark tool
 
-This directory defines reproducible data and workload artifacts. The accepted v1.0 baseline has
-30 valid official repetitions: mixed/timeline/ingestion, 4/12 users, five repetitions per point.
-See [the portable baseline publication](baselines/v1.0/README.md) for reports, immutable manifests,
-artifact hashes, offline reconstruction and the distinction between measured and release commits.
-Raw results and private diagnostics are archived locally, not included in Git.
+Campaign execution is suspended. All prepared launchers are closed; the commands
+below document tool contracts and do not authorize a new run or a replay.
+See [V11_REVIEW.md](V11_REVIEW.md) for the current evidence index and closed campaigns.
+
+This directory contains deterministic datasets, manifest validation, host runners,
+loadgen contracts, collection and reconciliation tools. The published v1.0 baseline
+and its 30 repetitions remain in [baselines/v1.0](baselines/v1.0/README.md).
+Raw results and operational diagnostics are retained locally under `results/`.
+
+## Protocol selection and safe use
+
+The historical v1.0 loader accepts the original 60-second warm-up contract.
+The v1.1 schema-v2 loader adds explicit Core/Tracking ownership. The separate
+`symmetric-warmup120-comparison-v1` contract uses 120-second proportional admission,
+300-second stabilization and 300-second measurement; it does not weaken the
+historical validator. Application, runner, loadgen and coordinator identities are
+recorded separately. Approved contracts are in the [frozen v1.1 DESIGN §30](https://github.com/campos-labs/fulfillflow/blob/217e29a230689da3bd6359790f0753b41a10a927/DESIGN.md#30-arquitetura-v11--extração-e-preparação-comparação-pendente).
+
+Execution requires a new, reviewed package and destinations, matching images,
+source, host and resources, clean preparation and complete reconciliation.
+A failed mandatory check stops the sequence without retry or replacement.
+Do not run dataset generation, preparation or cleanup against preserved evidence.
+For v1.1 preparation, use the owner-aware modules `benchmarks.seed_v11` and
+`benchmarks.prepare_v11`; the historical v1.0 physical loader cannot initialize
+segregated service databases. Historical commands and packages are indexed in the review.
+
+The sections below specify the original tool contract unless an explicit protocol
+extension is named. They remain reference material, not a currently released campaign.
 
 ## Frozen logical datasets
 

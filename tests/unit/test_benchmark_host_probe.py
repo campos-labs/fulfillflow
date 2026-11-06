@@ -123,6 +123,32 @@ def test_identity_is_observed_once_and_dynamic_state_is_refreshed_without_person
     assert "d" * 64 not in json.dumps(state)
 
 
+@pytest.mark.parametrize("mode", ["empty", "nonzero", "exception", "invalid"])
+def test_empty_container_inventory_requires_successful_observation(mode: str) -> None:
+    commands = Commands()
+
+    def observe(command, timeout):
+        if command[:2] == ["docker", "ps"]:
+            if mode == "exception":
+                raise ExternalCommandError("observation unavailable")
+            return subprocess.CompletedProcess(
+                command, 1 if mode == "nonzero" else 0, "invalid" if mode == "invalid" else "", ""
+            )
+        return commands(command, timeout)
+
+    probe = HostProbe(
+        _contract(), official=False, timeout_seconds=2, command_runner=observe, platform="win32"
+    )
+    if mode == "empty":
+        assert probe.dynamic({})["concurrent_containers"]["observed"] == 0
+        with pytest.raises(EnvironmentMismatchError):
+            probe.dynamic(CONTAINERS)
+    else:
+        with pytest.raises(EnvironmentMismatchError) as captured:
+            probe.dynamic({})
+        assert captured.value.report["concurrent_containers"]["observed"] is None
+
+
 @pytest.mark.parametrize("field", list(IDENTITY))
 @pytest.mark.parametrize("missing", [False, True])
 def test_every_essential_identity_field_fails_closed_on_missing_or_drift(

@@ -1,0 +1,3 @@
+# Candidate compatibility layer; the parent remains the measured v1.0 loadgen.
+FROM fulfillflow-loadgen:v10-frozen-f5b7118626bc
+COPY --chown=10002:10002 benchmarks/campaign.py /work/benchmarks/campaign.py

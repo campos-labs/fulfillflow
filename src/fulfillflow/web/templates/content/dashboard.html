@@ -11,11 +11,13 @@
   <div class="col-12 col-md-6 col-xl-3">
     <section class="card h-100 shadow-sm"><div class="card-body">
       <h2 class="h5"><a href="{{ path_for(request, target) }}">{{ heading }}</a></h2>
+      {% if counts is none %}<p class="mb-0" role="status">Notifications counts are unavailable. Shipment and Order completion is unaffected.</p>{% else %}
       <dl class="mb-0">
       {% for status, count in counts.items() %}
         <div class="d-flex justify-content-between border-top py-1"><dt class="small">{{ status }}</dt><dd class="mb-0 fw-semibold">{{ count }}</dd></div>
       {% endfor %}
       </dl>
+      {% endif %}
     </div></section>
   </div>
   {% endfor %}

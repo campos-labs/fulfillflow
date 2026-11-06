@@ -1,24 +1,35 @@
 """REST routes composed exclusively over public module services and schemas."""
 
 from datetime import datetime
-from typing import Annotated, cast
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import AwareDatetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from fulfillflow.api.dependencies import get_clock, get_session, get_settings
 from fulfillflow.api.queries import OrderDetailQuery
 from fulfillflow.api.schemas import OrderDetailRead
-from fulfillflow.carriers.public import CarrierNotFoundError
 from fulfillflow.config import Settings
-from fulfillflow.notifications.public import NotificationService, NotificationStatus
-from fulfillflow.notifications.schemas import (
-    NotificationFilters,
+from fulfillflow.contracts.notifications import (
     NotificationList,
     NotificationRead,
+    NotificationStatus,
+    NotificationStatusView,
 )
+from fulfillflow.contracts.tracking import (
+    CarrierEventList,
+    CarrierEventRead,
+    TrackingEventList,
+    WebhookAccepted,
+    WebhookResponse,
+)
+from fulfillflow.contracts.values import InboxStatus
+from fulfillflow.core.notification_queries import NotificationStatusQuery
+from fulfillflow.core.notifications_client import get_notifications
+from fulfillflow.core.tracking_client import forward_tracking
 from fulfillflow.orders.public import (
     CreateOrderCommand,
     OrderService,
@@ -37,23 +48,6 @@ from fulfillflow.shipments.schemas import (
     ShipmentListFilters,
     ShipmentRead,
     ShipmentSummaryRead,
-)
-from fulfillflow.tracking.public import (
-    InboxStatus,
-    PayloadTooLargeError,
-    TrackingProblemError,
-    TrackingService,
-    UnsupportedWebhookMediaTypeError,
-    WebhookAuthentication,
-)
-from fulfillflow.tracking.schemas import (
-    CarrierEventFilters,
-    CarrierEventList,
-    CarrierEventRead,
-    CarrierEventSummaryRead,
-    TrackingEventList,
-    TrackingEventRead,
-    WebhookResponse,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -237,74 +231,30 @@ async def cancel_shipment(
 
 
 @router.get(
-    "/shipments/{shipment_id}/tracking",
-    response_model=TrackingEventList,
-    tags=["tracking"],
+    "/shipments/{shipment_id}/tracking", response_model=TrackingEventList, tags=["tracking"]
 )
 async def get_shipment_tracking(
     shipment_id: UUID,
-    session: SessionDependency,
-    clock: ClockDependency,
+    request: Request,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> TrackingEventList:
-    """Return the canonical append-only timeline for a Shipment."""
-    result = await TrackingService(session, clock).timeline(
-        shipment_id,
-        page=page,
-        page_size=page_size,
-    )
-    return TrackingEventList(
-        items=[TrackingEventRead.from_event(event) for event in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total=result.total,
-    )
+) -> Response:
+    return await forward_tracking(request)
 
 
 @router.post(
     "/carriers/{carrier_code}/events",
     response_model=WebhookResponse,
+    responses={202: {"model": WebhookAccepted}},
     tags=["tracking"],
 )
-async def receive_carrier_event(
-    carrier_code: str,
-    request: Request,
-    session: SessionDependency,
-    clock: ClockDependency,
-    settings: SettingsDependency,
-) -> WebhookResponse:
-    """Authenticate and synchronously process one raw Carrier webhook."""
-    normalized_code = carrier_code.strip().lower()
-    secret = _carrier_secret(settings, normalized_code)
-    authentication = WebhookAuthentication(
-        event_id=_single_webhook_header(request, "X-FulfillFlow-Event-Id"),
-        timestamp=_single_webhook_header(request, "X-FulfillFlow-Timestamp"),
-        signature=_single_webhook_header(request, "X-FulfillFlow-Signature"),
-    )
-    content_type = request.headers.get("content-type", "").split(";", maxsplit=1)[0]
-    if content_type.strip().lower() != "application/json":
-        raise UnsupportedWebhookMediaTypeError
-    raw_body = await _read_limited_body(request, settings.max_webhook_body_bytes)
-    outcome = await TrackingService(session, clock).authenticate_and_process(
-        normalized_code,
-        authentication,
-        raw_body,
-        secret=secret,
-        tolerance_seconds=settings.webhook_signature_tolerance_seconds,
-        request_id=cast(UUID, request.state.request_id),
-    )
-    return WebhookResponse.from_outcome(outcome)
+async def receive_carrier_event(carrier_code: str, request: Request) -> Response:
+    return await forward_tracking(request)
 
 
-@router.get(
-    "/carrier-events",
-    response_model=CarrierEventList,
-    tags=["tracking"],
-)
+@router.get("/carrier-events", response_model=CarrierEventList, tags=["tracking"])
 async def list_carrier_events(
-    session: SessionDependency,
-    clock: ClockDependency,
+    request: Request,
     carrier_code: str | None = None,
     inbox_status: Annotated[InboxStatus | None, Query(alias="status")] = None,
     external_event_id: Annotated[str | None, Query(max_length=128)] = None,
@@ -312,41 +262,13 @@ async def list_carrier_events(
     received_to: AwareDatetime | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> CarrierEventList:
-    """List authenticated inbox records through sanitized projections."""
-    result = await TrackingService(session, clock).list_inbox(
-        CarrierEventFilters(
-            carrier_code=carrier_code,
-            status=inbox_status,
-            external_event_id=external_event_id,
-            received_from=_as_datetime(received_from),
-            received_to=_as_datetime(received_to),
-        ),
-        page=page,
-        page_size=page_size,
-    )
-    return CarrierEventList(
-        items=[CarrierEventSummaryRead.from_view(view) for view in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total=result.total,
-    )
+) -> Response:
+    return await forward_tracking(request)
 
 
-@router.get(
-    "/carrier-events/{inbox_event_id}",
-    response_model=CarrierEventRead,
-    tags=["tracking"],
-)
-async def get_carrier_event(
-    inbox_event_id: UUID,
-    session: SessionDependency,
-    clock: ClockDependency,
-) -> CarrierEventRead:
-    """Return one sanitized inbox detail without exposing authenticated bytes."""
-    return CarrierEventRead.from_view(
-        await TrackingService(session, clock).get_inbox(inbox_event_id)
-    )
+@router.get("/carrier-events/{inbox_event_id}", response_model=CarrierEventRead, tags=["tracking"])
+async def get_carrier_event(inbox_event_id: UUID, request: Request) -> Response:
+    return await forward_tracking(request)
 
 
 @router.get(
@@ -355,7 +277,7 @@ async def get_carrier_event(
     tags=["notifications"],
 )
 async def list_notifications(
-    session: SessionDependency,
+    request: Request,
     notification_status: Annotated[NotificationStatus | None, Query(alias="status")] = None,
     shipment_id: UUID | None = None,
     created_from: AwareDatetime | None = None,
@@ -364,21 +286,13 @@ async def list_notifications(
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> NotificationList:
     """List simulated Notification records through their operational projection."""
-    result = await NotificationService(session).list(
-        NotificationFilters(
-            status=notification_status,
-            shipment_id=shipment_id,
-            created_from=_as_datetime(created_from),
-            created_to=_as_datetime(created_to),
-        ),
+    return await get_notifications(request).list(
+        status=notification_status,
+        shipment_id=shipment_id,
+        created_from=_as_datetime(created_from),
+        created_to=_as_datetime(created_to),
         page=page,
         page_size=page_size,
-    )
-    return NotificationList(
-        items=[NotificationRead.from_notification(item) for item in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total=result.total,
     )
 
 
@@ -389,49 +303,26 @@ async def list_notifications(
 )
 async def get_notification(
     notification_id: UUID,
-    session: SessionDependency,
+    request: Request,
 ) -> NotificationRead:
     """Return one simulated Notification without exposing causal payload internals."""
-    return NotificationRead.from_notification(
-        await NotificationService(session).get(notification_id)
+    return await get_notifications(request).get(notification_id)
+
+
+@router.get(
+    "/notification-status/{tracking_event_id}",
+    response_model=NotificationStatusView,
+    tags=["notifications"],
+)
+async def get_notification_status(
+    tracking_event_id: UUID,
+    request: Request,
+    session: SessionDependency,
+    clock: ClockDependency,
+) -> NotificationStatusView:
+    return await NotificationStatusQuery(session, clock, get_notifications(request)).get(
+        tracking_event_id
     )
-
-
-async def _read_limited_body(request: Request, maximum_bytes: int) -> bytes:
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            if int(content_length) > maximum_bytes:
-                raise PayloadTooLargeError
-        except ValueError:
-            pass
-
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > maximum_bytes:
-            raise PayloadTooLargeError
-        body.extend(chunk)
-    return bytes(body)
-
-
-def _single_webhook_header(request: Request, name: str) -> str:
-    values = request.headers.getlist(name)
-    if len(values) != 1:
-        raise TrackingProblemError(
-            status_code=401,
-            code="INVALID_WEBHOOK_SIGNATURE",
-            title="Invalid webhook signature",
-            detail="Webhook authentication failed.",
-        )
-    return values[0]
-
-
-def _carrier_secret(settings: Settings, carrier_code: str) -> str:
-    if carrier_code == "carrier-alpha":
-        return settings.carrier_alpha_webhook_secret.get_secret_value()
-    if carrier_code == "carrier-beta":
-        return settings.carrier_beta_webhook_secret.get_secret_value()
-    raise CarrierNotFoundError(carrier_code)
 
 
 def _as_datetime(value: AwareDatetime | None) -> datetime | None:

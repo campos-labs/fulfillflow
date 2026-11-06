@@ -1,21 +1,17 @@
-name: fulfillflow
+name: fulfillflow-v13
 
-x-app-environment: &app-environment
+x-service-environment: &service-environment
   APP_ENV: "${APP_ENV:-local}"
   APP_NAME: "${APP_NAME:-FulfillFlow}"
   APP_HOST: "${APP_HOST:-0.0.0.0}"
-  APP_PORT: "${APP_PORT:-8000}"
+  APP_PORT: "8000"
   APP_TIMEZONE: "${APP_TIMEZONE:-America/Sao_Paulo}"
-  DATABASE_URL: "${DATABASE_URL:-postgresql+psycopg://fulfillflow:fulfillflow-local-db-2026@db:5432/fulfillflow}"
-  DB_POOL_SIZE: "${DB_POOL_SIZE:-10}"
+  DB_POOL_SIZE: "${DB_POOL_SIZE:-2}"
   DB_MAX_OVERFLOW: "${DB_MAX_OVERFLOW:-0}"
   DB_POOL_TIMEOUT_SECONDS: "${DB_POOL_TIMEOUT_SECONDS:-5}"
   DB_STATEMENT_TIMEOUT_MS: "${DB_STATEMENT_TIMEOUT_MS:-5000}"
   LOG_LEVEL: "${LOG_LEVEL:-INFO}"
   LOG_FORMAT: "${LOG_FORMAT:-json}"
-  SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
-  CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:-f4f67f688c3f40a59079fd6bcc19a7f214c21df9b8a94039a4c0e7cd6cc84385}"
-  CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:-3df2b1b16bd84e22987409e9acfc09f6428a8c3573154a478b2084852bc64af2}"
   WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: "${WEBHOOK_SIGNATURE_TOLERANCE_SECONDS:-300}"
   MAX_WEBHOOK_BODY_BYTES: "${MAX_WEBHOOK_BODY_BYTES:-65536}"
   METRICS_ENABLED: "${METRICS_ENABLED:-true}"
@@ -25,38 +21,103 @@ x-app-environment: &app-environment
   OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
   OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1.0}"
   SEED_RANDOM_SEED: "${SEED_RANDOM_SEED:-20260828}"
+  INTERNAL_API_SECRET: "${INTERNAL_API_SECRET:-7f8d56d14d004eac8b27f2bd4c01260541090af17bf2477e91ab0e2bf117c9a3}"
+  CORE_BASE_URL: "http://core:8000"
+  TRACKING_BASE_URL: "http://tracking:8000"
+  SERVICE_HTTP_TIMEOUT_SECONDS: "${SERVICE_HTTP_TIMEOUT_SECONDS:-10}"
+  FORWARDING_TIMEOUT_SECONDS: "${FORWARDING_TIMEOUT_SECONDS:-30}"
 
-x-application: &application
-  image: fulfillflow:local
+x-core-environment: &core-environment
+  <<: *service-environment
+  SERVICE_ROLE: core
+  DATABASE_URL: "${CORE_DATABASE_URL:-postgresql+psycopg://fulfillflow_core:fulfillflow-v12-core-local-2026@db:5432/fulfillflow_core}"
+  SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
+  NOTIFICATIONS_BASE_URL: "http://notifications:8000"
+  NOTIFICATIONS_API_SECRET: "${NOTIFICATIONS_API_SECRET:-276c731d858844a3a6c5235d4d4d18e84aa09935bd4a4f098a734ad1a5a93a12}"
+  NOTIFICATIONS_HTTP_TIMEOUT_SECONDS: "${NOTIFICATIONS_HTTP_TIMEOUT_SECONDS:-2}"
+  OTEL_SERVICE_NAME: fulfillflow-core
+
+x-tracking-environment: &tracking-environment
+  <<: *service-environment
+  SERVICE_ROLE: tracking
+  DATABASE_URL: "${TRACKING_DATABASE_URL:-postgresql+psycopg://fulfillflow_tracking:fulfillflow-v12-tracking-local-2026@db:5432/fulfillflow_tracking}"
+  CARRIER_ALPHA_WEBHOOK_SECRET: "${CARRIER_ALPHA_WEBHOOK_SECRET:-f4f67f688c3f40a59079fd6bcc19a7f214c21df9b8a94039a4c0e7cd6cc84385}"
+  CARRIER_BETA_WEBHOOK_SECRET: "${CARRIER_BETA_WEBHOOK_SECRET:-3df2b1b16bd84e22987409e9acfc09f6428a8c3573154a478b2084852bc64af2}"
+  OTEL_SERVICE_NAME: fulfillflow-tracking
+
+x-core: &core
+  image: fulfillflow-core:v13-local
   build:
     context: .
     target: runtime
-  environment: *app-environment
+  environment: *core-environment
+
+x-tracking: &tracking
+  image: fulfillflow-tracking:v13-local
+  build:
+    context: .
+    target: runtime
+  environment: *tracking-environment
+
+x-notifications-environment: &notifications-environment
+  <<: *service-environment
+  SERVICE_ROLE: notifications
+  DATABASE_URL: "${NOTIFICATIONS_DATABASE_URL:-postgresql+psycopg://fulfillflow_notifications:fulfillflow-v13-notifications-local-2026@db:5432/fulfillflow_notifications}"
+  INTERNAL_API_SECRET: "${NOTIFICATIONS_API_SECRET:-276c731d858844a3a6c5235d4d4d18e84aa09935bd4a4f098a734ad1a5a93a12}"
+  OTEL_SERVICE_NAME: fulfillflow-notifications
+
+x-notifications: &notifications
+  image: fulfillflow-notifications:v13-local
+  build:
+    context: .
+    target: runtime
+  environment: *notifications-environment
 
 services:
   db:
     image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
     environment:
-      POSTGRES_DB: "${POSTGRES_DB:-fulfillflow}"
-      POSTGRES_USER: "${POSTGRES_USER:-fulfillflow}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-local-db-2026}"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fulfillflow-v12-admin-local-2026}"
+      CORE_DB_PASSWORD: "${CORE_DB_PASSWORD:-fulfillflow-v12-core-local-2026}"
+      TRACKING_DB_PASSWORD: "${TRACKING_DB_PASSWORD:-fulfillflow-v12-tracking-local-2026}"
+      NOTIFICATIONS_DB_PASSWORD: "${NOTIFICATIONS_DB_PASSWORD:-fulfillflow-v13-notifications-local-2026}"
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - v13_postgres_data:/var/lib/postgresql
+      - ./infrastructure/init-databases.sh:/docker-entrypoint-initdb.d/10-services.sh:ro
+      - ./infrastructure/init-notifications-db.sh:/docker-entrypoint-initdb.d/30-notifications.sh:ro
+    cpus: 2.0
+    mem_limit: 2560m
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready --host=127.0.0.1 --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\"",
-        ]
+      test: ["CMD-SHELL", "pg_isready --host=127.0.0.1 --username=postgres --dbname=postgres"]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 10s
     stop_grace_period: 30s
 
-  migrate:
-    <<: *application
-    command: ["alembic", "upgrade", "head"]
+  broker:
+    hostname: "${RABBITMQ_HOSTNAME:-broker}"
+    environment:
+      RABBITMQ_CTL_ERL_ARGS: "+S 1:1 +A 1"
+    image: rabbitmq:4.2.4-alpine@sha256:d1b24a78c1ace826771eb8585d8f30315a64f1aad4d1fe6fcd9b4435cccc16f4
+    volumes:
+      - v13_rabbitmq_data:/var/lib/rabbitmq
+      - ./infrastructure/rabbitmq-v13.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infrastructure/rabbitmq-v13.json:/etc/rabbitmq/definitions.json:ro
+    cpus: 0.5
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 15s
+
+  migrate-core:
+    <<: *core
+    command: ["alembic", "-c", "alembic_core.ini", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
@@ -64,14 +125,131 @@ services:
       disable: true
     restart: "no"
 
-  app:
-    <<: *application
-    init: true
+  migrate-tracking:
+    <<: *tracking
+    command: ["alembic", "-c", "alembic_tracking.ini", "upgrade", "head"]
     depends_on:
-      migrate:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  migrate-notifications:
+    <<: *notifications
+    command: ["alembic", "-c", "alembic_notifications.ini", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  core:
+    <<: *core
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    depends_on:
+      migrate-core:
+        condition: service_completed_successfully
+      migrate-tracking:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:${APP_PORT:-8000}:${APP_PORT:-8000}"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+
+  tracking:
+    <<: *tracking
+    command: ["python", "-m", "fulfillflow.tracking"]
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    depends_on:
+      migrate-core:
+        condition: service_completed_successfully
+      migrate-tracking:
+        condition: service_completed_successfully
+
+  notifications:
+    <<: *notifications
+    command: ["python", "-m", "fulfillflow.notifications"]
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    depends_on:
+      migrate-notifications:
+        condition: service_completed_successfully
+
+  core-worker:
+    <<: *core
+    command: ["python", "-m", "fulfillflow.core.worker"]
+    environment:
+      <<: *core-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${CORE_AMQP_URL:-amqp://core:fulfillflow-v12-core-amqp-local-2026@broker:5672/fulfillflow-v13}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "core"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate-core:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
+  tracking-worker:
+    <<: *tracking
+    command: ["python", "-m", "fulfillflow.tracking.worker"]
+    environment:
+      <<: *tracking-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${TRACKING_AMQP_URL:-amqp://tracking:fulfillflow-v12-tracking-amqp-local-2026@broker:5672/fulfillflow-v13}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "tracking"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate-tracking:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+
+  notifications-worker:
+    <<: *notifications
+    command: ["python", "-m", "fulfillflow.notifications.worker"]
+    environment:
+      <<: *notifications-environment
+      DB_POOL_SIZE: "3"
+      AMQP_URL: "${NOTIFICATIONS_AMQP_URL:-amqp://notifications:fulfillflow-v13-notifications-local-2026@broker:5672/fulfillflow-v13}"
+    init: true
+    cpus: 0.5
+    mem_limit: 384m
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "-m", "fulfillflow.messaging.health", "--service", "notifications"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate-notifications:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
 
 volumes:
-  postgres_data:
+  v13_rabbitmq_data:
+  v13_postgres_data:

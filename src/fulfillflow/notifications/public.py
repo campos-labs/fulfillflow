@@ -1,4 +1,4 @@
-"""Supported Notifications imports for Tracking and API composition."""
+"""Pure rendering compatibility for historical datasets; runtime uses contracts."""
 
 from fulfillflow.notifications.domain import (
     ExpectedNotificationFailure,
@@ -10,21 +10,13 @@ from fulfillflow.notifications.domain import (
     build_notification,
     render_notification,
 )
-from fulfillflow.notifications.service import (
-    NotificationNotFoundError,
-    NotificationService,
-    NotificationsPublic,
-)
 
 __all__ = [
     "ExpectedNotificationFailure",
     "Notification",
     "NotificationChannel",
-    "NotificationNotFoundError",
     "NotificationRenderer",
-    "NotificationService",
     "NotificationStatus",
-    "NotificationsPublic",
     "RenderedNotification",
     "build_notification",
     "render_notification",

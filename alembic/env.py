@@ -3,25 +3,62 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import Connection, pool
+from sqlalchemy import Connection, ForeignKeyConstraint, MetaData, pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from fulfillflow.asyncio_support import run_async
 from fulfillflow.carriers import models as carrier_models  # noqa: F401
 from fulfillflow.config import DatabaseSettings
+from fulfillflow.core import notification_archive  # noqa: F401
 from fulfillflow.db.base import Base
 from fulfillflow.db.session import postgres_connect_args
-from fulfillflow.notifications import models as notification_models  # noqa: F401
 from fulfillflow.orders import models as order_models  # noqa: F401
 from fulfillflow.shipments import models as shipment_models  # noqa: F401
 from fulfillflow.tracking import models as tracking_models  # noqa: F401
+from fulfillflow.tracking.base import TrackingBase
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-target_metadata = Base.metadata
+# This entry point belongs to preserved v1.0 migrations and benchmark regression tests.
+# v1.1 services use alembic_core.ini / alembic_tracking.ini exclusively.
+target_metadata = MetaData(naming_convention=Base.metadata.naming_convention)
+for source in (Base.metadata, TrackingBase.metadata):
+    for table in source.tables.values():
+        if table.name not in {
+            "tracking_event_receipts",
+            "message_outbox",
+            "message_inbox",
+            "message_quarantine",
+            "message_rearm",
+        }:
+            table.to_metadata(target_metadata)
+# Remove only the new field from the cloned model. Do not filter reflected database
+# objects: Alembic must still detect an unexpected column in a historical database.
+legacy_inbox = target_metadata.tables["carrier_event_inbox"]
+for new_column in ("command", "completed_at", "result"):
+    legacy_inbox._columns.remove(legacy_inbox.c[new_column])
+for table_name, column, target, constraint in (
+    (
+        "carrier_event_inbox",
+        "carrier_id",
+        "carriers.id",
+        "fk_carrier_event_inbox_carrier_id_carriers",
+    ),
+    ("tracking_events", "carrier_id", "carriers.id", "fk_tracking_events_carrier_id_carriers"),
+    ("tracking_events", "shipment_id", "shipments.id", "fk_tracking_events_shipment_id_shipments"),
+    (
+        "notifications",
+        "tracking_event_id",
+        "tracking_events.id",
+        "fk_notifications_tracking_event_id_tracking_events",
+    ),
+):
+    target_metadata.tables[table_name].append_constraint(
+        ForeignKeyConstraint([column], [target], name=constraint, ondelete="RESTRICT")
+    )
 
 
 def run_migrations_offline() -> None:

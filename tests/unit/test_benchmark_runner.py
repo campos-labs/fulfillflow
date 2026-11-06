@@ -114,7 +114,7 @@ def test_run_phase_physically_separates_warmup_from_measurement_csvs(
         def __init__(self, command: list[str]) -> None:
             self.command = command
 
-        def wait(self, _timeout: float) -> int:
+        def wait(self, _timeout: float, **_kwargs: object) -> int:
             return 0
 
         def ensure_stopped(self) -> None:
@@ -217,7 +217,7 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
     stopped: list[str] = []
 
     class FailedProcess:
-        def wait(self, _timeout: float) -> int:
+        def wait(self, _timeout: float, **_kwargs: object) -> int:
             if failure == "timeout":
                 raise CampaignExecutionError("external process exceeded its frozen timeout")
             return 7
@@ -226,6 +226,8 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
             stopped.append("process")
 
     class Sampler:
+        failure = None
+
         def start(self) -> None:
             pass
 
@@ -240,7 +242,7 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
     )
     monkeypatch.setattr(
         "benchmarks.run_campaign.run_capture",
-        lambda *_a: pytest.fail("must not export a failed phase"),
+        lambda *_a: subprocess.CompletedProcess([], 0, "", ""),
     )
     with pytest.raises(CampaignExecutionError, match=r"timeout|invalidated"):
         _run_phase(
@@ -254,7 +256,9 @@ def test_phase_supervision_refuses_failure_despite_healthy_container(
             tmp_path,
         )
     assert "process" in stopped and "sampler" in stopped
-    assert ("phase" in stopped) is (failure == "timeout")
+    assert "phase" in stopped
+    assert (tmp_path / "phase-error.json").is_file()
+    assert not (tmp_path / "locust_stats.csv").exists()
 
 
 def _write_resources(path: Path) -> None:
@@ -405,6 +409,7 @@ def test_execute_orders_preparation_stabilization_and_host_gates_for_every_repet
         lambda _p: GitProvenance(bundle.manifest.git_sha, "release/v1.0.0", True, True),
     )
     monkeypatch.setattr(runner, "HostProbe", FakeHost)
+    monkeypatch.setattr(runner, "_project_release", lambda _p: bundle.manifest.release)
     monkeypatch.setattr(runner, "DockerProbe", FakeDocker)
     monkeypatch.setattr(runner, "DatabaseProbe", FakeDatabase)
     monkeypatch.setattr(runner, "_run_preparation", lambda *_a: step("prepare"))
@@ -634,6 +639,7 @@ def test_official_execution_refuses_dirty_tracked_source_before_creating_results
     bundle = _bundle()
     dirty = GitProvenance(bundle.manifest.git_sha, "release/v1.0.0", False, True)
     monkeypatch.setattr("benchmarks.run_campaign._git_provenance", lambda _path: dirty)
+    monkeypatch.setattr("benchmarks.run_campaign._project_release", lambda _path: "v1.0.0")
     official = bundle.manifest.model_copy(update={"official": True, "repetitions": 5})
     dirty_bundle = bundle.__class__(
         official,
@@ -705,7 +711,7 @@ def test_official_summary_uses_median_and_preserves_five_repetitions(tmp_path: P
 
 
 def test_runner_derives_release_from_project_metadata() -> None:
-    assert _project_release(Path.cwd()) == "v1.0.0"
+    assert _project_release(Path.cwd()) == "v1.3.0.dev0"
 
 
 def test_git_provenance_has_a_finite_noninteractive_timeout(

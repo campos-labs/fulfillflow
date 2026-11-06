@@ -1,0 +1,9 @@
+{
+  "event_id": "v13-iv-beta-valid-04",
+  "http_status": 200,
+  "result": "DUPLICATE",
+  "notification_count_before": 8,
+  "notification_count_after": 8,
+  "records_equal": true,
+  "records_sha256": "7a4645098e504fa6714be9b83316a1169616a9c3639bd1ab1bbe73222aaddfcb"
+}
