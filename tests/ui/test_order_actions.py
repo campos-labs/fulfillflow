@@ -114,7 +114,10 @@ async def test_order_detail_only_offers_available_actions(
 
     targets = _ActionTargets()
     targets.feed(response.text)
-    assert targets.forms == {("post", f"/orders/{order_id}/{action}") for action in mutations}
+    expected_forms = {("post", f"/orders/{order_id}/{action}") for action in mutations}
+    if not htmx:
+        expected_forms.add(("post", "/auth/logout"))
+    assert targets.forms == expected_forms
     shipment_links = {href for href in targets.links if urlsplit(href).path == "/shipments/new"}
     assert shipment_links == (
         {f"/shipments/new?order_id={order_id}"} if create_shipment_allowed else set()

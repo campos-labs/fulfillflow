@@ -51,8 +51,35 @@ jobs:
       - name: Import contracts
         run: uv run lint-imports
 
-      - name: Start isolated owner and legacy databases
-        run: docker compose -p fulfillflow-ci-tests -f compose.test.yaml up -d --wait --wait-timeout 120
+      - name: Prepare isolated identity provider
+        run: |
+          export TEST_IDENTITY_CREDENTIALS="$RUNNER_TEMP/fulfillflow-identity/credentials.json"
+          echo "TEST_IDENTITY_CREDENTIALS=$TEST_IDENTITY_CREDENTIALS" >> "$GITHUB_ENV"
+          uv run playwright install --with-deps chromium
+          uv run python scripts/prepare_identity.py --output "$RUNNER_TEMP/fulfillflow-identity"
+          sudo setfacl -m u:1000:r "$RUNNER_TEMP/fulfillflow-identity/realm.json"
+          echo "IDENTITY_REALM_FILE=$RUNNER_TEMP/fulfillflow-identity/realm.json" >> "$GITHUB_ENV"
+          uv run python - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ["TEST_IDENTITY_CREDENTIALS"]).read_text())
+          print("KEYCLOAK_DB_PASSWORD=" + data["database_password"])
+          PY
+
+      - name: Start isolated databases, broker and Keycloak
+        run: |
+          docker compose -p fulfillflow-ci-tests -f compose.test.yaml -f compose.identity.yaml up -d --wait --wait-timeout 120
+          uv run python - <<'PY'
+          import time, urllib.request
+          for attempt in range(90):
+              try:
+                  urllib.request.urlopen("http://localhost:18880/realms/fulfillflow/.well-known/openid-configuration", timeout=2).close()
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("Keycloak did not become ready")
+          PY
 
       - name: Install isolated v1.3 broker permissions
         run: docker exec --user rabbitmq fulfillflow-ci-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
@@ -159,13 +186,25 @@ jobs:
       - name: Smoke test Compose stack
         env:
           POSTGRES_PASSWORD: fulfillflow-compose-ci-2026
+          KEYCLOAK_PORT: "18881"
+          OIDC_ISSUER: http://localhost:18881/realms/fulfillflow
         run: |
-          docker compose up --detach --no-build --wait --wait-timeout 120
+          docker compose -f compose.yaml -f compose.identity.yaml up --detach --no-build --wait --wait-timeout 120
+          docker compose exec -T core python - --executor ci < scripts/enable_demo_users.py
+          uv run python scripts/login_operator.py --username operator --credentials-file "$TEST_IDENTITY_CREDENTIALS" --output "$RUNNER_TEMP/fulfillflow-session/session.json"
+          export FULFILLFLOW_SESSION_FILE="$RUNNER_TEMP/fulfillflow-session/session.json"
           curl --fail --silent http://127.0.0.1:8000/health/live
           curl --fail --silent http://127.0.0.1:8000/health/ready
-          curl --fail --silent --show-error --dump-header /tmp/dashboard.headers --output /tmp/dashboard.html http://127.0.0.1:8000/
-          grep --ignore-case --quiet '^content-type: text/html' /tmp/dashboard.headers
-          grep --fixed-strings --quiet 'Operational dashboard' /tmp/dashboard.html
+          uv run python - <<'PY'
+          import os, httpx
+          from pathlib import Path
+          from fulfillflow.access.client import session_headers
+          headers = session_headers(Path(os.environ["FULFILLFLOW_SESSION_FILE"]), "http://localhost:8000")
+          response = httpx.get("http://localhost:8000/", headers=headers)
+          response.raise_for_status()
+          assert "Operational dashboard" in response.text
+          assert httpx.get("http://localhost:8000/api/v1/orders").status_code == 401
+          PY
           curl --fail --silent --show-error --dump-header /tmp/bootstrap.headers --output /tmp/bootstrap.css http://127.0.0.1:8000/static/vendor/bootstrap-5.3.8.min.css
           grep --ignore-case --quiet '^content-type: text/css' /tmp/bootstrap.headers
           grep --fixed-strings --quiet 'v5.3.8' /tmp/bootstrap.css
@@ -185,5 +224,5 @@ jobs:
       - name: Remove Compose smoke resources
         if: always()
         run: |
-          docker compose down --volumes
-          docker compose -p fulfillflow-ci-tests -f compose.test.yaml down --volumes
+          KEYCLOAK_PORT=18881 docker compose -f compose.yaml -f compose.identity.yaml down --volumes
+          docker compose -p fulfillflow-ci-tests -f compose.test.yaml -f compose.identity.yaml down --volumes

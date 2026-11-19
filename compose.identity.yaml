@@ -1,0 +1,35 @@
+# Add to compose.yaml or compose.test.yaml with the same explicit project name.
+services:
+  identity-db:
+    image: postgres:18-trixie@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set a local identity database password}
+    volumes:
+      - identity_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U keycloak -d keycloak']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244
+    command: [start-dev, --import-realm]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://identity-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set a local identity database password}
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-18880}
+      KC_HTTP_ENABLED: 'true'
+      KC_HEALTH_ENABLED: 'true'
+    ports:
+      - '127.0.0.1:${KEYCLOAK_PORT:-18880}:8080'
+    volumes:
+      - ${IDENTITY_REALM_FILE:?Run scripts/prepare_identity.py}:/opt/keycloak/data/import/fulfillflow.json:ro
+    depends_on:
+      identity-db:
+        condition: service_healthy
+volumes:
+  identity_data:

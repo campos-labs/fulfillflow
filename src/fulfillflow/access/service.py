@@ -22,6 +22,14 @@ class AccessDeniedError(PermissionError):
     """Sanitized access failure without credential material."""
 
 
+class AuthenticationRequiredError(AccessDeniedError):
+    """No currently valid local session."""
+
+
+class OperationForbiddenError(AccessDeniedError):
+    """Authenticated identity lacks the required permission."""
+
+
 @dataclass(frozen=True)
 class Identity:
     user_id: UUID
@@ -50,7 +58,7 @@ class AccessService:
             select(sessions.c.user_id).where(sessions.c.token_hash == digest)
         )
         if user_id is None:
-            raise AccessDeniedError("Session is absent or expired")
+            raise AuthenticationRequiredError("Session is absent or expired")
         # Discover without a lock, then lock the owner before reading the session again.
         query = select(users).where(users.c.id == user_id)
         if mutation:
@@ -63,9 +71,9 @@ class AccessService:
             )
         )
         if user is None or not user["enabled"] or expiry is None or expiry <= self.clock.now():
-            raise AccessDeniedError("Session is absent or expired")
+            raise AuthenticationRequiredError("Session is absent or expired")
         if mutation and user["role"] != "operator":
-            raise AccessDeniedError("Operation is not permitted")
+            raise OperationForbiddenError("Operation is not permitted")
         return Identity(user_id, user["role"], expiry)
 
     async def login(self, issuer: str, subject: str, *, lifetime: int = 28800) -> str:
@@ -86,7 +94,7 @@ class AccessService:
             .one_or_none()
         )
         if user is None or not user["enabled"]:
-            raise AccessDeniedError("Identity is not enabled")
+            raise OperationForbiddenError("Identity is not enabled")
         token = secrets.token_urlsafe(32)
         now = self.clock.now()
         await self.session.execute(
@@ -121,32 +129,36 @@ class AccessService:
         *,
         issuer: str,
         subject: str,
-        display_name: str,
-        role: Role,
-        enabled: bool,
+        display_name: str | None = None,
+        role: Role | None = None,
+        enabled: bool | None = None,
         executor: str,
         reason: str,
         revoke_sessions: bool = False,
     ) -> UUID:
-        if not all(value.strip() for value in (issuer, subject, display_name, executor, reason)):
+        if not all(value.strip() for value in (issuer, subject, executor, reason)):
             raise ValueError("Identity, executor and reason are required")
-        if role not in ("viewer", "operator"):
+        if role is not None and role not in ("viewer", "operator"):
             raise ValueError("Invalid role")
+        if display_name is not None and not display_name.strip():
+            raise ValueError("Display name must not be blank")
         now = self.clock.now()
-        created = await self.session.scalar(
-            pg_insert(users)
-            .values(
-                id=new_uuid(),
-                issuer=issuer,
-                subject=subject,
-                display_name=display_name,
-                role=role,
-                enabled=enabled,
-                created_at=now,
+        created = None
+        if enabled is True and role is not None and display_name:
+            created = await self.session.scalar(
+                pg_insert(users)
+                .values(
+                    id=new_uuid(),
+                    issuer=issuer,
+                    subject=subject,
+                    display_name=display_name,
+                    role=role,
+                    enabled=True,
+                    created_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=[users.c.issuer, users.c.subject])
+                .returning(users.c.id)
             )
-            .on_conflict_do_nothing(index_elements=[users.c.issuer, users.c.subject])
-            .returning(users.c.id)
-        )
         user = (
             (
                 await self.session.execute(
@@ -159,19 +171,24 @@ class AccessService:
                 )
             )
             .mappings()
-            .one()
+            .one_or_none()
         )
+        if user is None:
+            raise ValueError("New identities require explicit enable, role and name")
+        new_role = role if role is not None else user["role"]
+        new_enabled = enabled if enabled is not None else user["enabled"]
+        new_name = display_name if display_name is not None else user["display_name"]
         user_id = user["id"]
         await self.session.execute(
             update(users)
             .where(users.c.id == user_id)
             .values(
-                role=role,
-                enabled=enabled,
-                display_name=display_name,
+                role=new_role,
+                enabled=new_enabled,
+                display_name=new_name,
             )
         )
-        if not enabled or revoke_sessions:
+        if not new_enabled or revoke_sessions:
             await self.session.execute(delete(sessions).where(sessions.c.user_id == user_id))
         await self.session.execute(
             insert(audit).values(
@@ -181,18 +198,18 @@ class AccessService:
                 reason=reason.strip(),
                 action=(
                     "enable"
-                    if created
+                    if created or enabled is True
                     else "block"
-                    if not enabled
+                    if enabled is False
                     else "revoke_sessions"
                     if revoke_sessions
                     else "change_access"
                 ),
                 occurred_at=now,
                 old_role=None if created else user["role"],
-                new_role=role,
+                new_role=new_role,
                 old_enabled=None if created else user["enabled"],
-                new_enabled=enabled,
+                new_enabled=new_enabled,
             )
         )
         return cast(UUID, user_id)

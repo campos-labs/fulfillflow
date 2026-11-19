@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.async_flow import drain, drain_notifications
 from tests.service_pair import create_app
@@ -28,6 +29,7 @@ async def test_core_and_tracking_complete_with_notifications_stopped_then_use_or
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         shipment_id = await _create_shipment(
             client,
             reference="ASYNC-NOTIFICATION",
@@ -114,6 +116,7 @@ async def test_outbox_failure_rolls_back_all_core_effects_before_local_retry(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client,
             reference="OUTBOX-ATOMIC",
@@ -158,6 +161,7 @@ async def test_manual_creation_and_cancellation_do_not_publish_notification_fact
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         identifier = await _create_shipment(
             client,
             reference="MANUAL-NONE",

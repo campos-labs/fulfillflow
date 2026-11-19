@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
+from tests.access_support import authenticated_client
 from tests.service_pair import create_app
 from tests.support import FixedClock
 
@@ -80,6 +81,7 @@ async def test_order_and_shipment_api_journey_filters_idempotency_and_conflicts(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             created_order = await client.post(
                 "/api/v1/orders",
                 headers={"X-Request-ID": request_id},
@@ -190,6 +192,7 @@ async def test_cancelled_order_cannot_be_confirmed_or_receive_shipment(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             created = await client.post(
                 "/api/v1/orders",
                 json={
@@ -243,6 +246,7 @@ async def test_each_order_and_shipment_filter_excludes_non_matching_records(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             first_order = await _create_order(client, "ORDER-FILTER-FIRST")
             first_shipment = await _create_shipment(client, first_order, "FILTER-FIRST")
 
@@ -346,6 +350,7 @@ async def test_pagination_is_stable_and_enforces_page_size_boundaries(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             order_ids = [await _create_order(client, f"ORDER-PAGE-{index}") for index in range(3)]
             shipment_ids = [
                 await _create_shipment(client, order_id, f"SHIPMENT-PAGE-{index}")

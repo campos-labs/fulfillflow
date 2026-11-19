@@ -160,18 +160,20 @@ async def test_real_data_renders_all_tracking_results_and_sanitizes_external_con
     assert 'hx-trigger="observe"' not in progress.text
 
 
-async def test_api_and_webhook_need_no_csrf_and_create_no_session_cookie(
+async def test_operational_api_requires_session_but_webhook_remains_cookie_free(
     ui_client: AsyncClient,
     postgres_settings: Settings,
 ) -> None:
     order = await create_order(ui_client, reference="UI-NO-COOKIE-0001")
-    assert "fulfillflow_session" not in ui_client.cookies
+    assert "fulfillflow_session" in ui_client.cookies
     await confirm_order(ui_client, order["id"])
     shipment = await create_shipment(
         ui_client,
         order["id"],
         tracking_code="UINOCOOKIE0001",
     )
+    ui_client.cookies.clear()
+    ui_client.headers.pop("X-CSRF-Token", None)
     response = await send_alpha_event(
         ui_client,
         postgres_settings,

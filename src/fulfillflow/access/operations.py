@@ -18,7 +18,7 @@ async def administer(args: argparse.Namespace) -> None:
                 subject=args.subject,
                 display_name=args.name,
                 role=args.role,
-                enabled=not args.block,
+                enabled=True if args.enable else False if args.block else None,
                 executor=args.executor,
                 reason=args.reason,
                 revoke_sessions=args.revoke_sessions,
@@ -31,11 +31,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--issuer", required=True)
     parser.add_argument("--subject", required=True)
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--role", choices=("viewer", "operator"), required=True)
+    parser.add_argument("--name")
+    parser.add_argument("--role", choices=("viewer", "operator"))
     parser.add_argument("--executor", required=True)
     parser.add_argument("--reason", required=True)
-    parser.add_argument("--block", action="store_true")
+    state = parser.add_mutually_exclusive_group()
+    state.add_argument("--block", action="store_true")
+    state.add_argument("--enable", action="store_true")
     parser.add_argument("--revoke-sessions", action="store_true")
     args = parser.parse_args()
     try:

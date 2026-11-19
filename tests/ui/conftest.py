@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
+from tests.access_support import authenticated_client
 from tests.service_pair import create_app
 from tests.support import FixedClock
 
@@ -30,4 +31,5 @@ async def ui_client(ui_application: FastAPI) -> AsyncIterator[AsyncClient]:
         base_url="http://testserver",
         follow_redirects=False,
     ) as client:
+        await authenticated_client(client, ui_application)
         yield client

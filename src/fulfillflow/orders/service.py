@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fulfillflow.access.public import authorize_mutation
 from fulfillflow.orders.domain import Order, OrderStatus
 from fulfillflow.orders.repository import OrderRepository
 from fulfillflow.orders.schemas import OrderFilters
@@ -68,6 +69,7 @@ class OrderService:
         )
         try:
             async with self._session.begin():
+                await authorize_mutation(self._session, self._clock)
                 await self._repository.add(order)
         except IntegrityError as exc:
             raise OrderExternalReferenceConflictError(order.external_reference) from exc
@@ -102,6 +104,7 @@ class OrderService:
     async def confirm(self, order_id: UUID) -> Order:
         """Lock and idempotently confirm an Order."""
         async with self._session.begin():
+            await authorize_mutation(self._session, self._clock)
             order = await self._require_locked(order_id)
             if order.confirm(self._clock.now()):
                 await self._repository.save(order)
@@ -110,6 +113,7 @@ class OrderService:
     async def cancel(self, order_id: UUID) -> Order:
         """Lock and idempotently cancel an Order."""
         async with self._session.begin():
+            await authorize_mutation(self._session, self._clock)
             order = await self._require_locked(order_id)
             if order.cancel(self._clock.now()):
                 await self._repository.save(order)

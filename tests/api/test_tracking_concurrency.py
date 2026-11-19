@@ -14,6 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from tests.access_support import authenticated_client
 from tests.async_flow import drain
 from tests.distributed_state import event_state
 from tests.service_pair import create_app
@@ -342,6 +343,8 @@ async def test_simultaneous_identical_delivery_is_idempotent_at_the_http_boundar
                 base_url="http://second.test",
             ) as second_client,
         ):
+            await authenticated_client(first_client, app)
+            await authenticated_client(second_client, app)
             _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-IDENTICAL",
@@ -418,6 +421,8 @@ async def test_simultaneous_conflicting_payload_keeps_the_winning_forensic_recor
                 base_url="http://loser.test",
             ) as losing_client,
         ):
+            await authenticated_client(losing_client, app)
+            await authenticated_client(winning_client, app)
             _order_id, shipment_ids = await _create_order_with_shipments(
                 winning_client,
                 reference="ORDER-CONCURRENT-PAYLOAD-CONFLICT",
@@ -482,6 +487,7 @@ async def test_two_concurrent_results_finalize_one_inbox_without_repeating_core(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_order_with_shipments(
             client, reference="RESULT-RACE", shipments=(("carrier-alpha", "RESULT-RACE"),)
         )
@@ -672,6 +678,8 @@ async def test_distinct_events_for_one_shipment_serialize_by_total_event_key(
                 base_url="http://second.test",
             ) as second_client,
         ):
+            await authenticated_client(first_client, app)
+            await authenticated_client(second_client, app)
             __order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference=f"ORDER-{tracking_code}",
@@ -802,6 +810,8 @@ async def test_final_deliveries_follow_core_lock_order_and_keep_inbox_locks_loca
                 base_url="http://second.test",
             ) as second_client,
         ):
+            await authenticated_client(first_client, app)
+            await authenticated_client(second_client, app)
             order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-FINAL-DELIVERIES",
@@ -1013,6 +1023,8 @@ async def test_concurrent_repetition_of_permanent_rejection_is_stable(
                 base_url="http://second.test",
             ) as second_client,
         ):
+            await authenticated_client(first_client, app)
+            await authenticated_client(second_client, app)
             _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-CONCURRENT-REJECTION",
@@ -1099,6 +1111,8 @@ async def test_committed_rejection_short_circuits_concurrent_repetitions(
                 base_url="http://second.test",
             ) as second_client,
         ):
+            await authenticated_client(first_client, app)
+            await authenticated_client(second_client, app)
             _order_id, shipment_ids = await _create_order_with_shipments(
                 first_client,
                 reference="ORDER-COMMITTED-REJECTION-SHORT-CIRCUIT",
@@ -1238,6 +1252,8 @@ async def test_same_external_event_id_is_concurrently_isolated_between_carriers(
                 base_url="http://beta.test",
             ) as beta_client,
         ):
+            await authenticated_client(alpha_client, app)
+            await authenticated_client(beta_client, app)
             alpha_order_id, alpha_shipments = await _create_order_with_shipments(
                 alpha_client,
                 reference="ORDER-CARRIER-ISOLATION-ALPHA",

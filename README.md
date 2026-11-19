@@ -4,16 +4,11 @@ FulfillFlow acompanha pedidos, remessas e eventos de transportadoras, com proces
 assíncrono e notificações simuladas. A arquitetura-alvo da **v2.0** acrescenta uma
 central autenticada de ocorrências e está definida no [DESIGN](DESIGN.md).
 
-O código executável desta preparação corresponde à `v1.3.0-rc.1` (`9e3a135`)
-com a extensão HTTP de observabilidade (`045e1ca`). Login OIDC, permissões e
-ocorrências ainda serão implementados pelas issues do [milestone v2.0](https://github.com/campos-labs/fulfillflow/milestones).
-O planejamento vigente fica nas issues; o [RELEASE_PLAN](RELEASE_PLAN.md) preserva
-somente o registro histórico da v1.3. A infraestrutura possui [repositório próprio](https://github.com/campos-labs/fulfillflow-infra)
-e planejamento independente.
-
-Para executar esta base sem reutilizar volumes históricos, use um projeto exclusivo:
-`docker compose -p fulfillflow-v2-dev up --build --detach --wait`.
-Os comandos e a demonstração abaixo descrevem a base executável 1.3.
+A linha v2.0 integra acesso OIDC, permissões locais e sessões persistidas às
+operações existentes. Ocorrências pertencem às próximas issues do
+[milestone v2.0](https://github.com/campos-labs/fulfillflow/milestones).
+[RELEASE_PLAN](RELEASE_PLAN.md), tags e evidências 1.x permanecem históricos.
+A infraestrutura possui [repositório próprio](https://github.com/campos-labs/fulfillflow-infra).
 
 Core mantém Orders, Shipments e Carriers. Tracking mantém HMAC,
 adapters Alpha/Beta, inbox e timeline. Notifications possui os registros e a
@@ -38,18 +33,68 @@ no banco não demonstra exactly-once em um provedor externo.
 
 ## Subida local com Docker Compose
 
-O fluxo padrão funciona a partir do checkout sem publicar o PostgreSQL no host:
+Prepare contas sintéticas e segredos fora do repositório. Use sempre um projeto
+exclusivo, sem volumes históricos. O provedor local usa HTTP somente em loopback;
+ambientes externos exigem HTTPS e configuração correspondente de callbacks.
 
 ```powershell
-docker compose -p fulfillflow-v2-dev up --build --detach --wait
+uv sync --frozen --all-groups
+uv run playwright install chromium
+$identityRoot = Join-Path $env:LOCALAPPDATA 'FulfillFlow/v2-identity'
+uv run python scripts/prepare_identity.py --output $identityRoot
+$identity = Get-Content "$identityRoot/credentials.json" -Raw | ConvertFrom-Json
+$env:KEYCLOAK_DB_PASSWORD = $identity.database_password
+$env:IDENTITY_REALM_FILE = "$identityRoot/realm.json"
+docker compose -p fulfillflow-v2-dev -f compose.yaml -f compose.identity.yaml up --build --detach --wait
 ```
 
-O Compose conserva o nome padrão histórico `fulfillflow-v13`. Nesta linha, utilize
-`-p fulfillflow-v2-dev` em todos os comandos para separar os volumes de desenvolvimento.
+A importação do realm ocorre somente na primeira criação. Reexecutar a preparação
+preserva senhas e identidades. Aguarde a descoberta OIDC responder em
+`http://localhost:18880/realms/fulfillflow/.well-known/openid-configuration`.
+O navegador usa esse issuer público; o Core acessa o mesmo provedor pela rede
+interna, mantendo a validação do emissor original.
+
+Habilite explicitamente as duas identidades no Core, com auditoria. O usuário
+`disabled` existe apenas no provedor e deve receber recusa na aplicação.
+
+```powershell
+$realm = Get-Content $env:IDENTITY_REALM_FILE -Raw | ConvertFrom-Json
+foreach ($role in @('operator', 'viewer')) {
+    $subject = ($realm.users | Where-Object username -eq $role).id
+    docker compose -p fulfillflow-v2-dev exec -T core python -m fulfillflow.access.operations --issuer http://localhost:18880/realms/fulfillflow --subject $subject --name "Synthetic $role" --role $role --enable --executor "$env:USERNAME" --reason 'Preparação sintética explícita'
+}
+```
+
+Entre em `http://localhost:8000/auth/login` com uma conta preparada. As senhas ficam
+no arquivo local protegido. `viewer` consulta; `operator` também executa as operações
+logísticas existentes. Os dois podem sair. A sessão expira em oito horas por padrão,
+sem renovação por navegação. `ACCESS_SESSION_SECONDS` configura o prazo.
+
+A CLI também aceita `--role`, `--block` e `--revoke-sessions`. Atributos omitidos
+permanecem inalterados; habilitar requer `--enable`. `--executor` e `--reason` são
+obrigatórios. Bloqueio e revogação aguardam mutações já autorizadas, e a alteração
+e sua auditoria são confirmadas juntas. Bloquear no Keycloak não revoga uma sessão
+local já emitida.
+
+Para ferramentas, obtenha uma sessão pelo navegador e reutilize o arquivo protegido.
+Não versione esse arquivo. Após expiração, faça novo login explicitamente.
+
+```powershell
+$env:FULFILLFLOW_SESSION_FILE = Join-Path $env:LOCALAPPDATA 'FulfillFlow/v2-session/session.json'
+uv run python scripts/login_operator.py --username operator --credentials-file "$identityRoot/credentials.json" --output $env:FULFILLFLOW_SESSION_FILE
+uv run python scripts/prepare_demo_v13.py --base-url http://localhost:8000
+```
+
+APIs JSON e HTMX enviam o token de `GET /auth/session` em `X-CSRF-Token`.
+Formulários incluem o campo `csrf_token`. O simulador envia webhooks sem cookies,
+com HMAC; somente as consultas de conclusão usam `FULFILLFLOW_SESSION_FILE`.
+Use `--base-url http://localhost:8000` também no simulador, pois o arquivo está
+vinculado à origem da aplicação. O auxiliar nunca repete uma mutação após login.
+
 PostgreSQL inicializa `fulfillflow_core`, `fulfillflow_tracking` e
 `fulfillflow_notifications`, com roles sem CONNECT ao banco alheio. Os jobs
 `migrate-core`, `migrate-tracking` e `migrate-notifications` aplicam
-os heads antes dos processos. Somente Core publica `127.0.0.1:8000`; Tracking,
+os heads antes dos processos. Core publica `127.0.0.1:8000` e Keycloak `127.0.0.1:18880`; Tracking,
 workers, PostgreSQL e RabbitMQ ficam na rede interna. O broker usa um vhost e
 três usuários com permissões separadas para comando, resultado e fato Notifications.
 O hostname do broker é estável (`broker` por padrão), pois a identidade do nó
@@ -87,7 +132,7 @@ Não aponte os serviços a bancos ou volumes históricos.
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8000/health/live
 Invoke-WebRequest http://127.0.0.1:8000/health/ready
-Invoke-WebRequest http://127.0.0.1:8000/
+Start-Process http://localhost:8000/auth/login
 ```
 
 ## Operação local do transporte
@@ -284,8 +329,9 @@ As rotas HTML são:
 - `GET /static/...`: assets versionados empacotados com a aplicação.
 
 `/shipments/new?order_id=<uuid>` permite pré-preencher o Order. Formulários
-mutáveis usam sessão assinada, CSRF e Post/Redirect/Get; APIs JSON e webhooks
-continuam stateless, sem CSRF e sem criação de cookie de sessão.
+mutáveis usam sessão opaca persistida, CSRF e Post/Redirect/Get. APIs JSON
+operacionais também exigem sessão e CSRF nas mutações. Webhooks mantêm HMAC
+independente, sem criar sessão.
 
 Os assets oficiais incluídos no pacote são:
 
@@ -321,7 +367,7 @@ Compose local:
 ```powershell
 $env:CARRIER_ALPHA_WEBHOOK_SECRET = "<mesmo-secret-local-da-aplicacao>"
 uv run python scripts/simulate_carrier_events.py `
-  --base-url http://127.0.0.1:8000 `
+  --base-url http://localhost:8000 `
   --carrier carrier-alpha `
   --tracking-code ALPHA000001 `
   --scenario valid
@@ -360,7 +406,7 @@ pendentes, Alpha `V13ALPHA0001` e Beta `V13BETA0001`, pela API pública:
 
 ```powershell
 uv sync --frozen
-uv run python scripts/prepare_demo_v13.py --base-url http://127.0.0.1:8000
+uv run python scripts/prepare_demo_v13.py --base-url http://localhost:8000
 ```
 
 Referências e dados sintéticos são fixos; UUIDs e timestamps são atribuídos pela
@@ -437,7 +483,7 @@ O E2E sobe as três APIs em portas TCP distintas e chama o webhook público
 por processo externo. Os testes limpam apenas os bancos dedicados informados.
 
 ```powershell
-docker compose -p fulfillflow-v2-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v2-tests -f compose.test.yaml -f compose.identity.yaml up -d --wait
 docker exec --user rabbitmq fulfillflow-v2-tests-broker-1 rabbitmqctl import_definitions /etc/rabbitmq/v13-definitions.json
 $env:TEST_DATABASE_URL = "postgresql+psycopg://fulfillflow_core:v11-isolated-core-test@127.0.0.1:18541/fulfillflow_core"
 $env:TEST_TRACKING_DATABASE_URL = "postgresql+psycopg://fulfillflow_tracking:v11-isolated-tracking-test@127.0.0.1:18541/fulfillflow_tracking"
@@ -541,7 +587,7 @@ o rearme por proprietário e o filtro do novo fluxo Core estão descritos na ope
 Os testes de transporte exigem RabbitMQ real, além dos bancos já documentados:
 
 ```powershell
-docker compose -p fulfillflow-v2-tests -f compose.test.yaml up -d --wait
+docker compose -p fulfillflow-v2-tests -f compose.test.yaml -f compose.identity.yaml up -d --wait
 $env:TEST_AMQP_URL = 'amqp://v12_test:v12-isolated-broker-test@127.0.0.1:18542/fulfillflow-v12-test'
 uv run pytest tests/integration/test_message_transport.py tests/integration/test_notification_transport.py tests/integration/test_notifications_worker.py -q
 ```
@@ -561,3 +607,28 @@ como URL base do receptor OTLP HTTP (sem `/v1/traces`). O sampler suportado é
 `parentbased_traceidratio`; `OTEL_TRACES_SAMPLER_ARG=1` captura o diagnóstico integral.
 Desabilitado por padrão. Não há spans SQL, AMQP, workers ou Notifications.
 Não alterar referências históricas para habilitá-lo. Veja [o contrato](https://github.com/campos-labs/fulfillflow/blob/045e1ca8629409b6abdf2829ef5c93d14cfb60d9/DESIGN.md#81-exploração-http-isolada-após-a-referência-funcional).
+
+## Verificação do acesso v2.0
+
+Além das variáveis `TEST_DATABASE_URL`, `TEST_TRACKING_DATABASE_URL`,
+`TEST_NOTIFICATIONS_DATABASE_URL`, `TEST_LEGACY_DATABASE_URL` e `TEST_AMQP_URL`
+dos testes existentes, configure `TEST_IDENTITY_CREDENTIALS` com o caminho absoluto
+do arquivo sintético preparado. Combine `compose.test.yaml` e
+`compose.identity.yaml` sob um projeto exclusivo. A CI demonstra essa preparação.
+O provedor deve estar acessível em `localhost:18880`; os testes de navegador
+reservam `localhost:19800` para callbacks e não devem executar em paralelo.
+
+```powershell
+$env:TEST_IDENTITY_CREDENTIALS = "$identityRoot/credentials.json"
+uv run pytest tests/ui/test_access.py tests/integration/test_access.py -q
+uv run pytest --cov=fulfillflow --cov-report=term-missing
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run lint-imports
+```
+
+A suíte exercita login real, recusa de identidade não habilitada, CSRF, logout,
+expiração, preservação dos atributos administrativos e revogação concorrente
+com uma alteração de negócio. Cookies e tokens não entram nas evidências.
+O Keycloak e o PostgreSQL não são substituídos por memória ou SQLite.

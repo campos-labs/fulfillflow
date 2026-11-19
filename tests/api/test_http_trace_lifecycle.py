@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind
+from tests.access_support import authenticated_client
 from tests.service_pair import create_app
 
 from fulfillflow.http.telemetry import INTERNAL_ROUTE, PUBLIC_ROUTE
@@ -33,6 +34,8 @@ async def test_real_query_preserves_result_and_owner_lifecycles(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://core"
         ) as client:
+            await authenticated_client(client, app)
+            exporter.clear()
             result = await client.get(PUBLIC_ROUTE, params={"page": 1, "page_size": 2})
             assert result.status_code == 200
             assert result.json() == {"items": [], "total": 0, "page": 1, "page_size": 2}

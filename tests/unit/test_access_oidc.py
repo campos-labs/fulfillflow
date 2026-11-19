@@ -19,3 +19,21 @@ async def test_pkce_is_enabled_and_password_grant_is_not_used():
     client = OIDCClient("http://127.0.0.1:19999/realms/test", "test", "http://localhost/callback")
     assert client.client.client_kwargs["code_challenge_method"] == "S256"
     assert client.client.client_kwargs["scope"] == "openid profile"
+
+
+def test_callback_query_is_removed_from_access_log():
+    import logging
+
+    from fulfillflow.access.logging import CallbackQueryFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        "%s %s %s %s %s",
+        ("client", "GET", "/auth/callback?code=SECRET&state=PRIVATE", "1.1", 303),
+        None,
+    )
+    assert CallbackQueryFilter().filter(record)
+    assert record.getMessage() == "client GET /auth/callback 1.1 303"

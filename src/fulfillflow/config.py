@@ -95,6 +95,12 @@ class Settings(DatabaseSettings):
     otel_traces_sampler: str = Field(default="parentbased_traceidratio", min_length=1)
     otel_traces_sampler_arg: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    oidc_issuer: AnyHttpUrl = AnyHttpUrl("http://localhost:18880/realms/fulfillflow")
+    oidc_backchannel_url: AnyHttpUrl | None = None
+    oidc_client_id: str = "fulfillflow"
+    oidc_callback_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000/auth/callback")
+    access_session_seconds: int = Field(default=28800, ge=60, le=86400)
+
     seed_random_seed: int = 20260828
 
     @field_validator("log_level", mode="before")

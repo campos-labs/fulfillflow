@@ -29,6 +29,7 @@ async def create_order(
 ) -> dict[str, Any]:
     response = await client.post(
         "/api/v1/orders",
+        headers={"X-CSRF-Token": (await client.get("/auth/session")).json()["csrf_token"]},
         json={
             "external_reference": reference,
             "recipient": {
@@ -45,7 +46,10 @@ async def create_order(
 
 
 async def confirm_order(client: AsyncClient, order_id: str) -> dict[str, Any]:
-    response = await client.post(f"/api/v1/orders/{order_id}/confirm")
+    response = await client.post(
+        f"/api/v1/orders/{order_id}/confirm",
+        headers={"X-CSRF-Token": (await client.get("/auth/session")).json()["csrf_token"]},
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -59,6 +63,7 @@ async def create_shipment(
 ) -> dict[str, Any]:
     response = await client.post(
         "/api/v1/shipments",
+        headers={"X-CSRF-Token": (await client.get("/auth/session")).json()["csrf_token"]},
         json={
             "order_id": order_id,
             "carrier_code": carrier,

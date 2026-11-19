@@ -13,6 +13,7 @@ from alembic.config import Config
 from sqlalchemy import text
 
 from fulfillflow.messaging.amqp import declare_flow, publish
+from tests.access_support import authenticated_client
 from tests.e2e.test_external_simulator_journey import (
     _available_port,
     _start_application,
@@ -118,6 +119,7 @@ async def test_offline_cli_cutover_and_legacy_replay_remain_queryable_without_re
             app.router.lifespan_context(app),
             httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
         ):
+            await authenticated_client(client, app)
             before = (await client.get(f"/api/v1/notifications/{original.id}")).json()
             assert before == original.model_dump(mode="json")
             progress = await client.get(f"/api/v1/notification-status/{original.tracking_event_id}")

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
+from tests.access_support import authenticated_client
 from tests.async_flow import drain
 from tests.service_pair import create_app
 from tests.support import FixedClock
@@ -160,6 +161,7 @@ async def test_notification_queries_cover_generation_filters_pagination_and_sani
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             first_shipment_id = await _create_shipment(
                 client,
                 reference="NOTIFICATION-FIRST",
@@ -399,6 +401,7 @@ async def test_notification_query_validation_and_missing_detail_use_problem_deta
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             validation_responses = [
                 (
                     await client.get(
