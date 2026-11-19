@@ -48,7 +48,7 @@ async def test_real_oidc_viewer_and_operator_logout(ui_application):
             logout = await client.post("/auth/logout")
             assert logout.status_code == 200
             assert "location" not in logout.headers
-            assert "SessÃ£o encerrada" in logout.text
+            assert "Sessão encerrada" in logout.text
             assert (await client.get("/auth/session")).status_code == 401
 
 

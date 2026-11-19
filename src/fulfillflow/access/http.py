@@ -29,11 +29,11 @@ async def access_problem(request: Request, exception: Exception) -> Response:
         request,
         status_code=401 if unauthenticated else 403,
         code="AUTHENTICATION_REQUIRED" if unauthenticated else "ACCESS_FORBIDDEN",
-        title="SessÃ£o necessÃ¡ria" if unauthenticated else "Acesso negado",
+        title="Sessão necessária" if unauthenticated else "Acesso negado",
         detail=(
-            "Entre novamente para continuar. Nenhuma operaÃ§Ã£o serÃ¡ repetida automaticamente."
+            "Entre novamente para continuar. Nenhuma operação será repetida automaticamente."
             if unauthenticated
-            else "Seu acesso nÃ£o permite esta operaÃ§Ã£o ou o token CSRF Ã© invÃ¡lido."
+            else "Seu acesso não permite esta operação ou o token CSRF é inválido."
         ),
     )
     response.headers["Cache-Control"] = "no-store"
@@ -85,7 +85,7 @@ def install_access(application: FastAPI) -> None:
                 request,
                 status_code=503,
                 code="ACCESS_UNAVAILABLE",
-                title="Acesso indisponÃ­vel",
-                detail="NÃ£o foi possÃ­vel verificar sua sessÃ£o.",
+                title="Acesso indisponível",
+                detail="Não foi possível verificar sua sessão.",
             )
         return await call_next(request)

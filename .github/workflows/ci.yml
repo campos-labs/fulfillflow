@@ -59,11 +59,13 @@ jobs:
           uv run python scripts/prepare_identity.py --output "$RUNNER_TEMP/fulfillflow-identity"
           sudo setfacl -m u:1000:r "$RUNNER_TEMP/fulfillflow-identity/realm.json"
           echo "IDENTITY_REALM_FILE=$RUNNER_TEMP/fulfillflow-identity/realm.json" >> "$GITHUB_ENV"
-          uv run python - <<'PY' >> "$GITHUB_ENV"
+          uv run python - <<'PY'
           import json, os
           from pathlib import Path
           data = json.loads(Path(os.environ["TEST_IDENTITY_CREDENTIALS"]).read_text())
-          print("KEYCLOAK_DB_PASSWORD=" + data["database_password"])
+          print("::add-mask::" + data["database_password"])
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              print("KEYCLOAK_DB_PASSWORD=" + data["database_password"], file=environment)
           PY
 
       - name: Start isolated databases, broker and Keycloak
@@ -116,6 +118,8 @@ jobs:
           import xml.etree.ElementTree as ET
           cases = ET.parse("/tmp/functional.xml").findall(".//testcase")
           for module, minimum in (
+              ("tests.integration.test_access", 7),
+              ("tests.ui.test_access", 4),
               ("test_message_transport", 21),
               ("test_notification_transport", 8),
               ("test_notification_permissions", 4),
@@ -190,6 +194,7 @@ jobs:
           OIDC_ISSUER: http://localhost:18881/realms/fulfillflow
         run: |
           docker compose -f compose.yaml -f compose.identity.yaml up --detach --no-build --wait --wait-timeout 120
+          curl --fail --silent --show-error --retry 60 --retry-all-errors --retry-delay 1 --retry-max-time 90 --max-time 3 --output /dev/null "$OIDC_ISSUER/.well-known/openid-configuration"
           docker compose exec -T core python - --executor ci < scripts/enable_demo_users.py
           uv run python scripts/login_operator.py --username operator --credentials-file "$TEST_IDENTITY_CREDENTIALS" --output "$RUNNER_TEMP/fulfillflow-session/session.json"
           export FULFILLFLOW_SESSION_FILE="$RUNNER_TEMP/fulfillflow-session/session.json"
