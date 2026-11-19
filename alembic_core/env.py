@@ -6,6 +6,7 @@ from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from fulfillflow.access import tables as access_tables  # noqa: F401
 from fulfillflow.asyncio_support import run_async
 from fulfillflow.carriers import models as carrier_models  # noqa: F401
 from fulfillflow.config import DatabaseSettings
