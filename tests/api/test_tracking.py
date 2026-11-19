@@ -11,6 +11,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
+from tests.access_support import authenticated_client
 from tests.async_flow import drain
 from tests.distributed_state import event_state
 from tests.service_pair import create_app
@@ -149,6 +150,7 @@ async def test_alpha_webhook_preserves_bytes_is_idempotent_and_exposes_timeline(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             shipment_id = await _create_shipment(
                 client,
                 reference="ORDER-TRACKING-ALPHA",
@@ -313,6 +315,7 @@ async def test_beta_webhook_uses_its_own_schema_secret_and_location_projection(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             shipment_id = await _create_shipment(
                 client,
                 reference="ORDER-TRACKING-BETA",
@@ -407,6 +410,7 @@ async def test_permanent_payload_failures_reject_the_preserved_inbox(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             await _create_shipment(
                 client,
                 reference="ORDER-TRACKING-REJECTIONS",
@@ -490,6 +494,7 @@ async def test_pre_authentication_failures_never_create_an_inbox(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             invalid_signature = await _post_event(
                 client,
                 postgres_settings,
@@ -586,6 +591,7 @@ async def test_signed_headers_require_one_visible_ascii_value_before_persistence
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             duplicates = []
             missing = []
             for name in signed_header_names:
@@ -689,6 +695,7 @@ async def test_local_commits_follow_the_design_persistence_order(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             await _create_shipment(
                 client,
                 reference="ORDER-TRANSACTION-B-SEQUENCE",
@@ -791,6 +798,7 @@ async def test_reception_survives_failed_core_transaction_and_identical_delivery
             base_url="http://testserver",
         ) as client,
     ):
+        await authenticated_client(client, app)
         shipment_id = await _create_shipment(
             client,
             reference="ORDER-TRACKING-RESUME",
@@ -885,6 +893,7 @@ async def test_expected_notification_failure_is_recorded_without_rolling_back_tr
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             shipment_id = await _create_shipment(
                 client,
                 reference="ORDER-NOTIFICATION-FAILED",
@@ -950,6 +959,7 @@ async def test_same_tracking_code_is_isolated_by_carrier(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             alpha_shipment = await _create_shipment(
                 client,
                 reference="ORDER-SHARED-CODE-ALPHA",
@@ -1018,6 +1028,7 @@ async def test_timeline_records_no_change_stale_and_invalid_transition_without_r
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
+            await authenticated_client(client, app)
             shipment_id = await _create_shipment(
                 client,
                 reference="ORDER-TRACKING-STATE-RESULTS",

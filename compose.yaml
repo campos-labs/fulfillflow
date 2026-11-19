@@ -1,4 +1,4 @@
-name: fulfillflow-v13
+name: fulfillflow-v2-dev
 
 x-service-environment: &service-environment
   APP_ENV: "${APP_ENV:-local}"
@@ -29,6 +29,10 @@ x-service-environment: &service-environment
 
 x-core-environment: &core-environment
   <<: *service-environment
+  OIDC_ISSUER: "${OIDC_ISSUER:-http://localhost:18880/realms/fulfillflow}"
+  OIDC_BACKCHANNEL_URL: "${OIDC_BACKCHANNEL_URL:-http://keycloak:8080/realms/fulfillflow}"
+  OIDC_CALLBACK_URL: "${OIDC_CALLBACK_URL:-http://localhost:8000/auth/callback}"
+  ACCESS_SESSION_SECONDS: "${ACCESS_SESSION_SECONDS:-28800}"
   SERVICE_ROLE: core
   DATABASE_URL: "${CORE_DATABASE_URL:-postgresql+psycopg://fulfillflow_core:fulfillflow-v12-core-local-2026@db:5432/fulfillflow_core}"
   SESSION_SECRET: "${SESSION_SECRET:-d4fe9b506799498ab6d75795477567bc0de0d77db7d94fdaa4dd9cb0f564e9eb}"
@@ -46,14 +50,14 @@ x-tracking-environment: &tracking-environment
   OTEL_SERVICE_NAME: fulfillflow-tracking
 
 x-core: &core
-  image: fulfillflow-core:v13-local
+  image: fulfillflow-core:v2-local
   build:
     context: .
     target: runtime
   environment: *core-environment
 
 x-tracking: &tracking
-  image: fulfillflow-tracking:v13-local
+  image: fulfillflow-tracking:v2-local
   build:
     context: .
     target: runtime
@@ -67,7 +71,7 @@ x-notifications-environment: &notifications-environment
   OTEL_SERVICE_NAME: fulfillflow-notifications
 
 x-notifications: &notifications
-  image: fulfillflow-notifications:v13-local
+  image: fulfillflow-notifications:v2-local
   build:
     context: .
     target: runtime

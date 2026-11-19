@@ -3,11 +3,23 @@
 from collections.abc import AsyncIterator
 from typing import cast
 
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fulfillflow.api.dependencies import get_session
-from fulfillflow.main import create_app
+from fulfillflow.api.router import router
+from fulfillflow.http.problems import install_problem_handling
+
+
+def create_app():
+    app = FastAPI()
+    from fulfillflow.shared import SystemClock
+
+    app.state.clock = SystemClock()
+    app.include_router(router)
+    install_problem_handling(app)
+    return app
 
 
 async def test_unknown_route_uses_problem_detail_and_echoes_valid_request_id() -> None:

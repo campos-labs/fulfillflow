@@ -17,6 +17,9 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     if database is None:
         raise RuntimeError("application database is unavailable before startup")
     async with database.session() as session:
+        token = getattr(request.state, "access_token", None)
+        if token is not None:
+            session.info["access_token"] = token
         yield session
 
 

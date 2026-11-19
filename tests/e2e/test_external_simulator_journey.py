@@ -11,13 +11,18 @@ import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import AsyncClient, HTTPError
 from scripts.prepare_demo_v13 import prepare
 
+from fulfillflow.access.browser import browser_login
+from fulfillflow.access.client import save_session, session_headers
+from fulfillflow.access.service import AccessService
 from fulfillflow.config import Settings
 from fulfillflow.db import Database
+from fulfillflow.shared import SystemClock
 
 
 @pytest.mark.integration
@@ -51,13 +56,32 @@ async def test_external_simulator_updates_the_complete_operational_ui(
     prefix: str,
     secret_setting: str,
     secret_variable: str,
+    tmp_path: Path,
 ) -> None:
-    del postgres_database  # Owns schema cleanup; the live app opens an independent engine.
+    async with postgres_database.session() as session, session.begin():
+        await AccessService(session, SystemClock()).administer(
+            issuer=str(postgres_settings.oidc_issuer).rstrip("/"),
+            subject=str(uuid5(NAMESPACE_URL, "fulfillflow:v2:operator")),
+            display_name="Synthetic operator",
+            role="operator",
+            enabled=True,
+            executor="e2e",
+            reason="Explicit synthetic enablement",
+        )
     del postgres_notifications_database
     async with _live_application(
         postgres_settings, postgres_tracking_settings, postgres_notifications_settings
     ) as base_url:
-        async with AsyncClient(base_url=base_url, timeout=10) as client:
+        credentials = json.loads(
+            await asyncio.to_thread(Path(os.environ["TEST_IDENTITY_CREDENTIALS"]).read_text)
+        )
+        result = await asyncio.to_thread(
+            browser_login, base_url, "operator", credentials["users"]["operator"]
+        )
+        jar = tmp_path / "session.json"
+        await asyncio.to_thread(save_session, jar, base_url, result)
+        headers = await asyncio.to_thread(session_headers, jar, base_url)
+        async with AsyncClient(base_url=base_url, timeout=10, headers=headers) as client:
             first_demo = await prepare(client)
             assert await prepare(client) == first_demo
             assert len(first_demo["shipments"]) == 2
@@ -98,6 +122,7 @@ async def test_external_simulator_updates_the_complete_operational_ui(
         }
         carrier_secret = getattr(postgres_tracking_settings, secret_setting).get_secret_value()
         simulator_environment[secret_variable] = carrier_secret
+        simulator_environment["FULFILLFLOW_SESSION_FILE"] = str(jar)
         completed = await asyncio.to_thread(
             subprocess.run,
             [
@@ -141,7 +166,7 @@ async def test_external_simulator_updates_the_complete_operational_ui(
         assert "sha256=" not in completed.stdout
         assert carrier_secret not in completed.stdout
 
-        async with AsyncClient(base_url=base_url, timeout=10) as client:
+        async with AsyncClient(base_url=base_url, timeout=10, headers=headers) as client:
             # Tracking completion does not imply that Notifications has consumed its fact yet.
             async with asyncio.timeout(15):
                 while True:
@@ -195,7 +220,7 @@ async def test_external_simulator_updates_the_complete_operational_ui(
 async def _live_application(
     settings: Settings, tracking: Settings, notifications: Settings
 ) -> AsyncIterator[str]:
-    port = _available_port()
+    port = 19800
     tracking_port = _available_port()
     while tracking_port == port:
         tracking_port = _available_port()
@@ -210,6 +235,7 @@ async def _live_application(
             "APP_ENV": "test",
             "APP_HOST": "127.0.0.1",
             "APP_PORT": str(port),
+            "OIDC_CALLBACK_URL": "http://localhost:19800/auth/callback",
             "DATABASE_URL": settings.database_dsn,
             "SERVICE_ROLE": "core",
             "INTERNAL_API_SECRET": settings.internal_api_secret.get_secret_value(),
@@ -248,7 +274,7 @@ async def _live_application(
     )
     notifications_environment.pop("SESSION_SECRET", None)
     processes: list[subprocess.Popen[str]] = []
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = f"http://localhost:{port}"
     try:
         for env, url in (
             (tracking_environment, f"http://127.0.0.1:{tracking_port}"),

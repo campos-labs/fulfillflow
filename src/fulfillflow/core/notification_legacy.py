@@ -48,7 +48,7 @@ async def export_legacy(
         )
         if row["database_name"] != expected_database:
             raise LegacyExportError("WRONG_CORE_DATABASE")
-        if row["revision"] not in ("1202_core", "1301_core"):
+        if row["revision"] not in ("1202_core", "1301_core", "2001_core", "2002_core"):
             raise LegacyExportError("UNSUPPORTED_CORE_HEAD")
         if row["pending"]:
             raise LegacyExportError("CORE_WORK_NOT_DRAINED")

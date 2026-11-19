@@ -5,6 +5,7 @@ from uuid import UUID
 import httpx
 import pytest
 from sqlalchemy import delete, select, text, update
+from tests.access_support import authenticated_client
 from tests.api.test_notifications import _alpha_body, _create_shipment, _post_alpha_event
 from tests.async_flow import drain, drain_notifications
 from tests.integration.test_notifications_owned import import_records, legacy_record
@@ -90,6 +91,7 @@ async def test_tracking_completion_precedes_notification_with_independent_query_
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
         event_id, shipment_id = await applied(
             client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
         )
@@ -147,6 +149,7 @@ async def test_progress_reports_durable_notifications_work(
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
         event_id, _ = await applied(
             client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
         )
@@ -194,6 +197,8 @@ async def test_notifications_unavailable_preserves_core_health_and_dashboard(
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
+        calls.clear()
         event_id, _ = await applied(
             client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
         )
@@ -234,6 +239,7 @@ async def test_no_change_and_missing_receipts_do_not_query_notifications(
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
         await applied(
             client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
         )
@@ -289,6 +295,7 @@ async def test_missing_async_outbox_is_integrity_failure_not_legacy(
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
         event_id, _ = await applied(
             client, postgres_settings, postgres_database, postgres_tracking_database, fixed_clock
         )
@@ -340,6 +347,7 @@ async def test_legacy_progress_requires_imported_record_and_preserves_original_i
             base_url="http://test",
         ) as client,
     ):
+        await authenticated_client(client, app)
         response = await client.get(f"/api/v1/notification-status/{record.tracking_event_id}")
         assert response.status_code == 200, response.text
         assert response.json()["origin"] == "LEGACY"

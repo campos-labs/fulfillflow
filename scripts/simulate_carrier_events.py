@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPException
+from pathlib import Path
 from typing import Any, Never
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -347,6 +348,17 @@ def observe_completion(
 
 def _open_without_redirects(request: Request, *, timeout: float) -> Any:
     """Use an explicit opener whose redirect handler never issues a second request."""
+    # Carrier POSTs remain cookie-free. Only operational observation uses the jar.
+    cookie_file = os.environ.get("FULFILLFLOW_SESSION_FILE")
+    if request.get_method() == "GET" and cookie_file:
+        try:
+            record = json.loads(Path(cookie_file).read_text(encoding="utf-8"))
+            expected, actual = urlsplit(record["origin"]), urlsplit(request.full_url)
+            if (expected.scheme, expected.netloc) != (actual.scheme, actual.netloc):
+                raise ValueError("Session origin mismatch")
+            request.add_header("Cookie", "fulfillflow_session=" + record["cookie"])
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SimulatorResponseError("Operational session file is invalid.") from None
     return build_opener(_RejectRedirectHandler()).open(request, timeout=timeout)
 
 

@@ -13,6 +13,7 @@ from fulfillflow.core.message_tables import tables as core_tables
 from fulfillflow.messaging.amqp import declare_flow, publish_batch, receive
 from fulfillflow.messaging.store import process_one
 from fulfillflow.tracking.message_tables import tables as tracking_tables
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.e2e.test_external_simulator_journey import _start_application, _stop_application
 from tests.service_pair import create_app
@@ -33,6 +34,7 @@ async def test_fresh_worker_recovers_acknowledged_work_with_empty_queue(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="RESTART", carrier_code="carrier-alpha", tracking_code="RESTART"
         )

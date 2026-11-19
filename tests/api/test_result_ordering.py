@@ -6,6 +6,7 @@ from uuid import UUID
 import aio_pika
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.service_pair import create_app
 
@@ -30,6 +31,7 @@ async def test_reverse_results_and_stale_command_preserve_business_decisions(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="ORDERING", carrier_code="carrier-alpha", tracking_code="ORDERING"
         )

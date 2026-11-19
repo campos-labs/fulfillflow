@@ -17,6 +17,7 @@ from fulfillflow.core.message_tables import tables as core_tables
 from fulfillflow.messaging.amqp import declare_flow, publish, publish_batch, receive
 from fulfillflow.messaging.health import healthy
 from fulfillflow.tracking.message_tables import tables as tracking_tables
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.async_flow import drain
 from tests.e2e.test_external_simulator_journey import _stop_application
@@ -159,6 +160,7 @@ async def test_core_process_loss_preserves_atomic_fact_and_recovers_publication(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="CRASH", carrier_code="carrier-alpha", tracking_code="CRASH"
         )

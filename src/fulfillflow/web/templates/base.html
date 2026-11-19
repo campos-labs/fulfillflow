@@ -19,7 +19,7 @@
           integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"></script>
   <script defer src="{{ path_for(request, 'web-static', path='observation-v13.js') }}"></script>
 </head>
-<body class="bg-body-tertiary">
+<body class="bg-body-tertiary" hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
   <nav class="navbar navbar-expand-lg bg-dark navbar-dark shadow-sm" aria-label="Operational navigation">
     <div class="container-fluid">
       <a class="navbar-brand fw-semibold" href="{{ path_for(request, 'web-dashboard') }}">FulfillFlow</a>
@@ -43,6 +43,12 @@
           <li class="nav-item"><a class="nav-link{% if section == 'simulator' %} active{% endif %}"
               href="{{ path_for(request, 'web-simulator') }}">Simulator</a></li>
         </ul>
+        {% if request.state.access_identity is defined %}
+        <form action="/auth/logout" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-outline-light" type="submit">Sair</button>
+        </form>
+        {% else %}<a class="btn btn-outline-light" href="/auth/login">Entrar</a>{% endif %}
       </div>
     </div>
   </nav>

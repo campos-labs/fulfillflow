@@ -11,6 +11,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind, StatusCode
 
+from fulfillflow.api.router import router
+from fulfillflow.http.problems import install_problem_handling
 from fulfillflow.http.telemetry import (
     INTERNAL_ROUTE,
     PROPAGATOR,
@@ -18,7 +20,6 @@ from fulfillflow.http.telemetry import (
     DiagnosticMiddleware,
     create_provider,
 )
-from fulfillflow.main import create_app
 
 
 @pytest.fixture
@@ -31,8 +32,12 @@ def telemetry():
 
 
 def core_app(settings, tracer, client):
-    # This forwarding route has no SQL dependency; the peer transport is explicit.
-    app = create_app(settings)
+    # Exercise the forwarding component; full authenticated composition is covered
+    # by tests/api/test_http_trace_lifecycle.py with PostgreSQL and Keycloak.
+    app = FastAPI()
+    app.include_router(router)
+    install_problem_handling(app)
+    app.add_middleware(DiagnosticMiddleware)
     app.state.settings = settings
     app.state.http_tracer = tracer
     app.state.service_client = client

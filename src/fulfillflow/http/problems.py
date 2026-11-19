@@ -190,6 +190,7 @@ def _is_html_route(path: str) -> bool:
     """Keep API, health and generated documentation errors in JSON."""
     return not (
         path.startswith("/api/v1")
+        or path == "/auth/session"
         or path.startswith("/internal/")
         or path.startswith("/health")
         or path.startswith("/docs")

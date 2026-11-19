@@ -2,23 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
-from typing import Any
 from urllib.parse import urlencode
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from itsdangerous import TimestampSigner, URLSafeTimedSerializer
 from starlette.requests import Request
 from starlette.types import Message, Scope
 
 from fulfillflow.web import security as web_security
 from fulfillflow.web.forms import MAX_FORM_BODY_BYTES, FormBoundaryError, read_strict_form
+from tests.access_support import authenticated_client
 from tests.ui.support import csrf_token
-
-SESSION_TEST_T0 = 1_800_000_000
 
 
 def _order_form(token: str, reference: str = "UI-FORM-0001") -> dict[str, str]:
@@ -86,38 +82,12 @@ def _client(application: FastAPI, *, https: bool = False) -> AsyncClient:
     )
 
 
-def _session_serializer(application: FastAPI) -> URLSafeTimedSerializer:
-    settings = application.state.settings
-    return URLSafeTimedSerializer(
-        settings.session_secret.get_secret_value(),
-        salt=web_security._SESSION_SALT,
-        signer_kwargs={"digest_method": hashlib.sha256},
-    )
-
-
-def _session_payload(application: FastAPI, cookie: str) -> dict[str, Any]:
-    payload = _session_serializer(application).loads(cookie)
-    assert isinstance(payload, dict)
-    return payload
-
-
-def _cookie_max_age(response: Any) -> int:
-    attributes = (item.strip() for item in response.headers["set-cookie"].split(";"))
-    value = next(item for item in attributes if item.casefold().startswith("max-age="))
-    return int(value.split("=", maxsplit=1)[1])
-
-
 async def test_order_form_csrf_validation_prg_and_refresh_safety(
     ui_client: AsyncClient,
 ) -> None:
     form_page = await ui_client.get("/orders/new")
     token = csrf_token(form_page)
-    set_cookie = form_page.headers["set-cookie"]
-    assert "fulfillflow_session=" in set_cookie
-    assert "HttpOnly" in set_cookie
-    assert "SameSite=lax" in set_cookie
-    assert "Path=/" in set_cookie
-    assert "Max-Age=28800" in set_cookie
+    assert "set-cookie" not in form_page.headers
 
     missing_csrf = await ui_client.post("/orders", data=_order_form(""))
     assert missing_csrf.status_code == 403
@@ -209,215 +179,50 @@ async def test_csrf_token_remains_stable_for_legitimate_mutations_in_one_session
     assert listed.json()["total"] == 2
 
 
-async def test_session_absolute_age_survives_prg_and_repeated_cookie_reissues(
-    ui_application: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    current_time = SESSION_TEST_T0
-    monkeypatch.setattr(web_security, "_unix_time", lambda: current_time)
-
-    async with _client(ui_application) as browser:
-        initial_page = await browser.get("/orders/new")
-        original_token = csrf_token(initial_page)
-        initial_cookie = browser.cookies[web_security.SESSION_COOKIE]
-        initial_payload = _session_payload(ui_application, initial_cookie)
-        assert initial_payload["issued_at"] == SESSION_TEST_T0
-        assert initial_payload["csrf_token"] == original_token
-        assert _cookie_max_age(initial_page) == web_security.SESSION_MAX_AGE_SECONDS
-
-        current_time = SESSION_TEST_T0 + 7 * 60 * 60
-        created = await browser.post(
-            "/orders",
-            data=_order_form(original_token, reference="UI-ABSOLUTE-SESSION-0001"),
-        )
-        assert created.status_code == 303
-        assert _cookie_max_age(created) == 60 * 60
-        prg_cookie = browser.cookies[web_security.SESSION_COOKIE]
-        prg_payload = _session_payload(ui_application, prg_cookie)
-        assert prg_payload == {
-            "csrf_token": original_token,
-            "issued_at": SESSION_TEST_T0,
-            "flash": "order-created",
-        }
-
-        current_time = SESSION_TEST_T0 + 7 * 60 * 60 + 30 * 60
-        detail = await browser.get(created.headers["location"])
-        assert detail.status_code == 200
-        assert "Order created." in detail.text
-        assert csrf_token(detail) == original_token
-        assert _cookie_max_age(detail) == 30 * 60
-        consumed_flash_cookie = browser.cookies[web_security.SESSION_COOKIE]
-        consumed_payload = _session_payload(ui_application, consumed_flash_cookie)
-        assert consumed_payload == {
-            "csrf_token": original_token,
-            "issued_at": SESSION_TEST_T0,
-            "flash": None,
-        }
-
-        current_time = SESSION_TEST_T0 + 7 * 60 * 60 + 45 * 60
-        repeated_navigation = await browser.get("/orders/new")
-        assert repeated_navigation.status_code == 200
-        assert csrf_token(repeated_navigation) == original_token
-        assert _cookie_max_age(repeated_navigation) == 15 * 60
-        latest_cookie = browser.cookies[web_security.SESSION_COOKIE]
-        latest_payload = _session_payload(ui_application, latest_cookie)
-        assert latest_payload["issued_at"] == SESSION_TEST_T0
-        assert latest_payload["csrf_token"] == original_token
-
-    current_time = SESSION_TEST_T0 + web_security.SESSION_MAX_AGE_SECONDS + 1
-    expired_cookie_header = {"Cookie": f"{web_security.SESSION_COOKIE}={latest_cookie}"}
-    async with _client(ui_application) as mutation_client:
-        rejected = await mutation_client.post(
-            "/orders",
-            data=_order_form(original_token, reference="UI-ABSOLUTE-SESSION-EXPIRED"),
-            headers=expired_cookie_header,
-        )
-    assert rejected.status_code == 403
-    assert "CSRF_VALIDATION_FAILED" in rejected.text
-
-    async with _client(ui_application) as navigation_client:
-        replacement = await navigation_client.get("/orders/new", headers=expired_cookie_header)
-        replacement_cookie = navigation_client.cookies[web_security.SESSION_COOKIE]
-    replacement_payload = _session_payload(ui_application, replacement_cookie)
-    assert replacement.status_code == 200
-    assert csrf_token(replacement) != original_token
-    assert replacement_payload["issued_at"] == current_time
-    assert replacement_payload["csrf_token"] == csrf_token(replacement)
-    assert _cookie_max_age(replacement) == web_security.SESSION_MAX_AGE_SECONDS
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"csrf_token": "a" * 40, "flash": None},
-        {"csrf_token": "a" * 40, "issued_at": True, "flash": None},
-        {"csrf_token": "a" * 40, "issued_at": "1800000000", "flash": None},
-        {"csrf_token": "a" * 40, "issued_at": 1_800_000_000.0, "flash": None},
-        {"csrf_token": "a" * 40, "issued_at": -1, "flash": None},
-        {"csrf_token": "a" * 40, "issued_at": SESSION_TEST_T0 + 1, "flash": None},
-        {
-            "csrf_token": "a" * 40,
-            "issued_at": SESSION_TEST_T0 - web_security.SESSION_MAX_AGE_SECONDS,
-            "flash": None,
-        },
-    ],
-    ids=("missing", "boolean", "string", "float", "negative", "future", "expired"),
-)
-async def test_invalid_session_issue_time_is_replaced_on_navigation(
-    ui_application: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-    payload: dict[str, Any],
-) -> None:
-    monkeypatch.setattr(web_security, "_unix_time", lambda: SESSION_TEST_T0)
-    old_token = str(payload["csrf_token"])
-    invalid_cookie = _session_serializer(ui_application).dumps(payload)
-
-    async with _client(ui_application) as browser:
-        response = await browser.get(
-            "/orders/new",
-            headers={"Cookie": f"{web_security.SESSION_COOKIE}={invalid_cookie}"},
-        )
-        replacement_cookie = browser.cookies[web_security.SESSION_COOKIE]
-
-    replacement_payload = _session_payload(ui_application, replacement_cookie)
-    assert response.status_code == 200
-    assert csrf_token(response) != old_token
-    assert replacement_payload["issued_at"] == SESSION_TEST_T0
-    assert replacement_payload["csrf_token"] == csrf_token(response)
-
-
-async def test_csrf_token_is_bound_to_its_signed_browser_session(
-    ui_application: FastAPI,
-) -> None:
-    async with _client(ui_application) as browser_a, _client(ui_application) as browser_b:
-        token_a = csrf_token(await browser_a.get("/orders/new"))
-        token_b = csrf_token(await browser_b.get("/orders/new"))
-        assert token_a != token_b
-
-        rejected_by_b = await browser_b.post(
-            "/orders",
-            data=_order_form(token_a, reference="UI-CROSS-SESSION-A"),
-        )
-        rejected_by_a = await browser_a.post(
-            "/orders",
-            data=_order_form(token_b, reference="UI-CROSS-SESSION-B"),
-        )
-
-    async with _client(ui_application) as browser_without_cookie:
-        rejected_without_cookie = await browser_without_cookie.post(
-            "/orders",
-            data=_order_form(token_a, reference="UI-NO-SESSION-COOKIE"),
-        )
-
-    assert rejected_by_b.status_code == 403
-    assert rejected_by_a.status_code == 403
-    assert rejected_without_cookie.status_code == 403
-
-
-async def test_tampered_session_cookie_rejects_the_old_token_and_get_starts_new_session(
+async def test_session_absolute_expiry_is_not_renewed_by_navigation_or_mutation(
     ui_client: AsyncClient,
     ui_application: FastAPI,
 ) -> None:
+    from datetime import timedelta
+
+    from tests.support import FixedClock
+
+    started = ui_application.state.clock.now()
+    cookie = ui_client.cookies[web_security.SESSION_COOKIE]
+    initial = (await ui_client.get("/auth/session")).json()["expires_at"]
+    ui_application.state.clock = FixedClock(started + timedelta(hours=7))
     token = csrf_token(await ui_client.get("/orders/new"))
-    signed_cookie = ui_client.cookies[web_security.SESSION_COOKIE]
-    tampered_cookie = f"{signed_cookie}tampered"
-
-    async with _client(ui_application) as mutation_client:
-        rejected = await mutation_client.post(
-            "/orders",
-            data=_order_form(token, reference="UI-TAMPERED-0001"),
-            headers={"Cookie": f"{web_security.SESSION_COOKIE}={tampered_cookie}"},
-        )
-    async with _client(ui_application) as navigation_client:
-        replacement = await navigation_client.get(
-            "/orders/new",
-            headers={"Cookie": f"{web_security.SESSION_COOKIE}={tampered_cookie}"},
-        )
-
-    assert rejected.status_code == 403
-    assert "CSRF_VALIDATION_FAILED" in rejected.text
-    assert replacement.status_code == 200
-    assert csrf_token(replacement) != token
+    response = await ui_client.post("/orders", data=_order_form(token, "ABSOLUTE-EXPIRY"))
+    assert response.status_code == 303
+    assert ui_client.cookies[web_security.SESSION_COOKIE] == cookie
+    assert (await ui_client.get("/auth/session")).json()["expires_at"] == initial
+    ui_application.state.clock = FixedClock(started + timedelta(hours=8))
+    assert (await ui_client.get("/orders/new")).status_code == 401
+    assert (await ui_client.post("/orders", data=_order_form(token, "EXPIRED"))).status_code == 401
 
 
-async def test_expired_session_cookie_rejects_the_old_token_and_get_starts_new_session(
-    ui_application: FastAPI,
-) -> None:
-    class ExpiredTimestampSigner(TimestampSigner):
-        def get_timestamp(self) -> int:
-            return 1
-
-    token = "expired-session-csrf-token-value-000000000000"
-    settings = ui_application.state.settings
-    serializer = URLSafeTimedSerializer(
-        settings.session_secret.get_secret_value(),
-        salt=web_security._SESSION_SALT,
-        signer=ExpiredTimestampSigner,
-        signer_kwargs={"digest_method": hashlib.sha256},
-    )
-    expired_cookie = serializer.dumps({"csrf_token": token, "issued_at": 1, "flash": None})
-    cookie_header = {"Cookie": f"{web_security.SESSION_COOKIE}={expired_cookie}"}
-
-    async with _client(ui_application) as mutation_client:
-        rejected = await mutation_client.post(
-            "/orders",
-            data=_order_form(token, reference="UI-EXPIRED-0001"),
-            headers=cookie_header,
-        )
-    async with _client(ui_application) as navigation_client:
-        replacement = await navigation_client.get("/orders/new", headers=cookie_header)
-
-    assert rejected.status_code == 403
-    assert "CSRF_VALIDATION_FAILED" in rejected.text
-    assert replacement.status_code == 200
-    assert csrf_token(replacement) != token
+async def test_csrf_token_is_bound_to_opaque_session(ui_application: FastAPI) -> None:
+    async with _client(ui_application) as a, _client(ui_application) as b:
+        await authenticated_client(a, ui_application)
+        await authenticated_client(b, ui_application)
+        del a.headers["X-CSRF-Token"]
+        del b.headers["X-CSRF-Token"]
+        token_a = csrf_token(await a.get("/orders/new"))
+        token_b = csrf_token(await b.get("/orders/new"))
+        assert token_a != token_b
+        assert (await a.post("/orders", data=_order_form(token_b))).status_code == 403
+        assert (await b.post("/orders", data=_order_form(token_a))).status_code == 403
+    async with _client(ui_application) as anonymous:
+        assert (await anonymous.post("/orders", data=_order_form(token_a))).status_code == 401
 
 
-async def test_session_cookie_is_secure_only_over_https(ui_application: FastAPI) -> None:
-    async with _client(ui_application, https=True) as browser:
+@pytest.mark.parametrize("cookie", ["", "tampered", "legacy.signed.cookie"])
+async def test_invalid_cookie_never_creates_session_on_navigation(ui_application: FastAPI, cookie):
+    async with _client(ui_application) as browser:
+        browser.cookies.set(web_security.SESSION_COOKIE, cookie)
         response = await browser.get("/orders/new")
-
-    assert "Secure" in response.headers["set-cookie"]
+        assert response.status_code == 401
+        assert "set-cookie" not in response.headers
 
 
 async def test_created_order_can_be_cancelled_idempotently(

@@ -6,10 +6,14 @@ This is not the frozen benchmark dataset loader. It never deletes existing data.
 import argparse
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
+
+from fulfillflow.access.client import session_headers
 
 REFERENCE = "V13-FUNCTIONAL-DEMO-0001"
 RECIPIENT = {
@@ -64,13 +68,17 @@ async def prepare(client: httpx.AsyncClient) -> dict[str, Any]:
 
 
 async def _run(base_url: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
+    cookie_file = os.environ.get("FULFILLFLOW_SESSION_FILE")
+    if not cookie_file:
+        raise ValueError("FULFILLFLOW_SESSION_FILE requires an explicit browser login")
+    headers = session_headers(Path(cookie_file), base_url)
+    async with httpx.AsyncClient(base_url=base_url, timeout=30, headers=headers) as client:
         return await prepare(client)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--base-url", default="http://localhost:8000")
     arguments = parser.parse_args()
     try:
         result = asyncio.run(_run(arguments.base_url))

@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fulfillflow.access.public import authorize_mutation
 from fulfillflow.carriers.public import CarriersPublic
 from fulfillflow.orders.public import OrdersPublic
 from fulfillflow.shared import Clock, Page, new_uuid
@@ -97,6 +98,7 @@ class ShipmentService:
         occurred_at = self._clock.now()
         try:
             async with self._session.begin():
+                await authorize_mutation(self._session, self._clock)
                 order = await self._orders.require_confirmed_for_shipment(
                     command.order_id,
                     for_update=True,
@@ -184,6 +186,7 @@ class ShipmentService:
     async def cancel(self, shipment_id: UUID) -> ShipmentView:
         """Lock and idempotently cancel a manually cancellable Shipment."""
         async with self._session.begin():
+            await authorize_mutation(self._session, self._clock)
             shipment = await self._require_locked(shipment_id)
             occurred_at = self._clock.now()
             if shipment.cancel(occurred_at):

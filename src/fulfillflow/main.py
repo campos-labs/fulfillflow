@@ -12,6 +12,9 @@ import httpx
 from fastapi import FastAPI
 
 from fulfillflow import __version__
+from fulfillflow.access.http import install_access
+from fulfillflow.access.logging import protect_callback_logs
+from fulfillflow.access.oidc import OIDCClient
 from fulfillflow.api.problems import install_problem_handling
 from fulfillflow.api.router import router as api_router
 from fulfillflow.config import Settings
@@ -23,6 +26,7 @@ from fulfillflow.http.internal import install_internal_auth
 from fulfillflow.http.telemetry import DiagnosticMiddleware, create_provider, tracer_for
 from fulfillflow.shared import Clock, SystemClock
 from fulfillflow.web import install_web
+from fulfillflow.web.access import router as access_router
 
 DEFAULT_ALEMBIC_CONFIG_PATH = Path("alembic_core.ini")
 
@@ -39,6 +43,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        protect_callback_logs()
         resolved_settings = settings or Settings()
         if resolved_settings.service_role != "core":
             raise ValueError("Core requires SERVICE_ROLE=core")
@@ -46,6 +51,14 @@ def create_app(
 
         application.title = resolved_settings.app_name
         application.state.settings = resolved_settings
+        application.state.oidc = OIDCClient(
+            str(resolved_settings.oidc_issuer),
+            resolved_settings.oidc_client_id,
+            str(resolved_settings.oidc_callback_url),
+            backchannel_url=str(resolved_settings.oidc_backchannel_url)
+            if resolved_settings.oidc_backchannel_url
+            else None,
+        )
         application.state.database = resolved_database
         application.state.schema_ready = False
 
@@ -102,7 +115,9 @@ def create_app(
     application.state.service_transport = service_transport
     application.state.notifications_transport = notifications_transport
     install_internal_auth(application)
+    install_access(application)
     install_problem_handling(application)
+    application.include_router(access_router)
     application.include_router(health_router)
     application.include_router(api_router)
     application.include_router(internal_router)

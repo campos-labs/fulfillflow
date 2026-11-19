@@ -12,6 +12,7 @@ import pytest
 import uvicorn
 from sqlalchemy import text
 from starlette.types import Message, Receive, Scope, Send
+from tests.access_support import authenticated_client
 from tests.api.test_service_contracts import _counts
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.async_flow import drain
@@ -113,6 +114,7 @@ async def test_real_http_interruption_after_admission_commit_recovers_without_du
             app.router.lifespan_context(app),
             httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
         ):
+            await authenticated_client(client, app)
             serving = asyncio.create_task(server.serve(sockets=[listener]))
             await asyncio.wait_for(server.ready.wait(), 5)
             await _create_shipment(

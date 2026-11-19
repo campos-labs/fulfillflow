@@ -3,6 +3,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.async_flow import drain
 from tests.service_pair import create_app
@@ -16,6 +17,7 @@ async def test_accepted_pending_duplicate_completion_and_bytes_conflict(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client,
     ):
+        await authenticated_client(client, app)
         shipment_id = await _create_shipment(
             client, reference="ASYNC-ONE", carrier_code="carrier-alpha", tracking_code="ASYNC-ONE"
         )
@@ -107,6 +109,7 @@ async def test_permanent_rejection_after_acceptance_and_no_http_apply(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client,
     ):
+        await authenticated_client(client, app)
         body = _alpha_body("no-shipment", "MISSING")
         response = await _post_event(
             client,
@@ -166,6 +169,7 @@ async def test_tracking_finalization_failure_resumes_locally_without_repeating_c
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="FINALIZE", carrier_code="carrier-alpha", tracking_code="FINALIZE"
         )
@@ -246,6 +250,7 @@ async def test_result_identity_mismatch_blocks_without_business_rejection(
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="BAD-RESULT", carrier_code="carrier-alpha", tracking_code="BAD-RESULT"
         )

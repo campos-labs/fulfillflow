@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from sqlalchemy import text
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.service_pair import create_app
 from tests.support import ContentionProbe, FixedClock, run_with_proven_contention
@@ -110,11 +111,13 @@ async def test_no_sql_checkout_crosses_http_and_correlation_survives_forwarding(
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         shipment_id = await _create_shipment(
             client, reference="RELEASED-SQL", carrier_code="carrier-alpha", tracking_code="SQL-ONE"
         )
         request_id = str(uuid4())
         traceparent = "00-12345678901234567890123456789012-1234567890123456-01"
+        seen.clear()
         client.headers.update({"X-Request-ID": request_id, "traceparent": traceparent})
         response = await _post_event(
             client,
@@ -167,6 +170,7 @@ async def test_concurrent_core_receipts_preserve_original_result_and_outbox(
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="RECEIPT", carrier_code="carrier-alpha", tracking_code="RECEIPT"
         )
@@ -266,6 +270,7 @@ async def test_core_rejection_and_content_conflicts_replay_after_state_changes(
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         original = await submit(command)
         assert original.kind == "rejected"
         await _create_shipment(

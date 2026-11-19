@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import event, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from tests.access_support import authenticated_client
 from tests.api.test_service_contracts import _counts
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.async_flow import drain
@@ -36,6 +37,7 @@ async def test_reconciliation_reads_real_owner_databases_and_rejects_receipt_cor
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client,
             reference="RECONCILE",
@@ -97,6 +99,7 @@ async def test_peer_unavailability_preserves_durable_state_and_allows_redelivery
         app.router.lifespan_context(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="OUTAGE", carrier_code="carrier-alpha", tracking_code="OUTAGE-ONE"
         )
@@ -172,6 +175,7 @@ async def test_commit_interruption_preserves_atomic_stage_and_recovers_locally(
             transport=httpx.ASGITransport(app, raise_app_exceptions=False), base_url="http://test"
         ) as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="COMMIT", carrier_code="carrier-alpha", tracking_code="COMMIT-ONE"
         )
@@ -272,6 +276,7 @@ async def test_outbox_insert_failure_rolls_back_the_entire_local_fact(
             transport=httpx.ASGITransport(app, raise_app_exceptions=False), base_url="http://test"
         ) as client,
     ):
+        await authenticated_client(client, app)
         await _create_shipment(
             client, reference="OUTBOX", carrier_code="carrier-alpha", tracking_code="OUTBOX"
         )

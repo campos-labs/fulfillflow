@@ -16,8 +16,18 @@ from sqlalchemy.engine import make_url
         (
             "TEST_DATABASE_URL",
             "alembic_core.ini",
-            "1301_core",
-            {"orders", "shipments", "carriers", "notifications", "tracking_event_receipts"},
+            "2002_core",
+            {
+                "orders",
+                "shipments",
+                "carriers",
+                "notifications",
+                "tracking_event_receipts",
+                "access_users",
+                "access_sessions",
+                "access_audit",
+                "access_login_flows",
+            },
             "fulfillflow_tracking",
         ),
         (

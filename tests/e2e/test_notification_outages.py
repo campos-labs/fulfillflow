@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from fulfillflow.messaging.health import healthy
+from tests.access_support import authenticated_client
 from tests.api.test_tracking import _alpha_body, _create_shipment, _post_event
 from tests.e2e.test_external_simulator_journey import (
     _available_port,
@@ -82,6 +83,7 @@ async def test_real_notifications_outage_and_return_preserve_tracking_and_order(
             app.router.lifespan_context(app),
             httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client,
         ):
+            await authenticated_client(client, app)
             core = start(settings, tmp_path / "core.json")
             tracking = start(postgres_tracking_settings, tmp_path / "tracking.json")
             notification_worker = start(postgres_notifications_settings, heartbeat)
