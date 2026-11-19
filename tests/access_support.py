@@ -13,7 +13,9 @@ from fulfillflow.access.browser import browser_flow
 from fulfillflow.access.service import AccessService
 
 
-async def authenticated_client(client, app, *, username="operator", enable=True):
+async def authenticated_client(
+    client, app, *, username="operator", enable=True, journey=browser_flow
+):
     credentials_path = os.environ.get("TEST_IDENTITY_CREDENTIALS")
     if not credentials_path:
         raise RuntimeError("TEST_IDENTITY_CREDENTIALS must name prepared real Keycloak accounts")
@@ -51,9 +53,9 @@ async def authenticated_client(client, app, *, username="operator", enable=True)
         else:
             raise TimeoutError("Test HTTP server startup")
         result = await asyncio.to_thread(
-            browser_flow, "http://localhost:19800", username, credentials["users"][username]
+            journey, "http://localhost:19800", username, credentials["users"][username]
         )
-        if not enable:
+        if result is None or not enable:
             return result
         assert result["session_status"] == 200
         for cookie in result["cookies"]:

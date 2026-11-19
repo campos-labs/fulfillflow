@@ -48,5 +48,44 @@ async def test_real_oidc_viewer_and_operator_logout(ui_application):
             logout = await client.post("/auth/logout")
             assert logout.status_code == 200
             assert "location" not in logout.headers
-            assert "Sessão encerrada" in logout.text
+            assert "SessÃ£o encerrada" in logout.text
             assert (await client.get("/auth/session")).status_code == 401
+
+
+def _operate_in_browser(origin, username, password):
+    from fulfillflow.access.browser import logged_in_page
+
+    with logged_in_page(origin, username, password) as (page, status):
+        assert status == 200
+        assert page.goto(origin + "/orders").status == 200
+        if username == "operator":
+            page.get_by_role("link", name="Create Order").click()
+            fields = {
+                "external_reference": "BROWSER-ISSUE4",
+                "recipient_name": "Synthetic",
+                "recipient_email": "operator@example.test",
+                "recipient_postal_code": "09700-000",
+                "recipient_city": "Santos",
+                "recipient_state": "SP",
+            }
+            for name, value in fields.items():
+                page.locator("#" + name).fill(value)
+            page.get_by_role("button", name="Create Order").click()
+            page.get_by_role("heading", name="Order BROWSER-ISSUE4").wait_for()
+            page.get_by_role("button", name="Confirm", exact=True).click()
+            assert "CONFIRMED" in page.locator("main").inner_text()
+        else:
+            assert page.get_by_role("link", name="Create Order").count() == 0
+            assert "BROWSER-ISSUE4" in page.locator("main").inner_text()
+            assert page.goto(origin + "/orders/new").status == 403
+        page.get_by_role("button", name="Sair").click()
+        assert "Sessão encerrada" in page.title()
+        assert page.context.request.get(origin + "/auth/session").status == 401
+
+
+async def test_browser_operator_creates_and_viewer_consults_then_logs_out(ui_application):
+    async with httpx.AsyncClient() as client:
+        for role in ("operator", "viewer"):
+            await authenticated_client(
+                client, ui_application, username=role, journey=_operate_in_browser
+            )

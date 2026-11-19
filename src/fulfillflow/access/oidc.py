@@ -15,6 +15,7 @@ class OIDCClient:
         self, issuer: str, client_id: str, callback_url: str, *, backchannel_url: str | None = None
     ) -> None:
         self.issuer = issuer.rstrip("/")
+        self.client_id = client_id
         self.callback_url = callback_url
         self.backchannel_url = backchannel_url.rstrip("/") if backchannel_url else None
         registry = OAuth()
@@ -40,7 +41,10 @@ class OIDCClient:
         await self.prepare()
         token: dict[str, Any] = await self.client.authorize_access_token(
             request,
-            claims_options={"iss": {"essential": True, "value": self.issuer}},
+            claims_options={
+                "iss": {"essential": True, "value": self.issuer},
+                "aud": {"essential": True, "value": self.client_id},
+            },
         )
         claims = token.get("userinfo")
         if (

@@ -14,13 +14,11 @@ from fulfillflow.config import Settings
 
 SESSION_COOKIE = "fulfillflow_session"
 FLASH_COOKIE = "fulfillflow_flash"
-SESSION_MAX_AGE_SECONDS = 28800
 
 
 @dataclass(frozen=True)
 class WebSession:
     csrf_token: str
-    issued_at: int
     flash: str | None = None
 
 
@@ -44,10 +42,12 @@ def load_web_session(request: Request) -> WebSession:
                 flash = value
         except BadSignature:
             pass
-    return WebSession(csrf_token(token) if token else "", 0, flash)
+    return WebSession(csrf_token(token) if token else "", flash)
 
 
 def verify_csrf(request: Request, provided_token: str | None) -> bool:
+    if request.headers.get("HX-Request"):
+        provided_token = request.headers.get("X-CSRF-Token")
     token = getattr(request.state, "access_token", "")
     return bool(token) and hmac.compare_digest(
         (provided_token or "").encode(),
